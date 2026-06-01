@@ -1,0 +1,22 @@
+# Build artifacts
+target/
+
+# cuda-oxide generated files
+*.ptx
+*.ll
+*.ltoir
+*.cubin
+*.nvvm
+
+# profiler outputs
+*.nsys-rep
+*.sqlite
+
+# local experiment reports
+runs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
