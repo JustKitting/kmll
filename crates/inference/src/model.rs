@@ -942,6 +942,21 @@ pub struct Qwen35TokenGeneration {
     pub last_hidden_max_abs: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Qwen35SamplingOptions {
+    pub temperature: f32,
+    pub seed: u64,
+}
+
+impl Default for Qwen35SamplingOptions {
+    fn default() -> Self {
+        Self {
+            temperature: 1.0,
+            seed: 0x9E37_79B9_7F4A_7C15,
+        }
+    }
+}
+
 pub struct Qwen35GreedyRuntime {
     stream: Arc<CudaStream>,
     module: Arc<CudaModule>,
@@ -952,7 +967,7 @@ pub struct Qwen35GreedyRuntime {
     dev_norm_weight: DeviceBuffer<Bf16>,
     dev_output_weight: DeviceBuffer<Bf16>,
     layer_weights: Vec<Qwen35LayerDeviceWeights>,
-    top1_scratch: Qwen35Top1Scratch,
+    output_scratch: Qwen35OutputScratch,
     forward_scratch: Qwen35ForwardScratch,
 }
 
@@ -1005,9 +1020,9 @@ impl Qwen35GreedyRuntime {
             "upload resident layer weights",
             qwen35_upload_resident_layer_weights(&stream, &weights, &config),
         )?;
-        let top1_scratch = phase(
+        let output_scratch = phase(
             "allocate top1 scratch",
-            Qwen35Top1Scratch::new(&stream, &config),
+            Qwen35OutputScratch::new(&stream, &config),
         )?;
         let forward_scratch = phase(
             "allocate forward scratch",
@@ -1024,7 +1039,7 @@ impl Qwen35GreedyRuntime {
             dev_norm_weight,
             dev_output_weight,
             layer_weights,
-            top1_scratch,
+            output_scratch,
             forward_scratch,
         })
     }
@@ -1046,11 +1061,41 @@ impl Qwen35GreedyRuntime {
             &self.dev_norm_weight,
             &self.dev_output_weight,
             &self.layer_weights,
-            &mut self.top1_scratch,
+            &mut self.output_scratch,
             &mut self.forward_scratch,
             prompt_tokens,
             max_new_tokens,
             stop_token_ids,
+            prefix_len,
+        )
+    }
+
+    pub fn generate_sampled_tokens(
+        &mut self,
+        prompt_tokens: &[u32],
+        max_new_tokens: usize,
+        top_k: usize,
+        stop_token_ids: &[u32],
+        sampling: Qwen35SamplingOptions,
+        prefix_len: usize,
+    ) -> Result<Qwen35TokenGeneration> {
+        qwen35_generate_sampled_tokens_with_runtime(
+            &self.stream,
+            &self.module,
+            &self.weights,
+            &self.config,
+            self.params,
+            &self.dev_rope_freqs,
+            &self.dev_norm_weight,
+            &self.dev_output_weight,
+            &self.layer_weights,
+            &mut self.output_scratch,
+            &mut self.forward_scratch,
+            prompt_tokens,
+            max_new_tokens,
+            top_k,
+            stop_token_ids,
+            sampling,
             prefix_len,
         )
     }
@@ -2210,7 +2255,7 @@ fn qwen35_generate_greedy_tokens_with_runtime(
     dev_norm_weight: &DeviceBuffer<Bf16>,
     dev_output_weight: &DeviceBuffer<Bf16>,
     layer_weights: &[Qwen35LayerDeviceWeights],
-    top1_scratch: &mut Qwen35Top1Scratch,
+    output_scratch: &mut Qwen35OutputScratch,
     forward_scratch: &mut Qwen35ForwardScratch,
     prompt_tokens: &[u32],
     max_new_tokens: usize,
@@ -2268,7 +2313,7 @@ fn qwen35_generate_greedy_tokens_with_runtime(
                 dev_norm_weight,
                 dev_output_weight,
                 &mut states,
-                top1_scratch,
+                output_scratch,
                 forward_scratch,
                 max_seq_len,
                 position,
@@ -2329,7 +2374,7 @@ fn qwen35_generate_greedy_tokens_with_runtime(
                 dev_norm_weight,
                 dev_output_weight,
                 &mut states,
-                top1_scratch,
+                output_scratch,
                 forward_scratch,
                 max_seq_len,
                 decode_position,
@@ -2364,6 +2409,219 @@ fn qwen35_generate_greedy_tokens_with_runtime(
         last_hidden_prefix,
         last_hidden_max_abs,
     })
+}
+
+fn qwen35_generate_sampled_tokens_with_runtime(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    weights: &ModelWeights,
+    config: &TextConfig,
+    params: Qwen35TextParams,
+    dev_rope_freqs: &DeviceBuffer<f32>,
+    dev_norm_weight: &DeviceBuffer<Bf16>,
+    dev_output_weight: &DeviceBuffer<Bf16>,
+    layer_weights: &[Qwen35LayerDeviceWeights],
+    output_scratch: &mut Qwen35OutputScratch,
+    forward_scratch: &mut Qwen35ForwardScratch,
+    prompt_tokens: &[u32],
+    max_new_tokens: usize,
+    top_k: usize,
+    stop_token_ids: &[u32],
+    sampling: Qwen35SamplingOptions,
+    prefix_len: usize,
+) -> Result<Qwen35TokenGeneration> {
+    fn phase<T, E: std::fmt::Display>(label: &str, result: std::result::Result<T, E>) -> Result<T> {
+        result.map_err(|error| {
+            invalid_data(format!(
+                "Qwen3.5 sampled token generation {label} failed: {error}"
+            ))
+        })
+    }
+
+    validate_qwen35_generation_request(config, prompt_tokens, max_new_tokens)?;
+    validate_qwen35_sampling_options(sampling)?;
+    if top_k == 0 {
+        return Err(invalid_data(
+            "Qwen3.5 sampled generation top_k must be nonzero",
+        ));
+    }
+    let max_seq_len = prompt_tokens
+        .len()
+        .checked_add(max_new_tokens)
+        .ok_or_else(|| invalid_data("Qwen3.5 sampled generation sequence length overflow"))?;
+    validate_runtime_max_seq_len(config, max_seq_len)?;
+
+    let mut states = phase(
+        "allocate decoder state",
+        qwen35_allocate_decode_states(stream, config, params, max_seq_len),
+    )?;
+    let mut rng = Qwen35XorShift64::new(sampling.seed);
+    let mut linear_layer_count = 0usize;
+    let mut full_layer_count = 0usize;
+    let mut last_prompt_top_logits = None;
+    let mut last_hidden_host = Vec::new();
+    for (position, &token_id) in prompt_tokens.iter().enumerate() {
+        if position + 1 == prompt_tokens.len() {
+            let step = phase(
+                &format!("prefill sampled token at position {position}"),
+                qwen35_forward_token_topk_resident(
+                    stream,
+                    module,
+                    weights,
+                    config,
+                    params,
+                    layer_weights,
+                    dev_rope_freqs,
+                    dev_norm_weight,
+                    dev_output_weight,
+                    &mut states,
+                    output_scratch,
+                    forward_scratch,
+                    max_seq_len,
+                    position,
+                    token_id,
+                    top_k,
+                ),
+            )?;
+            linear_layer_count = step.linear_layer_count;
+            full_layer_count = step.full_layer_count;
+            last_hidden_host = step.hidden_host;
+            last_prompt_top_logits = Some(step.top_logits);
+        } else {
+            let step = phase(
+                &format!("prefill state token at position {position}"),
+                qwen35_forward_token_hidden_resident(
+                    stream,
+                    module,
+                    weights,
+                    config,
+                    params,
+                    layer_weights,
+                    dev_rope_freqs,
+                    &mut states,
+                    forward_scratch,
+                    max_seq_len,
+                    position,
+                    token_id,
+                ),
+            )?;
+            linear_layer_count = step.linear_layer_count;
+            full_layer_count = step.full_layer_count;
+        }
+    }
+
+    let mut generated_tokens = Vec::with_capacity(max_new_tokens);
+    let mut all_tokens = prompt_tokens.to_vec();
+    let mut steps = Vec::with_capacity(max_new_tokens);
+    let (mut next_token, mut next_logit) = qwen35_sample_from_top_logits(
+        last_prompt_top_logits
+            .take()
+            .ok_or_else(|| invalid_data("Qwen3.5 sampled generation missing prompt logits"))?,
+        sampling,
+        &mut rng,
+    )?;
+    let mut finish_reason = "max-new-tokens".to_string();
+
+    for generated_index in 0..max_new_tokens {
+        let predicted_position = prompt_tokens
+            .len()
+            .checked_add(generated_index)
+            .ok_or_else(|| invalid_data("Qwen3.5 sampled generated position overflow"))?;
+        let input_position = predicted_position
+            .checked_sub(1)
+            .ok_or_else(|| invalid_data("Qwen3.5 sampled input position underflow"))?;
+        let input_token = all_tokens[input_position];
+        generated_tokens.push(next_token);
+        all_tokens.push(next_token);
+        steps.push(Qwen35GenerationStep {
+            position: predicted_position,
+            input_token,
+            token_id: next_token,
+            logit: next_logit,
+        });
+        if stop_token_ids.contains(&next_token) {
+            finish_reason = format!("stop-token({next_token})");
+            break;
+        }
+        if generated_index + 1 == max_new_tokens {
+            break;
+        }
+
+        let decode_position = predicted_position;
+        let decode = phase(
+            &format!("sampled decode token at position {decode_position}"),
+            qwen35_forward_token_topk_resident(
+                stream,
+                module,
+                weights,
+                config,
+                params,
+                layer_weights,
+                dev_rope_freqs,
+                dev_norm_weight,
+                dev_output_weight,
+                &mut states,
+                output_scratch,
+                forward_scratch,
+                max_seq_len,
+                decode_position,
+                next_token,
+                top_k,
+            ),
+        )?;
+        linear_layer_count = decode.linear_layer_count;
+        full_layer_count = decode.full_layer_count;
+        last_hidden_host = decode.hidden_host;
+        let sampled = qwen35_sample_from_top_logits(decode.top_logits, sampling, &mut rng)?;
+        next_token = sampled.0;
+        next_logit = sampled.1;
+    }
+
+    let last_hidden_prefix = last_hidden_host
+        .iter()
+        .take(prefix_len.min(last_hidden_host.len()))
+        .copied()
+        .collect::<Vec<_>>();
+    let last_hidden_max_abs = last_hidden_host
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f32, f32::max);
+
+    Ok(Qwen35TokenGeneration {
+        prompt_tokens: prompt_tokens.to_vec(),
+        generated_tokens,
+        all_tokens,
+        steps,
+        finish_reason,
+        linear_layer_count,
+        full_layer_count,
+        last_hidden_prefix,
+        last_hidden_max_abs,
+    })
+}
+
+fn validate_qwen35_generation_request(
+    config: &TextConfig,
+    prompt_tokens: &[u32],
+    max_new_tokens: usize,
+) -> Result<()> {
+    if config.model_kind != TextModelKind::Qwen35Text {
+        return Err(invalid_data("model is not a Qwen3.5 text config"));
+    }
+    if prompt_tokens.is_empty() {
+        return Err(invalid_data(
+            "Qwen3.5 token generation requires at least one prompt token",
+        ));
+    }
+    if max_new_tokens == 0 {
+        return Err(invalid_data(
+            "Qwen3.5 token generation max_new_tokens must be nonzero",
+        ));
+    }
+    for &token_id in prompt_tokens {
+        validate_token(config, token_id)?;
+    }
+    Ok(())
 }
 
 fn qwen35_run_prefix_layers_position0(
@@ -2540,6 +2798,153 @@ fn qwen35_output_top1_from_hidden_bf16(
     Ok(unpack_packed_top_logit(packed))
 }
 
+fn qwen35_output_top_logits_from_hidden_bf16(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    config: &TextConfig,
+    hidden: &DeviceBuffer<f32>,
+    norm_weight: &DeviceBuffer<Bf16>,
+    output_weight: &DeviceBuffer<Bf16>,
+    normed: &mut DeviceBuffer<f32>,
+    logits: &mut DeviceBuffer<f32>,
+    top_k: usize,
+) -> Result<Vec<(u32, f32)>> {
+    if normed.len() != config.dim {
+        return Err(invalid_data(format!(
+            "Qwen final norm scratch has length {}, expected {}",
+            normed.len(),
+            config.dim
+        )));
+    }
+    if logits.len() != config.vocab_size {
+        return Err(invalid_data(format!(
+            "Qwen logit scratch has length {}, expected {}",
+            logits.len(),
+            config.vocab_size
+        )));
+    }
+    let expected_weight_len = config
+        .vocab_size
+        .checked_mul(config.dim)
+        .ok_or_else(|| invalid_data("Qwen output projection weight shape overflow"))?;
+    if output_weight.len() != expected_weight_len {
+        return Err(invalid_data(format!(
+            "Qwen output projection weight has length {}, expected {}",
+            output_weight.len(),
+            expected_weight_len
+        )));
+    }
+
+    ops::qwen_rmsnorm_bf16(stream, module, hidden, norm_weight, config.norm_eps, normed)?;
+    ops::linear(stream, module, normed, output_weight, logits)?;
+    let logits = logits.to_host_vec(stream)?;
+    Ok(qwen35_top_k_from_logits(&logits, top_k))
+}
+
+fn qwen35_top_k_from_logits(logits: &[f32], top_k: usize) -> Vec<(u32, f32)> {
+    let mut indexed = logits
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(token_id, logit)| (token_id as u32, logit))
+        .collect::<Vec<_>>();
+    indexed.sort_by(|left, right| right.1.total_cmp(&left.1));
+    indexed.truncate(top_k.min(indexed.len()));
+    indexed
+}
+
+fn validate_qwen35_sampling_options(sampling: Qwen35SamplingOptions) -> Result<()> {
+    if !sampling.temperature.is_finite() || sampling.temperature < 0.0 {
+        return Err(invalid_data(format!(
+            "Qwen3.5 sampling temperature must be finite and nonnegative, got {}",
+            sampling.temperature
+        )));
+    }
+    Ok(())
+}
+
+struct Qwen35XorShift64 {
+    state: u64,
+}
+
+impl Qwen35XorShift64 {
+    fn new(seed: u64) -> Self {
+        Self {
+            state: if seed == 0 {
+                Qwen35SamplingOptions::default().seed
+            } else {
+                seed
+            },
+        }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut state = self.state;
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        self.state = state;
+        state
+    }
+
+    fn next_unit_f64(&mut self) -> f64 {
+        ((self.next_u64() >> 11) as f64) * (1.0 / ((1_u64 << 53) as f64))
+    }
+}
+
+fn qwen35_sample_from_top_logits(
+    top_logits: Vec<(u32, f32)>,
+    sampling: Qwen35SamplingOptions,
+    rng: &mut Qwen35XorShift64,
+) -> Result<(u32, f32)> {
+    if top_logits.is_empty() {
+        return Err(invalid_data(
+            "Qwen3.5 sampled generation produced no top logits",
+        ));
+    }
+    if top_logits.iter().any(|(_, logit)| !logit.is_finite()) {
+        return Err(invalid_data(
+            "Qwen3.5 sampled generation top logits must be finite",
+        ));
+    }
+    validate_qwen35_sampling_options(sampling)?;
+
+    let first = top_logits[0];
+    if top_logits.len() == 1 || sampling.temperature <= f32::EPSILON {
+        return Ok(first);
+    }
+
+    let max_scaled = top_logits
+        .iter()
+        .map(|(_, logit)| *logit / sampling.temperature)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let mut weights = Vec::with_capacity(top_logits.len());
+    let mut total = 0.0_f64;
+    for (_, logit) in &top_logits {
+        let weight = ((*logit / sampling.temperature) - max_scaled).exp() as f64;
+        total += weight;
+        weights.push(weight);
+    }
+    if !total.is_finite() || total <= 0.0 {
+        return Err(invalid_data(format!(
+            "Qwen3.5 sampled generation invalid weight total {total}"
+        )));
+    }
+
+    let mut threshold = rng.next_unit_f64() * total;
+    for ((token_id, logit), weight) in top_logits.iter().copied().zip(weights.iter()) {
+        threshold -= weight;
+        if threshold <= 0.0 {
+            return Ok((token_id, logit));
+        }
+    }
+
+    top_logits
+        .last()
+        .copied()
+        .ok_or_else(|| invalid_data("Qwen3.5 sampled generation produced no top logits"))
+}
+
 fn qwen35_allocate_decode_states(
     stream: &Arc<CudaStream>,
     config: &TextConfig,
@@ -2598,7 +3003,7 @@ fn qwen35_upload_resident_layer_weights(
     Ok(layers)
 }
 
-fn qwen35_forward_token_top1_resident(
+fn qwen35_forward_token_hidden_resident(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
     weights: &ModelWeights,
@@ -2606,15 +3011,12 @@ fn qwen35_forward_token_top1_resident(
     params: Qwen35TextParams,
     layer_weights: &[Qwen35LayerDeviceWeights],
     dev_rope_freqs: &DeviceBuffer<f32>,
-    dev_norm_weight: &DeviceBuffer<Bf16>,
-    dev_output_weight: &DeviceBuffer<Bf16>,
     states: &mut [Qwen35LayerDecodeState],
-    top1_scratch: &mut Qwen35Top1Scratch,
     forward_scratch: &mut Qwen35ForwardScratch,
     max_seq_len: usize,
     position: usize,
     token_id: u32,
-) -> Result<Qwen35ForwardTokenTop1> {
+) -> Result<Qwen35ForwardTokenHidden> {
     if states.len() != config.n_layers {
         return Err(invalid_data(format!(
             "Qwen3.5 decode state has {} layers, expected {}",
@@ -2753,27 +3155,133 @@ fn qwen35_forward_token_top1_resident(
         current_is_a = !current_is_a;
     }
 
-    let hidden = if current_is_a { &*hidden_a } else { &*hidden_b };
+    let hidden_slot = if current_is_a {
+        Qwen35HiddenSlot::A
+    } else {
+        Qwen35HiddenSlot::B
+    };
+    let hidden_host = match hidden_slot {
+        Qwen35HiddenSlot::A => hidden_a.to_host_vec(stream)?,
+        Qwen35HiddenSlot::B => hidden_b.to_host_vec(stream)?,
+    };
+
+    Ok(Qwen35ForwardTokenHidden {
+        hidden_slot,
+        hidden_host,
+        linear_layer_count,
+        full_layer_count,
+    })
+}
+
+fn qwen35_forward_token_top1_resident(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    weights: &ModelWeights,
+    config: &TextConfig,
+    params: Qwen35TextParams,
+    layer_weights: &[Qwen35LayerDeviceWeights],
+    dev_rope_freqs: &DeviceBuffer<f32>,
+    dev_norm_weight: &DeviceBuffer<Bf16>,
+    dev_output_weight: &DeviceBuffer<Bf16>,
+    states: &mut [Qwen35LayerDecodeState],
+    output_scratch: &mut Qwen35OutputScratch,
+    forward_scratch: &mut Qwen35ForwardScratch,
+    max_seq_len: usize,
+    position: usize,
+    token_id: u32,
+) -> Result<Qwen35ForwardTokenTop1> {
+    let hidden = qwen35_forward_token_hidden_resident(
+        stream,
+        module,
+        weights,
+        config,
+        params,
+        layer_weights,
+        dev_rope_freqs,
+        states,
+        forward_scratch,
+        max_seq_len,
+        position,
+        token_id,
+    )?;
+    let hidden_dev = match hidden.hidden_slot {
+        Qwen35HiddenSlot::A => &forward_scratch.hidden_a,
+        Qwen35HiddenSlot::B => &forward_scratch.hidden_b,
+    };
     let (top_token, top_logit) = qwen35_output_top1_from_hidden_bf16(
         stream,
         module,
         config,
-        hidden,
+        hidden_dev,
         dev_norm_weight,
         dev_output_weight,
-        &mut top1_scratch.normed,
-        &mut top1_scratch.partial_tokens,
-        &mut top1_scratch.partial_logits,
-        &mut top1_scratch.packed_top,
+        &mut output_scratch.normed,
+        &mut output_scratch.partial_tokens,
+        &mut output_scratch.partial_logits,
+        &mut output_scratch.packed_top,
     )?;
     stream.synchronize()?;
-    let hidden_host = hidden.to_host_vec(stream)?;
     Ok(Qwen35ForwardTokenTop1 {
         top_token,
         top_logit,
-        hidden_host,
-        linear_layer_count,
-        full_layer_count,
+        hidden_host: hidden.hidden_host,
+        linear_layer_count: hidden.linear_layer_count,
+        full_layer_count: hidden.full_layer_count,
+    })
+}
+
+fn qwen35_forward_token_topk_resident(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    weights: &ModelWeights,
+    config: &TextConfig,
+    params: Qwen35TextParams,
+    layer_weights: &[Qwen35LayerDeviceWeights],
+    dev_rope_freqs: &DeviceBuffer<f32>,
+    dev_norm_weight: &DeviceBuffer<Bf16>,
+    dev_output_weight: &DeviceBuffer<Bf16>,
+    states: &mut [Qwen35LayerDecodeState],
+    output_scratch: &mut Qwen35OutputScratch,
+    forward_scratch: &mut Qwen35ForwardScratch,
+    max_seq_len: usize,
+    position: usize,
+    token_id: u32,
+    top_k: usize,
+) -> Result<Qwen35ForwardTokenTopK> {
+    let hidden = qwen35_forward_token_hidden_resident(
+        stream,
+        module,
+        weights,
+        config,
+        params,
+        layer_weights,
+        dev_rope_freqs,
+        states,
+        forward_scratch,
+        max_seq_len,
+        position,
+        token_id,
+    )?;
+    let hidden_dev = match hidden.hidden_slot {
+        Qwen35HiddenSlot::A => &forward_scratch.hidden_a,
+        Qwen35HiddenSlot::B => &forward_scratch.hidden_b,
+    };
+    let top_logits = qwen35_output_top_logits_from_hidden_bf16(
+        stream,
+        module,
+        config,
+        hidden_dev,
+        dev_norm_weight,
+        dev_output_weight,
+        &mut output_scratch.normed,
+        &mut output_scratch.logits,
+        top_k,
+    )?;
+    Ok(Qwen35ForwardTokenTopK {
+        top_logits,
+        hidden_host: hidden.hidden_host,
+        linear_layer_count: hidden.linear_layer_count,
+        full_layer_count: hidden.full_layer_count,
     })
 }
 
@@ -3822,6 +4330,26 @@ struct Qwen35ForwardTokenTop1 {
     full_layer_count: usize,
 }
 
+struct Qwen35ForwardTokenTopK {
+    top_logits: Vec<(u32, f32)>,
+    hidden_host: Vec<f32>,
+    linear_layer_count: usize,
+    full_layer_count: usize,
+}
+
+#[derive(Clone, Copy)]
+enum Qwen35HiddenSlot {
+    A,
+    B,
+}
+
+struct Qwen35ForwardTokenHidden {
+    hidden_slot: Qwen35HiddenSlot,
+    hidden_host: Vec<f32>,
+    linear_layer_count: usize,
+    full_layer_count: usize,
+}
+
 struct Qwen35ForwardScratch {
     hidden_a: DeviceBuffer<f32>,
     hidden_b: DeviceBuffer<f32>,
@@ -3977,18 +4505,20 @@ impl Qwen35MlpForwardScratch {
     }
 }
 
-struct Qwen35Top1Scratch {
+struct Qwen35OutputScratch {
     normed: DeviceBuffer<f32>,
+    logits: DeviceBuffer<f32>,
     partial_tokens: DeviceBuffer<u32>,
     partial_logits: DeviceBuffer<f32>,
     packed_top: DeviceBuffer<u64>,
 }
 
-impl Qwen35Top1Scratch {
+impl Qwen35OutputScratch {
     fn new(stream: &Arc<CudaStream>, config: &TextConfig) -> Result<Self> {
         let partial_count = ops::linear_top1_bf16_partial_count(config.vocab_size);
         Ok(Self {
             normed: DeviceBuffer::<f32>::zeroed(stream, config.dim)?,
+            logits: DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?,
             partial_tokens: DeviceBuffer::<u32>::zeroed(stream, partial_count)?,
             partial_logits: DeviceBuffer::<f32>::zeroed(stream, partial_count)?,
             packed_top: DeviceBuffer::<u64>::zeroed(stream, 1)?,

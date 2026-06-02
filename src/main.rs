@@ -29,10 +29,10 @@ use nn_rust_inference::{
     layout::{ColumnMajor, Layout2D, MatrixLayout, RowMajor},
     model::{
         Bf16Top1Plan, GreedyGenerationStep, MinistralAllLinearInt8Runtime, MinistralTextRuntime,
-        Qwen35AttentionWeightLayout, Qwen35GreedyRuntime, RuntimeMemoryStats, TextConfig,
-        TextLayerKind, TextModelKind, qwen35_full_layer_smoke, qwen35_linear_layer_smoke,
-        qwen35_load_layer_smoke, qwen35_prefix_layers_smoke, qwen35_single_token_top1_smoke,
-        qwen35_weight_layout_report,
+        Qwen35AttentionWeightLayout, Qwen35GreedyRuntime, Qwen35SamplingOptions,
+        Qwen35TokenGeneration, RuntimeMemoryStats, TextConfig, TextLayerKind, TextModelKind,
+        qwen35_full_layer_smoke, qwen35_linear_layer_smoke, qwen35_load_layer_smoke,
+        qwen35_prefix_layers_smoke, qwen35_single_token_top1_smoke, qwen35_weight_layout_report,
     },
     ops, runtime,
     safetensors::{ModelTensor, ModelWeights, TensorInfo, model_tensor_alias},
@@ -7544,14 +7544,9 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
             "qwen text reports need a Qwen report schema; omit --report for now",
         ));
     }
-    if cli.sampling.is_some() {
+    if top_k == 0 {
         return Err(invalid_input(
-            "Qwen3.5 text generation currently supports only greedy top1 sampling",
-        ));
-    }
-    if top_k != 1 {
-        return Err(invalid_input(
-            "Qwen3.5 text generation currently supports exactly top_k=1",
+            "Qwen3.5 text generation top_k must be nonzero",
         ));
     }
 
@@ -7563,7 +7558,10 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
     let stop_token_ids = qwen_text_stop_token_ids(runtime.config(), &tokenizer);
 
     println!(
-        "Qwen text suite: backend=bf16 decode_strategy=greedy prompts_len={} stop_token_ids={:?} runtime_init_seconds={:.6}",
+        "Qwen text suite: backend=bf16 decode_strategy={} top_k={} sampling={:?} prompts_len={} stop_token_ids={:?} runtime_init_seconds={:.6}",
+        qwen35_decode_strategy_label(cli.sampling, top_k),
+        top_k,
+        cli.sampling,
         cli.prompts.len(),
         stop_token_ids,
         runtime_init_seconds
@@ -7576,7 +7574,14 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
             )));
         }
         let generation_start = Instant::now();
-        let result = runtime.generate_tokens(&prompt_tokens, max_new_tokens, &stop_token_ids, 8)?;
+        let result = qwen35_generate_cli_tokens(
+            &mut runtime,
+            &prompt_tokens,
+            max_new_tokens,
+            top_k,
+            &stop_token_ids,
+            cli.sampling,
+        )?;
         let generation_seconds = generation_start.elapsed().as_secs_f64();
         let generated_tokens_per_second =
             tokens_per_second(result.generated_tokens.len(), generation_seconds);
@@ -7624,14 +7629,9 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
             "Qwen3.5 chat generation does not support forced target pairs yet",
         ));
     }
-    if cli.sampling.is_some() {
+    if top_k == 0 {
         return Err(invalid_input(
-            "Qwen3.5 chat generation currently supports only greedy top1 sampling",
-        ));
-    }
-    if top_k != 1 {
-        return Err(invalid_input(
-            "Qwen3.5 chat generation currently supports exactly top_k=1",
+            "Qwen3.5 chat generation top_k must be nonzero",
         ));
     }
 
@@ -7643,7 +7643,10 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
     let stop_token_ids = qwen_text_stop_token_ids(runtime.config(), &tokenizer);
 
     println!(
-        "Qwen chat suite: backend=bf16 decode_strategy=greedy prompts_len={} stop_token_ids={:?} runtime_init_seconds={:.6}",
+        "Qwen chat suite: backend=bf16 decode_strategy={} top_k={} sampling={:?} prompts_len={} stop_token_ids={:?} runtime_init_seconds={:.6}",
+        qwen35_decode_strategy_label(cli.sampling, top_k),
+        top_k,
+        cli.sampling,
         cli.prompts.len(),
         stop_token_ids,
         runtime_init_seconds
@@ -7665,7 +7668,14 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
             )));
         }
         let generation_start = Instant::now();
-        let result = runtime.generate_tokens(&prompt_tokens, max_new_tokens, &stop_token_ids, 8)?;
+        let result = qwen35_generate_cli_tokens(
+            &mut runtime,
+            &prompt_tokens,
+            max_new_tokens,
+            top_k,
+            &stop_token_ids,
+            cli.sampling,
+        )?;
         let generation_seconds = generation_start.elapsed().as_secs_f64();
         let generated_tokens_per_second =
             tokens_per_second(result.generated_tokens.len(), generation_seconds);
@@ -7716,6 +7726,60 @@ fn qwen_text_stop_token_ids(
     ids
 }
 
+fn qwen35_sampling_options_from_cli(sampling: SamplingOptions) -> Qwen35SamplingOptions {
+    Qwen35SamplingOptions {
+        temperature: sampling.temperature,
+        seed: sampling.seed,
+    }
+}
+
+fn qwen35_decode_strategy_label(sampling: Option<SamplingOptions>, top_k: usize) -> &'static str {
+    if sampling.is_some() && top_k > 1 {
+        "sampled-topk"
+    } else {
+        "greedy"
+    }
+}
+
+fn qwen35_generate_cli_tokens(
+    runtime: &mut Qwen35GreedyRuntime,
+    prompt_tokens: &[u32],
+    max_new_tokens: usize,
+    top_k: usize,
+    stop_token_ids: &[u32],
+    sampling: Option<SamplingOptions>,
+) -> AppResult<Qwen35TokenGeneration> {
+    if top_k == 0 {
+        return Err(invalid_input("Qwen3.5 generation top_k must be nonzero"));
+    }
+
+    if let Some(sampling) = sampling {
+        let qwen_sampling = qwen35_sampling_options_from_cli(sampling);
+        if !qwen_sampling.temperature.is_finite() || qwen_sampling.temperature < 0.0 {
+            return Err(invalid_input(format!(
+                "Qwen3.5 sampling temperature must be finite and nonnegative, got {}",
+                qwen_sampling.temperature
+            )));
+        }
+        if top_k > 1 {
+            return Ok(runtime.generate_sampled_tokens(
+                prompt_tokens,
+                max_new_tokens,
+                top_k,
+                stop_token_ids,
+                qwen_sampling,
+                8,
+            )?);
+        }
+    } else if top_k != 1 {
+        return Err(invalid_input(
+            "Qwen3.5 greedy generation currently supports top_k=1; pass --sample-temperature for sampled top_k generation",
+        ));
+    }
+
+    Ok(runtime.generate_tokens(prompt_tokens, max_new_tokens, stop_token_ids, 8)?)
+}
+
 fn push_unique_token_id(ids: &mut Vec<u32>, token_id: Option<u32>) {
     if let Some(token_id) = token_id
         && !ids.contains(&token_id)
@@ -7745,14 +7809,9 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
 
     let config = TextConfig::from_model_dir(&model_dir)?;
     if config.model_kind == TextModelKind::Qwen35Text {
-        if cli.sampling.is_some() {
+        if top_k == 0 {
             return Err(invalid_input(
-                "Qwen3.5 token generation currently supports only greedy top1 sampling",
-            ));
-        }
-        if top_k != 1 {
-            return Err(invalid_input(
-                "Qwen3.5 token generation currently supports exactly top_k=1",
+                "Qwen3.5 token generation top_k must be nonzero",
             ));
         }
 
@@ -7764,14 +7823,24 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
         let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
 
         println!(
-            "Qwen token suite: backend=bf16 decode_strategy=greedy prompts_len={} eos_token_id={:?} runtime_init_seconds={:.6}",
+            "Qwen token suite: backend=bf16 decode_strategy={} top_k={} sampling={:?} prompts_len={} eos_token_id={:?} runtime_init_seconds={:.6}",
+            qwen35_decode_strategy_label(cli.sampling, top_k),
+            top_k,
+            cli.sampling,
             cli.prompts.len(),
             stop_token_id,
             runtime_init_seconds
         );
         for (prompt_index, prompt) in cli.prompts.iter().enumerate() {
             let generation_start = Instant::now();
-            let result = runtime.generate_tokens(prompt, max_new_tokens, &stop_token_ids, 8)?;
+            let result = qwen35_generate_cli_tokens(
+                &mut runtime,
+                prompt,
+                max_new_tokens,
+                top_k,
+                &stop_token_ids,
+                cli.sampling,
+            )?;
             let generation_seconds = generation_start.elapsed().as_secs_f64();
             let generated_tokens_per_second =
                 tokens_per_second(result.generated_tokens.len(), generation_seconds);
