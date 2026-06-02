@@ -3,8 +3,15 @@ name = "nn-rust"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = [
+    ".",
+    "crates/inference",
+    "crates/quantization",
+]
+resolver = "3"
+
 [dependencies]
-cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git", tag = "v0.1.0" }
 cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", tag = "v0.1.0" }
-cuda-host = { git = "https://github.com/NVlabs/cuda-oxide.git", tag = "v0.1.0" }
-cuda-bindings = { git = "https://github.com/NVlabs/cuda-oxide.git", tag = "v0.1.0" }
+nn-rust-inference = { path = "crates/inference" }
+nn-rust-quantization = { path = "crates/quantization" }

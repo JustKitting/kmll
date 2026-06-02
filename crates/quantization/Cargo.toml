@@ -1,0 +1,7 @@
+[package]
+name = "nn-rust-quantization"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nn-rust-inference = { path = "../inference" }

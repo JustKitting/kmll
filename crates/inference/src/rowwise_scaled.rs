@@ -10,19 +10,19 @@ use cuda_core::{CudaStream, DeviceBuffer, DriverError};
 use crate::{dtypes::Bf16, safetensors::Result as SafetensorsResult};
 
 #[derive(Debug, Clone)]
-pub struct QuantizedI8Matrix {
+pub struct RowwiseScaledI8Matrix {
     pub values: Vec<i8>,
     pub scales: Vec<f32>,
     pub rows: usize,
     pub cols: usize,
 }
 
-impl QuantizedI8Matrix {
+impl RowwiseScaledI8Matrix {
     pub fn from_bf16_rows_symmetric(weight: &[Bf16], rows: usize, cols: usize) -> Self {
         assert_eq!(
             weight.len(),
             rows * cols,
-            "quantized matrix shape does not match weight length"
+            "rowwise scaled i8 matrix shape does not match weight length"
         );
 
         let mut values = Vec::with_capacity(weight.len());
@@ -37,8 +37,8 @@ impl QuantizedI8Matrix {
             scales.push(scale);
 
             for value in row {
-                let quantized = (value.to_f32() / scale).round().clamp(-127.0, 127.0);
-                values.push(quantized as i8);
+                let scaled = (value.to_f32() / scale).round().clamp(-127.0, 127.0);
+                values.push(scaled as i8);
             }
         }
 
@@ -50,9 +50,15 @@ impl QuantizedI8Matrix {
         }
     }
 
-    pub fn dequantized_value(&self, row: usize, col: usize) -> f32 {
-        assert!(row < self.rows, "quantized matrix row out of bounds");
-        assert!(col < self.cols, "quantized matrix column out of bounds");
+    pub fn scaled_value(&self, row: usize, col: usize) -> f32 {
+        assert!(
+            row < self.rows,
+            "rowwise scaled i8 matrix row out of bounds"
+        );
+        assert!(
+            col < self.cols,
+            "rowwise scaled i8 matrix column out of bounds"
+        );
         self.values[row * self.cols + col] as f32 * self.scales[row]
     }
 
@@ -64,14 +70,14 @@ impl QuantizedI8Matrix {
     ) -> SafetensorsResult<Self> {
         if values.len() != rows * cols {
             return Err(invalid_data(format!(
-                "quantized matrix values length {} does not match shape [{rows}, {cols}]",
+                "rowwise scaled i8 matrix values length {} does not match shape [{rows}, {cols}]",
                 values.len()
             ))
             .into());
         }
         if scales.len() != rows {
             return Err(invalid_data(format!(
-                "quantized matrix scales length {} does not match row count {rows}",
+                "rowwise scaled i8 matrix scales length {} does not match row count {rows}",
                 scales.len()
             ))
             .into());
@@ -92,7 +98,8 @@ impl QuantizedI8Matrix {
         rows: usize,
         cols: usize,
     ) -> SafetensorsResult<Self> {
-        let (values_path, scales_path) = quantized_export_file_paths(export_dir, index, name);
+        let (values_path, scales_path) =
+            rowwise_scaled_i8_export_file_paths(export_dir, index, name);
         let values = read_i8_file(&values_path)?;
         let scales = read_f32_file(&scales_path)?;
         Self::from_i8_rows_symmetric_parts(values, scales, rows, cols)
@@ -102,7 +109,7 @@ impl QuantizedI8Matrix {
         assert_eq!(
             input.len(),
             self.cols,
-            "quantized matvec input length mismatch"
+            "rowwise scaled i8 matvec input length mismatch"
         );
 
         let mut output = vec![0.0; self.rows];
@@ -121,8 +128,8 @@ impl QuantizedI8Matrix {
     pub fn to_device(
         &self,
         stream: &Arc<CudaStream>,
-    ) -> Result<DeviceQuantizedI8Matrix, DriverError> {
-        Ok(DeviceQuantizedI8Matrix {
+    ) -> Result<DeviceRowwiseScaledI8Matrix, DriverError> {
+        Ok(DeviceRowwiseScaledI8Matrix {
             values: DeviceBuffer::from_host(stream, &self.values)?,
             scales: DeviceBuffer::from_host(stream, &self.scales)?,
             rows: self.rows,
@@ -131,19 +138,19 @@ impl QuantizedI8Matrix {
     }
 }
 
-pub fn quantized_export_file_paths(
+pub fn rowwise_scaled_i8_export_file_paths(
     export_dir: impl AsRef<Path>,
     index: usize,
     name: &str,
 ) -> (PathBuf, PathBuf) {
-    let stem = format!("{index:04}_{}", quantized_export_file_stem(name));
+    let stem = format!("{index:04}_{}", rowwise_scaled_i8_export_file_stem(name));
     (
         export_dir.as_ref().join(format!("{stem}.i8")),
         export_dir.as_ref().join(format!("{stem}.scales.f32")),
     )
 }
 
-fn quantized_export_file_stem(name: &str) -> String {
+fn rowwise_scaled_i8_export_file_stem(name: &str) -> String {
     name.chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
         .collect()
@@ -174,7 +181,7 @@ fn invalid_data(message: impl Into<String>) -> io::Error {
     io::Error::new(ErrorKind::InvalidData, message.into())
 }
 
-pub struct DeviceQuantizedI8Matrix {
+pub struct DeviceRowwiseScaledI8Matrix {
     pub values: DeviceBuffer<i8>,
     pub scales: DeviceBuffer<f32>,
     pub rows: usize,

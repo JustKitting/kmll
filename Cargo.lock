@@ -203,10 +203,26 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 name = "nn-rust"
 version = "0.1.0"
 dependencies = [
+ "cuda-core",
+ "nn-rust-inference",
+ "nn-rust-quantization",
+]
+
+[[package]]
+name = "nn-rust-inference"
+version = "0.1.0"
+dependencies = [
  "cuda-bindings",
  "cuda-core",
  "cuda-device",
  "cuda-host",
+]
+
+[[package]]
+name = "nn-rust-quantization"
+version = "0.1.0"
+dependencies = [
+ "nn-rust-inference",
 ]
 
 [[package]]

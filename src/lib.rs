@@ -1,13 +1,5 @@
-pub mod backends;
-pub mod chat;
-pub mod dtypes;
-pub mod inference;
-pub mod kernels;
-pub mod layout;
-pub mod math;
-pub mod model;
-pub mod ops;
-pub mod quantization;
-pub mod runtime;
-pub mod safetensors;
-pub mod tokenizer;
+pub use nn_rust_inference::*;
+
+pub mod quantization {
+    pub use nn_rust_quantization::*;
+}

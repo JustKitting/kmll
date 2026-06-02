@@ -10,8 +10,8 @@ use cuda_core::{CudaModule, CudaStream};
 use crate::{
     chat,
     model::{
-        self, AllLinearQuantizedRuntimeComparisonStepProbe, GreedyGenerationStep,
-        MinistralAllLinearQuantizedRuntime, MinistralTextRuntime, RuntimeMemoryStats,
+        self, AllLinearInt8RuntimeComparisonStepProbe, GreedyGenerationStep,
+        MinistralAllLinearInt8Runtime, MinistralTextRuntime, RuntimeMemoryStats,
     },
     safetensors::Result,
     tokenizer::TekkenTokenizer,
@@ -195,17 +195,17 @@ impl TokenGenerationRuntime for MinistralTextRuntime {
     }
 }
 
-impl TokenGenerationRuntime for MinistralAllLinearQuantizedRuntime {
+impl TokenGenerationRuntime for MinistralAllLinearInt8Runtime {
     fn backend(&self) -> InferenceBackend {
         InferenceBackend::AllLinearInt8
     }
 
     fn memory_stats(&self) -> RuntimeMemoryStats {
-        MinistralAllLinearQuantizedRuntime::memory_stats(self)
+        MinistralAllLinearInt8Runtime::memory_stats(self)
     }
 
     fn prefill(&mut self, prompt_tokens: &[u32]) -> Result<()> {
-        MinistralAllLinearQuantizedRuntime::prefill(self, prompt_tokens)
+        MinistralAllLinearInt8Runtime::prefill(self, prompt_tokens)
     }
 
     fn generate_greedy_until(
@@ -214,7 +214,7 @@ impl TokenGenerationRuntime for MinistralAllLinearQuantizedRuntime {
         top_k: usize,
         stop_token_id: Option<u32>,
     ) -> Result<Vec<GreedyGenerationStep>> {
-        MinistralAllLinearQuantizedRuntime::generate_greedy_until(
+        MinistralAllLinearInt8Runtime::generate_greedy_until(
             self,
             max_new_tokens,
             top_k,
@@ -223,31 +223,31 @@ impl TokenGenerationRuntime for MinistralAllLinearQuantizedRuntime {
     }
 
     fn next_logits_to_host(&self) -> Result<Vec<f32>> {
-        MinistralAllLinearQuantizedRuntime::next_logits_to_host(self)
+        MinistralAllLinearInt8Runtime::next_logits_to_host(self)
     }
 
     fn next_top_logits(&mut self, top_k: usize) -> Result<Vec<(u32, f32)>> {
-        MinistralAllLinearQuantizedRuntime::next_top_logits(self, top_k)
+        MinistralAllLinearInt8Runtime::next_top_logits(self, top_k)
     }
 
     fn advance_with_token(&mut self, token_id: u32) -> Result<()> {
-        MinistralAllLinearQuantizedRuntime::advance_with_token(self, token_id)
+        MinistralAllLinearInt8Runtime::advance_with_token(self, token_id)
     }
 
     fn synchronize(&self) -> Result<()> {
-        MinistralAllLinearQuantizedRuntime::synchronize(self)
+        MinistralAllLinearInt8Runtime::synchronize(self)
     }
 
     fn reset_sequence(&mut self) {
-        MinistralAllLinearQuantizedRuntime::reset_sequence(self);
+        MinistralAllLinearInt8Runtime::reset_sequence(self);
     }
 
     fn tokens(&self) -> &[u32] {
-        MinistralAllLinearQuantizedRuntime::tokens(self)
+        MinistralAllLinearInt8Runtime::tokens(self)
     }
 
     fn max_seq_len(&self) -> usize {
-        MinistralAllLinearQuantizedRuntime::max_seq_len(self)
+        MinistralAllLinearInt8Runtime::max_seq_len(self)
     }
 }
 
@@ -1249,7 +1249,7 @@ pub struct ChatTraceComparisonSuiteResult {
 }
 
 #[derive(Debug)]
-pub struct ChatAllLinearQuantizedComparisonResult {
+pub struct ChatAllLinearInt8ComparisonResult {
     pub formatted_prompt: String,
     pub prompt_tokens: Vec<u32>,
     pub generated_tokens: Vec<u32>,
@@ -1257,8 +1257,8 @@ pub struct ChatAllLinearQuantizedComparisonResult {
     pub generated_text: String,
     pub all_text_skip_special: String,
     pub reference_memory_stats: RuntimeMemoryStats,
-    pub quantized_memory_stats: RuntimeMemoryStats,
-    pub steps: Vec<AllLinearQuantizedRuntimeComparisonStepProbe>,
+    pub int8_memory_stats: RuntimeMemoryStats,
+    pub steps: Vec<AllLinearInt8RuntimeComparisonStepProbe>,
 }
 
 pub struct MinistralChatSession {
@@ -1267,10 +1267,10 @@ pub struct MinistralChatSession {
     runtime: MinistralTextRuntime,
 }
 
-pub struct MinistralAllLinearQuantizedChatSession {
+pub struct MinistralAllLinearInt8ChatSession {
     tokenizer: TekkenTokenizer,
     default_system_prompt: String,
-    runtime: MinistralAllLinearQuantizedRuntime,
+    runtime: MinistralAllLinearInt8Runtime,
 }
 
 pub struct MinistralTextBackendSession {
@@ -1298,7 +1298,7 @@ pub struct MinistralChatBackendComparisonSession {
 
 pub enum MinistralGenerationBackendSession {
     Bf16(MinistralTextRuntime),
-    AllLinearInt8(MinistralAllLinearQuantizedRuntime),
+    AllLinearInt8(MinistralAllLinearInt8Runtime),
 }
 
 impl MinistralGenerationBackendSession {
@@ -1318,7 +1318,7 @@ impl MinistralGenerationBackendSession {
                 max_seq_len,
             )?)),
             InferenceBackend::AllLinearInt8 => Ok(Self::AllLinearInt8(
-                MinistralAllLinearQuantizedRuntime::new(stream, module, model_dir, max_seq_len)?,
+                MinistralAllLinearInt8Runtime::new(stream, module, model_dir, max_seq_len)?,
             )),
         }
     }
@@ -1331,7 +1331,7 @@ impl MinistralGenerationBackendSession {
         max_seq_len: usize,
     ) -> Result<Self> {
         Ok(Self::AllLinearInt8(
-            MinistralAllLinearQuantizedRuntime::new_from_export(
+            MinistralAllLinearInt8Runtime::new_from_export(
                 stream,
                 module,
                 model_dir,
@@ -3157,7 +3157,7 @@ impl MinistralChatSession {
     }
 }
 
-impl MinistralAllLinearQuantizedChatSession {
+impl MinistralAllLinearInt8ChatSession {
     pub fn new(
         stream: Arc<CudaStream>,
         module: Arc<CudaModule>,
@@ -3167,8 +3167,7 @@ impl MinistralAllLinearQuantizedChatSession {
         let model_dir = model_dir.as_ref();
         let tokenizer = TekkenTokenizer::open(model_dir)?;
         let default_system_prompt = chat::default_ministral_system_prompt(model_dir)?;
-        let runtime =
-            MinistralAllLinearQuantizedRuntime::new(stream, module, model_dir, max_seq_len)?;
+        let runtime = MinistralAllLinearInt8Runtime::new(stream, module, model_dir, max_seq_len)?;
 
         Ok(Self {
             tokenizer,
@@ -5169,7 +5168,7 @@ pub fn run_ministral_single_turn_chat(
     )
 }
 
-pub fn run_ministral_all_linear_quantized_single_turn_chat(
+pub fn run_ministral_all_linear_int8_single_turn_chat(
     stream: Arc<CudaStream>,
     module: Arc<CudaModule>,
     model_dir: impl AsRef<Path>,
@@ -5912,13 +5911,13 @@ pub fn run_ministral_single_turn_chat_backend_eval_suite(
     Ok(ChatBackendEvalSuiteResult { logits, generation })
 }
 
-pub fn run_ministral_all_linear_quantized_chat_comparison(
+pub fn run_ministral_all_linear_int8_chat_comparison(
     stream: Arc<CudaStream>,
     module: Arc<CudaModule>,
     model_dir: impl AsRef<Path>,
     user_prompt: &str,
     options: &ChatInferenceOptions,
-) -> Result<ChatAllLinearQuantizedComparisonResult> {
+) -> Result<ChatAllLinearInt8ComparisonResult> {
     let model_dir = model_dir.as_ref();
     let tokenizer = TekkenTokenizer::open(model_dir)?;
     let encoded = encode_single_turn_chat_prompt_from_model(
@@ -5927,7 +5926,7 @@ pub fn run_ministral_all_linear_quantized_chat_comparison(
         user_prompt,
         &options.system_prompt,
     )?;
-    let comparison = model::run_ministral_all_linear_quantized_runtime_comparison_probe(
+    let comparison = model::run_ministral_all_linear_int8_runtime_comparison_probe(
         &stream,
         &module,
         model_dir,
@@ -5939,7 +5938,7 @@ pub fn run_ministral_all_linear_quantized_chat_comparison(
     let generated_text = tokenizer.decode_lossy(&comparison.generated_tokens)?;
     let all_text_skip_special = tokenizer.decode_lossy(&comparison.all_tokens)?;
 
-    Ok(ChatAllLinearQuantizedComparisonResult {
+    Ok(ChatAllLinearInt8ComparisonResult {
         formatted_prompt: encoded.formatted_prompt,
         prompt_tokens: comparison.prompt_tokens,
         generated_tokens: comparison.generated_tokens,
@@ -5947,7 +5946,7 @@ pub fn run_ministral_all_linear_quantized_chat_comparison(
         generated_text,
         all_text_skip_special,
         reference_memory_stats: comparison.reference_memory_stats,
-        quantized_memory_stats: comparison.quantized_memory_stats,
+        int8_memory_stats: comparison.int8_memory_stats,
         steps: comparison.steps,
     })
 }

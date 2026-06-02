@@ -5,7 +5,9 @@ use cuda_core::{CudaModule, CudaStream, DeviceBuffer, DriverError};
 use crate::{
     dtypes::Bf16,
     ops,
-    quantization::{DeviceQuantizedI8Matrix, QuantizedI8Matrix, quantized_export_file_paths},
+    rowwise_scaled::{
+        DeviceRowwiseScaledI8Matrix, RowwiseScaledI8Matrix, rowwise_scaled_i8_export_file_paths,
+    },
     safetensors::{ModelWeights, Result, TensorInfo},
 };
 
@@ -299,12 +301,12 @@ pub struct OutputProjectionQuantizationProbe {
     pub rows: usize,
     pub cols: usize,
     pub reference_top_logits: Vec<(u32, f32)>,
-    pub quantized_top_logits: Vec<(u32, f32)>,
+    pub int8_top_logits: Vec<(u32, f32)>,
     pub kl_divergence: f64,
     pub max_abs_diff: f32,
     pub mean_abs_diff: f32,
     pub reference_logits_prefix: Vec<f32>,
-    pub quantized_logits_prefix: Vec<f32>,
+    pub int8_logits_prefix: Vec<f32>,
 }
 
 #[derive(Debug)]
@@ -312,12 +314,12 @@ pub struct FfnQuantizationProbe {
     pub tokens: Vec<u32>,
     pub layers_run: usize,
     pub reference_top_logits: Vec<(u32, f32)>,
-    pub quantized_top_logits: Vec<(u32, f32)>,
+    pub int8_top_logits: Vec<(u32, f32)>,
     pub kl_divergence: f64,
     pub max_abs_diff: f32,
     pub mean_abs_diff: f32,
     pub reference_logits_prefix: Vec<f32>,
-    pub quantized_logits_prefix: Vec<f32>,
+    pub int8_logits_prefix: Vec<f32>,
 }
 
 #[derive(Debug)]
@@ -325,12 +327,12 @@ pub struct AttentionQuantizationProbe {
     pub tokens: Vec<u32>,
     pub layers_run: usize,
     pub reference_top_logits: Vec<(u32, f32)>,
-    pub quantized_top_logits: Vec<(u32, f32)>,
+    pub int8_top_logits: Vec<(u32, f32)>,
     pub kl_divergence: f64,
     pub max_abs_diff: f32,
     pub mean_abs_diff: f32,
     pub reference_logits_prefix: Vec<f32>,
-    pub quantized_logits_prefix: Vec<f32>,
+    pub int8_logits_prefix: Vec<f32>,
 }
 
 #[derive(Debug)]
@@ -338,12 +340,12 @@ pub struct AttentionFfnQuantizationProbe {
     pub tokens: Vec<u32>,
     pub layers_run: usize,
     pub reference_top_logits: Vec<(u32, f32)>,
-    pub quantized_top_logits: Vec<(u32, f32)>,
+    pub int8_top_logits: Vec<(u32, f32)>,
     pub kl_divergence: f64,
     pub max_abs_diff: f32,
     pub mean_abs_diff: f32,
     pub reference_logits_prefix: Vec<f32>,
-    pub quantized_logits_prefix: Vec<f32>,
+    pub int8_logits_prefix: Vec<f32>,
 }
 
 #[derive(Debug)]
@@ -353,12 +355,12 @@ pub struct AllLinearQuantizationProbe {
     pub output_rows: usize,
     pub output_cols: usize,
     pub reference_top_logits: Vec<(u32, f32)>,
-    pub quantized_top_logits: Vec<(u32, f32)>,
+    pub int8_top_logits: Vec<(u32, f32)>,
     pub kl_divergence: f64,
     pub max_abs_diff: f32,
     pub mean_abs_diff: f32,
     pub reference_logits_prefix: Vec<f32>,
-    pub quantized_logits_prefix: Vec<f32>,
+    pub int8_logits_prefix: Vec<f32>,
 }
 
 #[derive(Debug)]
@@ -366,11 +368,11 @@ pub struct QuantizationSuiteVariantProbe {
     pub variant: &'static str,
     pub reference_token_id: u32,
     pub reference_logit: f32,
-    pub quantized_token_id: u32,
-    pub quantized_logit: f32,
+    pub int8_token_id: u32,
+    pub int8_logit: f32,
     pub token_matches: bool,
     pub reference_top_logits: Vec<(u32, f32)>,
-    pub quantized_top_logits: Vec<(u32, f32)>,
+    pub int8_top_logits: Vec<(u32, f32)>,
     pub kl_divergence: f64,
     pub max_abs_diff: f32,
     pub mean_abs_diff: f32,
@@ -415,14 +417,14 @@ pub struct AllLinearFreeGenerationStepProbe {
     pub prefix_len: usize,
     pub reference_token_id: u32,
     pub reference_logit: f32,
-    pub quantized_token_id: u32,
-    pub quantized_logit: f32,
+    pub int8_token_id: u32,
+    pub int8_logit: f32,
     pub token_matches: bool,
     pub kl_divergence: f64,
     pub max_abs_diff: f32,
     pub mean_abs_diff: f32,
     pub reference_top_logits: Vec<(u32, f32)>,
-    pub quantized_top_logits: Vec<(u32, f32)>,
+    pub int8_top_logits: Vec<(u32, f32)>,
 }
 
 #[derive(Debug)]
@@ -434,29 +436,29 @@ pub struct AllLinearFreeGenerationProbe {
 }
 
 #[derive(Debug)]
-pub struct AllLinearQuantizedRuntimeComparisonStepProbe {
+pub struct AllLinearInt8RuntimeComparisonStepProbe {
     pub step: usize,
     pub prefix_len: usize,
     pub reference_token_id: u32,
     pub reference_logit: f32,
-    pub quantized_token_id: u32,
-    pub quantized_logit: f32,
+    pub int8_token_id: u32,
+    pub int8_logit: f32,
     pub token_matches: bool,
     pub kl_divergence: f64,
     pub max_abs_diff: f32,
     pub mean_abs_diff: f32,
     pub reference_top_logits: Vec<(u32, f32)>,
-    pub quantized_top_logits: Vec<(u32, f32)>,
+    pub int8_top_logits: Vec<(u32, f32)>,
 }
 
 #[derive(Debug)]
-pub struct AllLinearQuantizedRuntimeComparisonProbe {
+pub struct AllLinearInt8RuntimeComparisonProbe {
     pub prompt_tokens: Vec<u32>,
     pub generated_tokens: Vec<u32>,
     pub all_tokens: Vec<u32>,
     pub reference_memory_stats: RuntimeMemoryStats,
-    pub quantized_memory_stats: RuntimeMemoryStats,
-    pub steps: Vec<AllLinearQuantizedRuntimeComparisonStepProbe>,
+    pub int8_memory_stats: RuntimeMemoryStats,
+    pub steps: Vec<AllLinearInt8RuntimeComparisonStepProbe>,
 }
 
 #[derive(Debug)]
@@ -529,40 +531,40 @@ struct LayerDeviceWeights {
     w2: DeviceBuffer<Bf16>,
 }
 
-struct QuantizedFfnLayerDeviceWeights {
+struct RowwiseScaledFfnLayerDeviceWeights {
     attention_norm: DeviceBuffer<Bf16>,
     wq: DeviceBuffer<Bf16>,
     wk: DeviceBuffer<Bf16>,
     wv: DeviceBuffer<Bf16>,
     wo: DeviceBuffer<Bf16>,
     ffn_norm: DeviceBuffer<Bf16>,
-    w1: DeviceQuantizedI8Matrix,
-    w3: DeviceQuantizedI8Matrix,
-    w2: DeviceQuantizedI8Matrix,
+    w1: DeviceRowwiseScaledI8Matrix,
+    w3: DeviceRowwiseScaledI8Matrix,
+    w2: DeviceRowwiseScaledI8Matrix,
 }
 
-struct QuantizedAttentionLayerDeviceWeights {
+struct RowwiseScaledAttentionLayerDeviceWeights {
     attention_norm: DeviceBuffer<Bf16>,
-    wq: DeviceQuantizedI8Matrix,
-    wk: DeviceQuantizedI8Matrix,
-    wv: DeviceQuantizedI8Matrix,
-    wo: DeviceQuantizedI8Matrix,
+    wq: DeviceRowwiseScaledI8Matrix,
+    wk: DeviceRowwiseScaledI8Matrix,
+    wv: DeviceRowwiseScaledI8Matrix,
+    wo: DeviceRowwiseScaledI8Matrix,
     ffn_norm: DeviceBuffer<Bf16>,
     w1: DeviceBuffer<Bf16>,
     w3: DeviceBuffer<Bf16>,
     w2: DeviceBuffer<Bf16>,
 }
 
-struct QuantizedAttentionFfnLayerDeviceWeights {
+struct RowwiseScaledAttentionFfnLayerDeviceWeights {
     attention_norm: DeviceBuffer<Bf16>,
-    wq: DeviceQuantizedI8Matrix,
-    wk: DeviceQuantizedI8Matrix,
-    wv: DeviceQuantizedI8Matrix,
-    wo: DeviceQuantizedI8Matrix,
+    wq: DeviceRowwiseScaledI8Matrix,
+    wk: DeviceRowwiseScaledI8Matrix,
+    wv: DeviceRowwiseScaledI8Matrix,
+    wo: DeviceRowwiseScaledI8Matrix,
     ffn_norm: DeviceBuffer<Bf16>,
-    w1: DeviceQuantizedI8Matrix,
-    w3: DeviceQuantizedI8Matrix,
-    w2: DeviceQuantizedI8Matrix,
+    w1: DeviceRowwiseScaledI8Matrix,
+    w3: DeviceRowwiseScaledI8Matrix,
+    w2: DeviceRowwiseScaledI8Matrix,
 }
 
 trait AttentionLayerWeights {
@@ -638,7 +640,7 @@ impl FfnLayerWeights for LayerDeviceWeights {
     }
 }
 
-impl AttentionLayerWeights for QuantizedFfnLayerDeviceWeights {
+impl AttentionLayerWeights for RowwiseScaledFfnLayerDeviceWeights {
     type Wq = DeviceBuffer<Bf16>;
     type Wk = DeviceBuffer<Bf16>;
     type Wv = DeviceBuffer<Bf16>;
@@ -665,10 +667,10 @@ impl AttentionLayerWeights for QuantizedFfnLayerDeviceWeights {
     }
 }
 
-impl FfnLayerWeights for QuantizedFfnLayerDeviceWeights {
-    type W1 = DeviceQuantizedI8Matrix;
-    type W3 = DeviceQuantizedI8Matrix;
-    type W2 = DeviceQuantizedI8Matrix;
+impl FfnLayerWeights for RowwiseScaledFfnLayerDeviceWeights {
+    type W1 = DeviceRowwiseScaledI8Matrix;
+    type W3 = DeviceRowwiseScaledI8Matrix;
+    type W2 = DeviceRowwiseScaledI8Matrix;
 
     fn ffn_norm(&self) -> &DeviceBuffer<Bf16> {
         &self.ffn_norm
@@ -687,11 +689,11 @@ impl FfnLayerWeights for QuantizedFfnLayerDeviceWeights {
     }
 }
 
-impl AttentionLayerWeights for QuantizedAttentionLayerDeviceWeights {
-    type Wq = DeviceQuantizedI8Matrix;
-    type Wk = DeviceQuantizedI8Matrix;
-    type Wv = DeviceQuantizedI8Matrix;
-    type Wo = DeviceQuantizedI8Matrix;
+impl AttentionLayerWeights for RowwiseScaledAttentionLayerDeviceWeights {
+    type Wq = DeviceRowwiseScaledI8Matrix;
+    type Wk = DeviceRowwiseScaledI8Matrix;
+    type Wv = DeviceRowwiseScaledI8Matrix;
+    type Wo = DeviceRowwiseScaledI8Matrix;
 
     fn attention_norm(&self) -> &DeviceBuffer<Bf16> {
         &self.attention_norm
@@ -714,7 +716,7 @@ impl AttentionLayerWeights for QuantizedAttentionLayerDeviceWeights {
     }
 }
 
-impl FfnLayerWeights for QuantizedAttentionLayerDeviceWeights {
+impl FfnLayerWeights for RowwiseScaledAttentionLayerDeviceWeights {
     type W1 = DeviceBuffer<Bf16>;
     type W3 = DeviceBuffer<Bf16>;
     type W2 = DeviceBuffer<Bf16>;
@@ -736,11 +738,11 @@ impl FfnLayerWeights for QuantizedAttentionLayerDeviceWeights {
     }
 }
 
-impl AttentionLayerWeights for QuantizedAttentionFfnLayerDeviceWeights {
-    type Wq = DeviceQuantizedI8Matrix;
-    type Wk = DeviceQuantizedI8Matrix;
-    type Wv = DeviceQuantizedI8Matrix;
-    type Wo = DeviceQuantizedI8Matrix;
+impl AttentionLayerWeights for RowwiseScaledAttentionFfnLayerDeviceWeights {
+    type Wq = DeviceRowwiseScaledI8Matrix;
+    type Wk = DeviceRowwiseScaledI8Matrix;
+    type Wv = DeviceRowwiseScaledI8Matrix;
+    type Wo = DeviceRowwiseScaledI8Matrix;
 
     fn attention_norm(&self) -> &DeviceBuffer<Bf16> {
         &self.attention_norm
@@ -763,10 +765,10 @@ impl AttentionLayerWeights for QuantizedAttentionFfnLayerDeviceWeights {
     }
 }
 
-impl FfnLayerWeights for QuantizedAttentionFfnLayerDeviceWeights {
-    type W1 = DeviceQuantizedI8Matrix;
-    type W3 = DeviceQuantizedI8Matrix;
-    type W2 = DeviceQuantizedI8Matrix;
+impl FfnLayerWeights for RowwiseScaledAttentionFfnLayerDeviceWeights {
+    type W1 = DeviceRowwiseScaledI8Matrix;
+    type W3 = DeviceRowwiseScaledI8Matrix;
+    type W2 = DeviceRowwiseScaledI8Matrix;
 
     fn ffn_norm(&self) -> &DeviceBuffer<Bf16> {
         &self.ffn_norm
@@ -795,9 +797,9 @@ impl DeviceWeightBytes for DeviceBuffer<Bf16> {
     }
 }
 
-impl DeviceWeightBytes for DeviceQuantizedI8Matrix {
+impl DeviceWeightBytes for DeviceRowwiseScaledI8Matrix {
     fn device_weight_bytes(&self) -> usize {
-        quantized_matrix_device_bytes(self)
+        rowwise_scaled_matrix_device_bytes(self)
     }
 }
 
@@ -807,9 +809,9 @@ impl DeviceWeightBytes for LayerDeviceWeights {
     }
 }
 
-impl DeviceWeightBytes for QuantizedAttentionFfnLayerDeviceWeights {
+impl DeviceWeightBytes for RowwiseScaledAttentionFfnLayerDeviceWeights {
     fn device_weight_bytes(&self) -> usize {
-        quantized_attention_ffn_layer_device_weight_bytes(self)
+        rowwise_scaled_attention_ffn_layer_device_weight_bytes(self)
     }
 }
 
@@ -916,8 +918,8 @@ pub struct MinistralTextRuntime {
     core: RuntimeCore<LayerDeviceWeights, DeviceBuffer<Bf16>>,
 }
 
-pub struct MinistralAllLinearQuantizedRuntime {
-    core: RuntimeCore<QuantizedAttentionFfnLayerDeviceWeights, DeviceQuantizedI8Matrix>,
+pub struct MinistralAllLinearInt8Runtime {
+    core: RuntimeCore<RowwiseScaledAttentionFfnLayerDeviceWeights, DeviceRowwiseScaledI8Matrix>,
 }
 
 struct RuntimeCore<L, O> {
@@ -1617,7 +1619,7 @@ impl RuntimeCore<LayerDeviceWeights, DeviceBuffer<Bf16>> {
     }
 }
 
-impl RuntimeCore<QuantizedAttentionFfnLayerDeviceWeights, DeviceQuantizedI8Matrix> {
+impl RuntimeCore<RowwiseScaledAttentionFfnLayerDeviceWeights, DeviceRowwiseScaledI8Matrix> {
     fn prefill_batched_i8_hidden(&mut self, prompt_tokens: &[u32]) -> Result<()> {
         if !self.tokens.is_empty() {
             return Err(invalid_data("runtime has already been prefilled"));
@@ -1658,7 +1660,7 @@ impl RuntimeCore<QuantizedAttentionFfnLayerDeviceWeights, DeviceQuantizedI8Matri
             } = &mut self.scratch;
 
             if hidden_is_a {
-                run_prefill_quantized_layer_device_with_cache(
+                run_prefill_rowwise_scaled_layer_device_with_cache(
                     &self.stream,
                     &self.module,
                     &self.config,
@@ -1672,7 +1674,7 @@ impl RuntimeCore<QuantizedAttentionFfnLayerDeviceWeights, DeviceQuantizedI8Matri
                     prompt_b_batch,
                 )?;
             } else {
-                run_prefill_quantized_layer_device_with_cache(
+                run_prefill_rowwise_scaled_layer_device_with_cache(
                     &self.stream,
                     &self.module,
                     &self.config,
@@ -2041,7 +2043,7 @@ impl Drop for MinistralTextRuntime {
     }
 }
 
-impl MinistralAllLinearQuantizedRuntime {
+impl MinistralAllLinearInt8Runtime {
     pub fn new(
         stream: Arc<CudaStream>,
         module: Arc<CudaModule>,
@@ -2060,7 +2062,7 @@ impl MinistralAllLinearQuantizedRuntime {
         let rope_freqs = rope_frequencies(&config);
         let norm_weight = read_model_norm_weight(&weights, &config)?;
         let output_weight = read_output_weight(&weights, &config)?;
-        let quantized_output_weight = QuantizedI8Matrix::from_bf16_rows_symmetric(
+        let rowwise_scaled_output_weight = RowwiseScaledI8Matrix::from_bf16_rows_symmetric(
             &output_weight,
             config.vocab_size,
             config.dim,
@@ -2068,9 +2070,10 @@ impl MinistralAllLinearQuantizedRuntime {
         let dev_tok_embeddings = DeviceBuffer::from_host(&stream, &token_embedding)?;
         let dev_rope_freqs = DeviceBuffer::from_host(&stream, &rope_freqs)?;
         let dev_norm_weight = DeviceBuffer::from_host(&stream, &norm_weight)?;
-        let dev_output_weight = quantized_output_weight.to_device(&stream)?;
-        drop((token_embedding, output_weight, quantized_output_weight));
-        let layers = load_quantized_attention_ffn_layer_device_weights(&stream, &weights, &config)?;
+        let dev_output_weight = rowwise_scaled_output_weight.to_device(&stream)?;
+        drop((token_embedding, output_weight, rowwise_scaled_output_weight));
+        let layers =
+            load_rowwise_scaled_attention_ffn_layer_device_weights(&stream, &weights, &config)?;
         let caches = allocate_layer_kv_caches(&stream, &config, max_seq_len)?;
         let scratch = RuntimeScratch::new(&stream, &config, max_seq_len)?;
         stream.synchronize()?;
@@ -2115,7 +2118,7 @@ impl MinistralAllLinearQuantizedRuntime {
         let token_embedding = read_embedding_weight(&weights, &config)?;
         let rope_freqs = rope_frequencies(&config);
         let norm_weight = read_model_norm_weight(&weights, &config)?;
-        let quantized_output_weight = QuantizedI8Matrix::read_exported(
+        let rowwise_scaled_output_weight = RowwiseScaledI8Matrix::read_exported(
             export_dir,
             0,
             "output.weight",
@@ -2125,9 +2128,9 @@ impl MinistralAllLinearQuantizedRuntime {
         let dev_tok_embeddings = DeviceBuffer::from_host(&stream, &token_embedding)?;
         let dev_rope_freqs = DeviceBuffer::from_host(&stream, &rope_freqs)?;
         let dev_norm_weight = DeviceBuffer::from_host(&stream, &norm_weight)?;
-        let dev_output_weight = quantized_output_weight.to_device(&stream)?;
-        drop((token_embedding, norm_weight, quantized_output_weight));
-        let layers = load_exported_quantized_attention_ffn_layer_device_weights(
+        let dev_output_weight = rowwise_scaled_output_weight.to_device(&stream)?;
+        drop((token_embedding, norm_weight, rowwise_scaled_output_weight));
+        let layers = load_exported_rowwise_scaled_attention_ffn_layer_device_weights(
             &stream, &weights, &config, export_dir,
         )?;
         let caches = allocate_layer_kv_caches(&stream, &config, max_seq_len)?;
@@ -2214,7 +2217,7 @@ impl MinistralAllLinearQuantizedRuntime {
     }
 }
 
-impl Drop for MinistralAllLinearQuantizedRuntime {
+impl Drop for MinistralAllLinearInt8Runtime {
     fn drop(&mut self) {
         let _ = self.core.stream.synchronize();
     }
@@ -2819,7 +2822,7 @@ pub fn run_ministral_incremental_greedy_generation_until(
     })
 }
 
-pub fn run_ministral_all_linear_quantized_runtime_generation_probe(
+pub fn run_ministral_all_linear_int8_runtime_generation_probe(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
     model_dir: impl AsRef<Path>,
@@ -2830,12 +2833,12 @@ pub fn run_ministral_all_linear_quantized_runtime_generation_probe(
 ) -> Result<GreedyGenerationProbe> {
     if prompt_tokens.is_empty() {
         return Err(invalid_data(
-            "all-linear quantized runtime generation requires at least one prompt token",
+            "all-linear int8 runtime generation requires at least one prompt token",
         ));
     }
 
     let max_seq_len = prompt_tokens.len() + max_new_tokens;
-    let mut runtime = MinistralAllLinearQuantizedRuntime::new(
+    let mut runtime = MinistralAllLinearInt8Runtime::new(
         Arc::clone(stream),
         Arc::clone(module),
         model_dir,
@@ -2853,7 +2856,7 @@ pub fn run_ministral_all_linear_quantized_runtime_generation_probe(
     })
 }
 
-pub fn run_ministral_all_linear_quantized_runtime_comparison_probe(
+pub fn run_ministral_all_linear_int8_runtime_comparison_probe(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
     model_dir: impl AsRef<Path>,
@@ -2861,10 +2864,10 @@ pub fn run_ministral_all_linear_quantized_runtime_comparison_probe(
     max_new_tokens: usize,
     top_k: usize,
     stop_token_id: Option<u32>,
-) -> Result<AllLinearQuantizedRuntimeComparisonProbe> {
+) -> Result<AllLinearInt8RuntimeComparisonProbe> {
     if prompt_tokens.is_empty() {
         return Err(invalid_data(
-            "all-linear quantized runtime comparison requires at least one prompt token",
+            "all-linear int8 runtime comparison requires at least one prompt token",
         ));
     }
 
@@ -2876,66 +2879,66 @@ pub fn run_ministral_all_linear_quantized_runtime_comparison_probe(
         model_dir,
         max_seq_len,
     )?;
-    let mut quantized_runtime = MinistralAllLinearQuantizedRuntime::new(
+    let mut int8_runtime = MinistralAllLinearInt8Runtime::new(
         Arc::clone(stream),
         Arc::clone(module),
         model_dir,
         max_seq_len,
     )?;
     reference_runtime.prefill(prompt_tokens)?;
-    quantized_runtime.prefill(prompt_tokens)?;
+    int8_runtime.prefill(prompt_tokens)?;
     let reference_memory_stats = reference_runtime.memory_stats();
-    let quantized_memory_stats = quantized_runtime.memory_stats();
+    let int8_memory_stats = int8_runtime.memory_stats();
     let top_k = top_k.max(1);
     let mut generated_tokens = Vec::new();
     let mut steps = Vec::with_capacity(max_new_tokens);
 
     for step in 0..max_new_tokens {
-        let prefix_len = quantized_runtime.tokens().len();
+        let prefix_len = int8_runtime.tokens().len();
         let reference_logits = reference_runtime.next_logits_to_host()?;
-        let quantized_logits = quantized_runtime.next_logits_to_host()?;
-        let kl_divergence = kl_divergence_from_logits(&reference_logits, &quantized_logits)?;
-        let max_abs_diff = max_abs_diff(&reference_logits, &quantized_logits);
-        let mean_abs_diff = mean_abs_diff(&reference_logits, &quantized_logits);
+        let int8_logits = int8_runtime.next_logits_to_host()?;
+        let kl_divergence = kl_divergence_from_logits(&reference_logits, &int8_logits)?;
+        let max_abs_diff = max_abs_diff(&reference_logits, &int8_logits);
+        let mean_abs_diff = mean_abs_diff(&reference_logits, &int8_logits);
         let reference_top_logits = top_k_logits(&reference_logits, top_k);
-        let quantized_top_logits = top_k_logits(&quantized_logits, top_k);
+        let int8_top_logits = top_k_logits(&int8_logits, top_k);
         let &(reference_token_id, reference_logit) = reference_top_logits
             .first()
             .ok_or_else(|| invalid_data("reference runtime produced no top logits"))?;
-        let &(quantized_token_id, quantized_logit) = quantized_top_logits
+        let &(int8_token_id, int8_logit) = int8_top_logits
             .first()
-            .ok_or_else(|| invalid_data("quantized runtime produced no top logits"))?;
-        let stop = Some(quantized_token_id) == stop_token_id;
+            .ok_or_else(|| invalid_data("int8 runtime produced no top logits"))?;
+        let stop = Some(int8_token_id) == stop_token_id;
 
-        steps.push(AllLinearQuantizedRuntimeComparisonStepProbe {
+        steps.push(AllLinearInt8RuntimeComparisonStepProbe {
             step,
             prefix_len,
             reference_token_id,
             reference_logit,
-            quantized_token_id,
-            quantized_logit,
-            token_matches: reference_token_id == quantized_token_id,
+            int8_token_id,
+            int8_logit,
+            token_matches: reference_token_id == int8_token_id,
             kl_divergence,
             max_abs_diff,
             mean_abs_diff,
             reference_top_logits,
-            quantized_top_logits,
+            int8_top_logits,
         });
-        reference_runtime.advance_with_token(quantized_token_id)?;
-        quantized_runtime.advance_with_token(quantized_token_id)?;
-        generated_tokens.push(quantized_token_id);
+        reference_runtime.advance_with_token(int8_token_id)?;
+        int8_runtime.advance_with_token(int8_token_id)?;
+        generated_tokens.push(int8_token_id);
 
         if stop {
             break;
         }
     }
 
-    Ok(AllLinearQuantizedRuntimeComparisonProbe {
+    Ok(AllLinearInt8RuntimeComparisonProbe {
         prompt_tokens: prompt_tokens.to_vec(),
         generated_tokens,
-        all_tokens: quantized_runtime.tokens().to_vec(),
+        all_tokens: int8_runtime.tokens().to_vec(),
         reference_memory_stats,
-        quantized_memory_stats,
+        int8_memory_stats,
         steps,
     })
 }
@@ -3013,18 +3016,21 @@ fn run_ministral_output_projection_quantization_with_weights(
     let final_hidden = run_prompt_to_final_hidden(stream, module, weights, config, tokens)?;
     let norm_weight = read_model_norm_weight(weights, config)?;
     let output_weight = read_output_weight(weights, config)?;
-    let quantized_output_weight =
-        QuantizedI8Matrix::from_bf16_rows_symmetric(&output_weight, config.vocab_size, config.dim);
+    let rowwise_scaled_output_weight = RowwiseScaledI8Matrix::from_bf16_rows_symmetric(
+        &output_weight,
+        config.vocab_size,
+        config.dim,
+    );
     let dev_final_hidden = DeviceBuffer::from_host(stream, &final_hidden)?;
     let dev_norm_weight = DeviceBuffer::from_host(stream, &norm_weight)?;
     let dev_output_weight = DeviceBuffer::from_host(stream, &output_weight)?;
-    let dev_quantized_output_weight = quantized_output_weight.to_device(stream)?;
+    let dev_rowwise_scaled_output_weight = rowwise_scaled_output_weight.to_device(stream)?;
     stream.synchronize()?;
-    drop((norm_weight, output_weight, quantized_output_weight));
+    drop((norm_weight, output_weight, rowwise_scaled_output_weight));
 
     let mut normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
     let mut reference_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
-    let mut quantized_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
+    let mut int8_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
     ops::rmsnorm(
         stream,
         module,
@@ -3044,27 +3050,27 @@ fn run_ministral_output_projection_quantization_with_weights(
         stream,
         module,
         &normed,
-        &dev_quantized_output_weight,
-        &mut quantized_logits,
+        &dev_rowwise_scaled_output_weight,
+        &mut int8_logits,
     )?;
 
     let reference_logits_host = reference_logits.to_host_vec(stream)?;
-    let quantized_logits_host = quantized_logits.to_host_vec(stream)?;
-    let kl_divergence = kl_divergence_from_logits(&reference_logits_host, &quantized_logits_host)?;
-    let max_abs_diff = max_abs_diff(&reference_logits_host, &quantized_logits_host);
-    let mean_abs_diff = mean_abs_diff(&reference_logits_host, &quantized_logits_host);
+    let int8_logits_host = int8_logits.to_host_vec(stream)?;
+    let kl_divergence = kl_divergence_from_logits(&reference_logits_host, &int8_logits_host)?;
+    let max_abs_diff = max_abs_diff(&reference_logits_host, &int8_logits_host);
+    let mean_abs_diff = mean_abs_diff(&reference_logits_host, &int8_logits_host);
 
     Ok(OutputProjectionQuantizationProbe {
         tokens: tokens.to_vec(),
         rows: config.vocab_size,
         cols: config.dim,
         reference_top_logits: top_k_logits(&reference_logits_host, top_k),
-        quantized_top_logits: top_k_logits(&quantized_logits_host, top_k),
+        int8_top_logits: top_k_logits(&int8_logits_host, top_k),
         kl_divergence,
         max_abs_diff,
         mean_abs_diff,
         reference_logits_prefix: reference_logits_host.iter().copied().take(8).collect(),
-        quantized_logits_prefix: quantized_logits_host.iter().copied().take(8).collect(),
+        int8_logits_prefix: int8_logits_host.iter().copied().take(8).collect(),
     })
 }
 
@@ -3089,7 +3095,7 @@ fn run_ministral_output_projection_export_quantization_with_weights(
     let final_hidden = run_prompt_to_final_hidden(stream, module, weights, config, tokens)?;
     let norm_weight = read_model_norm_weight(weights, config)?;
     let output_weight = read_output_weight(weights, config)?;
-    let quantized_output_weight = QuantizedI8Matrix::read_exported(
+    let rowwise_scaled_output_weight = RowwiseScaledI8Matrix::read_exported(
         export_dir,
         0,
         "output.weight",
@@ -3099,13 +3105,13 @@ fn run_ministral_output_projection_export_quantization_with_weights(
     let dev_final_hidden = DeviceBuffer::from_host(stream, &final_hidden)?;
     let dev_norm_weight = DeviceBuffer::from_host(stream, &norm_weight)?;
     let dev_output_weight = DeviceBuffer::from_host(stream, &output_weight)?;
-    let dev_quantized_output_weight = quantized_output_weight.to_device(stream)?;
+    let dev_rowwise_scaled_output_weight = rowwise_scaled_output_weight.to_device(stream)?;
     stream.synchronize()?;
-    drop((norm_weight, output_weight, quantized_output_weight));
+    drop((norm_weight, output_weight, rowwise_scaled_output_weight));
 
     let mut normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
     let mut reference_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
-    let mut quantized_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
+    let mut int8_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
     ops::rmsnorm(
         stream,
         module,
@@ -3125,27 +3131,27 @@ fn run_ministral_output_projection_export_quantization_with_weights(
         stream,
         module,
         &normed,
-        &dev_quantized_output_weight,
-        &mut quantized_logits,
+        &dev_rowwise_scaled_output_weight,
+        &mut int8_logits,
     )?;
 
     let reference_logits_host = reference_logits.to_host_vec(stream)?;
-    let quantized_logits_host = quantized_logits.to_host_vec(stream)?;
-    let kl_divergence = kl_divergence_from_logits(&reference_logits_host, &quantized_logits_host)?;
-    let max_abs_diff = max_abs_diff(&reference_logits_host, &quantized_logits_host);
-    let mean_abs_diff = mean_abs_diff(&reference_logits_host, &quantized_logits_host);
+    let int8_logits_host = int8_logits.to_host_vec(stream)?;
+    let kl_divergence = kl_divergence_from_logits(&reference_logits_host, &int8_logits_host)?;
+    let max_abs_diff = max_abs_diff(&reference_logits_host, &int8_logits_host);
+    let mean_abs_diff = mean_abs_diff(&reference_logits_host, &int8_logits_host);
 
     Ok(OutputProjectionQuantizationProbe {
         tokens: tokens.to_vec(),
         rows: config.vocab_size,
         cols: config.dim,
         reference_top_logits: top_k_logits(&reference_logits_host, top_k),
-        quantized_top_logits: top_k_logits(&quantized_logits_host, top_k),
+        int8_top_logits: top_k_logits(&int8_logits_host, top_k),
         kl_divergence,
         max_abs_diff,
         mean_abs_diff,
         reference_logits_prefix: reference_logits_host.iter().copied().take(8).collect(),
-        quantized_logits_prefix: quantized_logits_host.iter().copied().take(8).collect(),
+        int8_logits_prefix: int8_logits_host.iter().copied().take(8).collect(),
     })
 }
 
@@ -3167,8 +3173,8 @@ fn run_ministral_ffn_quantization_with_weights(
     }
 
     let reference_hidden = run_prompt_to_final_hidden(stream, module, weights, config, tokens)?;
-    let quantized_hidden =
-        run_prompt_to_final_hidden_quantized_ffn(stream, module, weights, config, tokens)?;
+    let int8_hidden =
+        run_prompt_to_final_hidden_rowwise_scaled_ffn(stream, module, weights, config, tokens)?;
     let norm_weight = read_model_norm_weight(weights, config)?;
     let output_weight = read_output_weight(weights, config)?;
     let dev_norm_weight = DeviceBuffer::from_host(stream, &norm_weight)?;
@@ -3177,11 +3183,11 @@ fn run_ministral_ffn_quantization_with_weights(
     drop((norm_weight, output_weight));
 
     let dev_reference_hidden = DeviceBuffer::from_host(stream, &reference_hidden)?;
-    let dev_quantized_hidden = DeviceBuffer::from_host(stream, &quantized_hidden)?;
+    let dev_int8_hidden = DeviceBuffer::from_host(stream, &int8_hidden)?;
     let mut reference_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
-    let mut quantized_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
+    let mut int8_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
     let mut reference_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
-    let mut quantized_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
+    let mut int8_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
 
     logits_from_hidden_device_into(
         stream,
@@ -3197,29 +3203,29 @@ fn run_ministral_ffn_quantization_with_weights(
         stream,
         module,
         config,
-        &dev_quantized_hidden,
+        &dev_int8_hidden,
         &dev_norm_weight,
         &dev_output_weight,
-        &mut quantized_normed,
-        &mut quantized_logits,
+        &mut int8_normed,
+        &mut int8_logits,
     )?;
 
     let reference_logits_host = reference_logits.to_host_vec(stream)?;
-    let quantized_logits_host = quantized_logits.to_host_vec(stream)?;
-    let kl_divergence = kl_divergence_from_logits(&reference_logits_host, &quantized_logits_host)?;
-    let max_abs_diff = max_abs_diff(&reference_logits_host, &quantized_logits_host);
-    let mean_abs_diff = mean_abs_diff(&reference_logits_host, &quantized_logits_host);
+    let int8_logits_host = int8_logits.to_host_vec(stream)?;
+    let kl_divergence = kl_divergence_from_logits(&reference_logits_host, &int8_logits_host)?;
+    let max_abs_diff = max_abs_diff(&reference_logits_host, &int8_logits_host);
+    let mean_abs_diff = mean_abs_diff(&reference_logits_host, &int8_logits_host);
 
     Ok(FfnQuantizationProbe {
         tokens: tokens.to_vec(),
         layers_run: config.n_layers,
         reference_top_logits: top_k_logits(&reference_logits_host, top_k),
-        quantized_top_logits: top_k_logits(&quantized_logits_host, top_k),
+        int8_top_logits: top_k_logits(&int8_logits_host, top_k),
         kl_divergence,
         max_abs_diff,
         mean_abs_diff,
         reference_logits_prefix: reference_logits_host.iter().copied().take(8).collect(),
-        quantized_logits_prefix: quantized_logits_host.iter().copied().take(8).collect(),
+        int8_logits_prefix: int8_logits_host.iter().copied().take(8).collect(),
     })
 }
 
@@ -3241,8 +3247,9 @@ fn run_ministral_attention_quantization_with_weights(
     }
 
     let reference_hidden = run_prompt_to_final_hidden(stream, module, weights, config, tokens)?;
-    let quantized_hidden =
-        run_prompt_to_final_hidden_quantized_attention(stream, module, weights, config, tokens)?;
+    let int8_hidden = run_prompt_to_final_hidden_rowwise_scaled_attention(
+        stream, module, weights, config, tokens,
+    )?;
     let norm_weight = read_model_norm_weight(weights, config)?;
     let output_weight = read_output_weight(weights, config)?;
     let dev_norm_weight = DeviceBuffer::from_host(stream, &norm_weight)?;
@@ -3251,11 +3258,11 @@ fn run_ministral_attention_quantization_with_weights(
     drop((norm_weight, output_weight));
 
     let dev_reference_hidden = DeviceBuffer::from_host(stream, &reference_hidden)?;
-    let dev_quantized_hidden = DeviceBuffer::from_host(stream, &quantized_hidden)?;
+    let dev_int8_hidden = DeviceBuffer::from_host(stream, &int8_hidden)?;
     let mut reference_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
-    let mut quantized_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
+    let mut int8_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
     let mut reference_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
-    let mut quantized_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
+    let mut int8_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
 
     logits_from_hidden_device_into(
         stream,
@@ -3271,29 +3278,29 @@ fn run_ministral_attention_quantization_with_weights(
         stream,
         module,
         config,
-        &dev_quantized_hidden,
+        &dev_int8_hidden,
         &dev_norm_weight,
         &dev_output_weight,
-        &mut quantized_normed,
-        &mut quantized_logits,
+        &mut int8_normed,
+        &mut int8_logits,
     )?;
 
     let reference_logits_host = reference_logits.to_host_vec(stream)?;
-    let quantized_logits_host = quantized_logits.to_host_vec(stream)?;
-    let kl_divergence = kl_divergence_from_logits(&reference_logits_host, &quantized_logits_host)?;
-    let max_abs_diff = max_abs_diff(&reference_logits_host, &quantized_logits_host);
-    let mean_abs_diff = mean_abs_diff(&reference_logits_host, &quantized_logits_host);
+    let int8_logits_host = int8_logits.to_host_vec(stream)?;
+    let kl_divergence = kl_divergence_from_logits(&reference_logits_host, &int8_logits_host)?;
+    let max_abs_diff = max_abs_diff(&reference_logits_host, &int8_logits_host);
+    let mean_abs_diff = mean_abs_diff(&reference_logits_host, &int8_logits_host);
 
     Ok(AttentionQuantizationProbe {
         tokens: tokens.to_vec(),
         layers_run: config.n_layers,
         reference_top_logits: top_k_logits(&reference_logits_host, top_k),
-        quantized_top_logits: top_k_logits(&quantized_logits_host, top_k),
+        int8_top_logits: top_k_logits(&int8_logits_host, top_k),
         kl_divergence,
         max_abs_diff,
         mean_abs_diff,
         reference_logits_prefix: reference_logits_host.iter().copied().take(8).collect(),
-        quantized_logits_prefix: quantized_logits_host.iter().copied().take(8).collect(),
+        int8_logits_prefix: int8_logits_host.iter().copied().take(8).collect(),
     })
 }
 
@@ -3315,7 +3322,7 @@ fn run_ministral_attention_ffn_quantization_with_weights(
     }
 
     let reference_hidden = run_prompt_to_final_hidden(stream, module, weights, config, tokens)?;
-    let quantized_hidden = run_prompt_to_final_hidden_quantized_attention_ffn(
+    let int8_hidden = run_prompt_to_final_hidden_rowwise_scaled_attention_ffn(
         stream, module, weights, config, tokens,
     )?;
     let norm_weight = read_model_norm_weight(weights, config)?;
@@ -3326,11 +3333,11 @@ fn run_ministral_attention_ffn_quantization_with_weights(
     drop((norm_weight, output_weight));
 
     let dev_reference_hidden = DeviceBuffer::from_host(stream, &reference_hidden)?;
-    let dev_quantized_hidden = DeviceBuffer::from_host(stream, &quantized_hidden)?;
+    let dev_int8_hidden = DeviceBuffer::from_host(stream, &int8_hidden)?;
     let mut reference_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
-    let mut quantized_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
+    let mut int8_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
     let mut reference_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
-    let mut quantized_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
+    let mut int8_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
 
     logits_from_hidden_device_into(
         stream,
@@ -3346,29 +3353,29 @@ fn run_ministral_attention_ffn_quantization_with_weights(
         stream,
         module,
         config,
-        &dev_quantized_hidden,
+        &dev_int8_hidden,
         &dev_norm_weight,
         &dev_output_weight,
-        &mut quantized_normed,
-        &mut quantized_logits,
+        &mut int8_normed,
+        &mut int8_logits,
     )?;
 
     let reference_logits_host = reference_logits.to_host_vec(stream)?;
-    let quantized_logits_host = quantized_logits.to_host_vec(stream)?;
-    let kl_divergence = kl_divergence_from_logits(&reference_logits_host, &quantized_logits_host)?;
-    let max_abs_diff = max_abs_diff(&reference_logits_host, &quantized_logits_host);
-    let mean_abs_diff = mean_abs_diff(&reference_logits_host, &quantized_logits_host);
+    let int8_logits_host = int8_logits.to_host_vec(stream)?;
+    let kl_divergence = kl_divergence_from_logits(&reference_logits_host, &int8_logits_host)?;
+    let max_abs_diff = max_abs_diff(&reference_logits_host, &int8_logits_host);
+    let mean_abs_diff = mean_abs_diff(&reference_logits_host, &int8_logits_host);
 
     Ok(AttentionFfnQuantizationProbe {
         tokens: tokens.to_vec(),
         layers_run: config.n_layers,
         reference_top_logits: top_k_logits(&reference_logits_host, top_k),
-        quantized_top_logits: top_k_logits(&quantized_logits_host, top_k),
+        int8_top_logits: top_k_logits(&int8_logits_host, top_k),
         kl_divergence,
         max_abs_diff,
         mean_abs_diff,
         reference_logits_prefix: reference_logits_host.iter().copied().take(8).collect(),
-        quantized_logits_prefix: quantized_logits_host.iter().copied().take(8).collect(),
+        int8_logits_prefix: int8_logits_host.iter().copied().take(8).collect(),
     })
 }
 
@@ -3390,25 +3397,28 @@ fn run_ministral_all_linear_quantization_with_weights(
     }
 
     let reference_hidden = run_prompt_to_final_hidden(stream, module, weights, config, tokens)?;
-    let quantized_hidden = run_prompt_to_final_hidden_quantized_attention_ffn(
+    let int8_hidden = run_prompt_to_final_hidden_rowwise_scaled_attention_ffn(
         stream, module, weights, config, tokens,
     )?;
     let norm_weight = read_model_norm_weight(weights, config)?;
     let output_weight = read_output_weight(weights, config)?;
-    let quantized_output_weight =
-        QuantizedI8Matrix::from_bf16_rows_symmetric(&output_weight, config.vocab_size, config.dim);
+    let rowwise_scaled_output_weight = RowwiseScaledI8Matrix::from_bf16_rows_symmetric(
+        &output_weight,
+        config.vocab_size,
+        config.dim,
+    );
     let dev_norm_weight = DeviceBuffer::from_host(stream, &norm_weight)?;
     let dev_output_weight = DeviceBuffer::from_host(stream, &output_weight)?;
-    let dev_quantized_output_weight = quantized_output_weight.to_device(stream)?;
+    let dev_rowwise_scaled_output_weight = rowwise_scaled_output_weight.to_device(stream)?;
     stream.synchronize()?;
-    drop((norm_weight, output_weight, quantized_output_weight));
+    drop((norm_weight, output_weight, rowwise_scaled_output_weight));
 
     let dev_reference_hidden = DeviceBuffer::from_host(stream, &reference_hidden)?;
-    let dev_quantized_hidden = DeviceBuffer::from_host(stream, &quantized_hidden)?;
+    let dev_int8_hidden = DeviceBuffer::from_host(stream, &int8_hidden)?;
     let mut reference_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
-    let mut quantized_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
+    let mut int8_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
     let mut reference_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
-    let mut quantized_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
+    let mut int8_logits = DeviceBuffer::<f32>::zeroed(stream, config.vocab_size)?;
 
     logits_from_hidden_device_into(
         stream,
@@ -3423,24 +3433,24 @@ fn run_ministral_all_linear_quantization_with_weights(
     ops::rmsnorm(
         stream,
         module,
-        &dev_quantized_hidden,
+        &dev_int8_hidden,
         &dev_norm_weight,
         config.norm_eps,
-        &mut quantized_normed,
+        &mut int8_normed,
     )?;
     ops::linear(
         stream,
         module,
-        &quantized_normed,
-        &dev_quantized_output_weight,
-        &mut quantized_logits,
+        &int8_normed,
+        &dev_rowwise_scaled_output_weight,
+        &mut int8_logits,
     )?;
 
     let reference_logits_host = reference_logits.to_host_vec(stream)?;
-    let quantized_logits_host = quantized_logits.to_host_vec(stream)?;
-    let kl_divergence = kl_divergence_from_logits(&reference_logits_host, &quantized_logits_host)?;
-    let max_abs_diff = max_abs_diff(&reference_logits_host, &quantized_logits_host);
-    let mean_abs_diff = mean_abs_diff(&reference_logits_host, &quantized_logits_host);
+    let int8_logits_host = int8_logits.to_host_vec(stream)?;
+    let kl_divergence = kl_divergence_from_logits(&reference_logits_host, &int8_logits_host)?;
+    let max_abs_diff = max_abs_diff(&reference_logits_host, &int8_logits_host);
+    let mean_abs_diff = mean_abs_diff(&reference_logits_host, &int8_logits_host);
 
     Ok(AllLinearQuantizationProbe {
         tokens: tokens.to_vec(),
@@ -3448,12 +3458,12 @@ fn run_ministral_all_linear_quantization_with_weights(
         output_rows: config.vocab_size,
         output_cols: config.dim,
         reference_top_logits: top_k_logits(&reference_logits_host, top_k),
-        quantized_top_logits: top_k_logits(&quantized_logits_host, top_k),
+        int8_top_logits: top_k_logits(&int8_logits_host, top_k),
         kl_divergence,
         max_abs_diff,
         mean_abs_diff,
         reference_logits_prefix: reference_logits_host.iter().copied().take(8).collect(),
-        quantized_logits_prefix: quantized_logits_host.iter().copied().take(8).collect(),
+        int8_logits_prefix: int8_logits_host.iter().copied().take(8).collect(),
     })
 }
 
@@ -3603,23 +3613,23 @@ fn run_ministral_all_linear_free_generation_with_weights(
             top_k,
         )?;
 
-        let quantized_token_id = variant.quantized_token_id;
-        let stop = Some(quantized_token_id) == stop_token_id;
-        current_tokens.push(quantized_token_id);
-        generated_tokens.push(quantized_token_id);
+        let int8_token_id = variant.int8_token_id;
+        let stop = Some(int8_token_id) == stop_token_id;
+        current_tokens.push(int8_token_id);
+        generated_tokens.push(int8_token_id);
         steps.push(AllLinearFreeGenerationStepProbe {
             step,
             prefix_len,
             reference_token_id: variant.reference_token_id,
             reference_logit: variant.reference_logit,
-            quantized_token_id,
-            quantized_logit: variant.quantized_logit,
+            int8_token_id,
+            int8_logit: variant.int8_logit,
             token_matches: variant.token_matches,
             kl_divergence: variant.kl_divergence,
             max_abs_diff: variant.max_abs_diff,
             mean_abs_diff: variant.mean_abs_diff,
             reference_top_logits: variant.reference_top_logits,
-            quantized_top_logits: variant.quantized_top_logits,
+            int8_top_logits: variant.int8_top_logits,
         });
 
         if stop {
@@ -3638,7 +3648,7 @@ fn run_ministral_all_linear_free_generation_with_weights(
 struct QuantizationOutputWeights {
     norm: DeviceBuffer<Bf16>,
     output: DeviceBuffer<Bf16>,
-    quantized_output: DeviceQuantizedI8Matrix,
+    rowwise_scaled_output: DeviceRowwiseScaledI8Matrix,
 }
 
 fn load_quantization_output_weights(
@@ -3648,18 +3658,21 @@ fn load_quantization_output_weights(
 ) -> Result<QuantizationOutputWeights> {
     let norm_weight = read_model_norm_weight(weights, config)?;
     let output_weight = read_output_weight(weights, config)?;
-    let quantized_output_weight =
-        QuantizedI8Matrix::from_bf16_rows_symmetric(&output_weight, config.vocab_size, config.dim);
+    let rowwise_scaled_output_weight = RowwiseScaledI8Matrix::from_bf16_rows_symmetric(
+        &output_weight,
+        config.vocab_size,
+        config.dim,
+    );
     let dev_norm_weight = DeviceBuffer::from_host(stream, &norm_weight)?;
     let dev_output_weight = DeviceBuffer::from_host(stream, &output_weight)?;
-    let dev_quantized_output_weight = quantized_output_weight.to_device(stream)?;
+    let dev_rowwise_scaled_output_weight = rowwise_scaled_output_weight.to_device(stream)?;
     stream.synchronize()?;
-    drop((norm_weight, output_weight, quantized_output_weight));
+    drop((norm_weight, output_weight, rowwise_scaled_output_weight));
 
     Ok(QuantizationOutputWeights {
         norm: dev_norm_weight,
         output: dev_output_weight,
-        quantized_output: dev_quantized_output_weight,
+        rowwise_scaled_output: dev_rowwise_scaled_output_weight,
     })
 }
 
@@ -3681,10 +3694,11 @@ fn run_quantization_suite_prompt_with_outputs(
 
     let reference_hidden = run_prompt_to_final_hidden(stream, module, weights, config, tokens)?;
     let ffn_hidden =
-        run_prompt_to_final_hidden_quantized_ffn(stream, module, weights, config, tokens)?;
-    let attention_hidden =
-        run_prompt_to_final_hidden_quantized_attention(stream, module, weights, config, tokens)?;
-    let attention_ffn_hidden = run_prompt_to_final_hidden_quantized_attention_ffn(
+        run_prompt_to_final_hidden_rowwise_scaled_ffn(stream, module, weights, config, tokens)?;
+    let attention_hidden = run_prompt_to_final_hidden_rowwise_scaled_attention(
+        stream, module, weights, config, tokens,
+    )?;
+    let attention_ffn_hidden = run_prompt_to_final_hidden_rowwise_scaled_attention_ffn(
         stream, module, weights, config, tokens,
     )?;
 
@@ -3698,7 +3712,7 @@ fn run_quantization_suite_prompt_with_outputs(
             &reference_hidden,
             &output_weights.norm,
             &output_weights.output,
-            OutputProjection::QuantizedI8(&output_weights.quantized_output),
+            OutputProjection::RowwiseScaledI8(&output_weights.rowwise_scaled_output),
             top_k,
         )?,
         compare_hidden_logits_variant(
@@ -3746,7 +3760,7 @@ fn run_quantization_suite_prompt_with_outputs(
             &attention_ffn_hidden,
             &output_weights.norm,
             &output_weights.output,
-            OutputProjection::QuantizedI8(&output_weights.quantized_output),
+            OutputProjection::RowwiseScaledI8(&output_weights.rowwise_scaled_output),
             top_k,
         )?,
     ];
@@ -3776,7 +3790,7 @@ fn run_all_linear_quantization_variant_with_outputs(
     }
 
     let reference_hidden = run_prompt_to_final_hidden(stream, module, weights, config, tokens)?;
-    let attention_ffn_hidden = run_prompt_to_final_hidden_quantized_attention_ffn(
+    let attention_ffn_hidden = run_prompt_to_final_hidden_rowwise_scaled_attention_ffn(
         stream, module, weights, config, tokens,
     )?;
 
@@ -3789,14 +3803,14 @@ fn run_all_linear_quantization_variant_with_outputs(
         &attention_ffn_hidden,
         &output_weights.norm,
         &output_weights.output,
-        OutputProjection::QuantizedI8(&output_weights.quantized_output),
+        OutputProjection::RowwiseScaledI8(&output_weights.rowwise_scaled_output),
         top_k,
     )
 }
 
 enum OutputProjection<'a> {
     Bf16(&'a DeviceBuffer<Bf16>),
-    QuantizedI8(&'a DeviceQuantizedI8Matrix),
+    RowwiseScaledI8(&'a DeviceRowwiseScaledI8Matrix),
 }
 
 impl ops::CudaLinearWeight for OutputProjection<'_> {
@@ -3809,7 +3823,7 @@ impl ops::CudaLinearWeight for OutputProjection<'_> {
     ) -> std::result::Result<(), DriverError> {
         match self {
             Self::Bf16(weight) => ops::linear(stream, module, input, *weight, output),
-            Self::QuantizedI8(weight) => ops::linear(stream, module, input, *weight, output),
+            Self::RowwiseScaledI8(weight) => ops::linear(stream, module, input, *weight, output),
         }
     }
 }
@@ -3865,11 +3879,11 @@ fn compare_hidden_logits_variant(
     let max_abs_diff = max_abs_diff(&reference_logits_host, &candidate_logits_host);
     let mean_abs_diff = mean_abs_diff(&reference_logits_host, &candidate_logits_host);
     let reference_top_logits = top_k_logits(&reference_logits_host, top_k);
-    let quantized_top_logits = top_k_logits(&candidate_logits_host, top_k);
+    let int8_top_logits = top_k_logits(&candidate_logits_host, top_k);
     let &(reference_token_id, reference_logit) = reference_top_logits
         .first()
         .ok_or_else(|| invalid_data("reference top logits were empty"))?;
-    let &(quantized_token_id, quantized_logit) = quantized_top_logits
+    let &(int8_token_id, int8_logit) = int8_top_logits
         .first()
         .ok_or_else(|| invalid_data("candidate top logits were empty"))?;
 
@@ -3877,11 +3891,11 @@ fn compare_hidden_logits_variant(
         variant,
         reference_token_id,
         reference_logit,
-        quantized_token_id,
-        quantized_logit,
-        token_matches: reference_token_id == quantized_token_id,
+        int8_token_id,
+        int8_logit,
+        token_matches: reference_token_id == int8_token_id,
         reference_top_logits,
-        quantized_top_logits,
+        int8_top_logits,
         kl_divergence,
         max_abs_diff,
         mean_abs_diff,
@@ -3925,7 +3939,7 @@ fn run_prompt_to_final_hidden(
         .ok_or_else(|| invalid_data("missing final hidden state"))
 }
 
-fn run_prompt_to_final_hidden_quantized_attention_ffn(
+fn run_prompt_to_final_hidden_rowwise_scaled_attention_ffn(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
     weights: &ModelWeights,
@@ -3941,11 +3955,12 @@ fn run_prompt_to_final_hidden_quantized_attention_ffn(
 
     for layer in 0..config.n_layers {
         let layer_host = read_layer_host_weights(weights, config, layer)?;
-        let layer_dev = upload_quantized_attention_ffn_layer_weights(stream, config, &layer_host)?;
+        let layer_dev =
+            upload_rowwise_scaled_attention_ffn_layer_weights(stream, config, &layer_host)?;
         stream.synchronize()?;
         drop(layer_host);
 
-        hidden_states = run_prompt_layer_quantized_attention_ffn_from_hidden_states(
+        hidden_states = run_prompt_layer_rowwise_scaled_attention_ffn_from_hidden_states(
             stream,
             module,
             config,
@@ -3962,7 +3977,7 @@ fn run_prompt_to_final_hidden_quantized_attention_ffn(
         .ok_or_else(|| invalid_data("missing final hidden state"))
 }
 
-fn run_prompt_to_final_hidden_quantized_attention(
+fn run_prompt_to_final_hidden_rowwise_scaled_attention(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
     weights: &ModelWeights,
@@ -3978,11 +3993,11 @@ fn run_prompt_to_final_hidden_quantized_attention(
 
     for layer in 0..config.n_layers {
         let layer_host = read_layer_host_weights(weights, config, layer)?;
-        let layer_dev = upload_quantized_attention_layer_weights(stream, config, &layer_host)?;
+        let layer_dev = upload_rowwise_scaled_attention_layer_weights(stream, config, &layer_host)?;
         stream.synchronize()?;
         drop(layer_host);
 
-        hidden_states = run_prompt_layer_quantized_attention_from_hidden_states(
+        hidden_states = run_prompt_layer_rowwise_scaled_attention_from_hidden_states(
             stream,
             module,
             config,
@@ -3999,7 +4014,7 @@ fn run_prompt_to_final_hidden_quantized_attention(
         .ok_or_else(|| invalid_data("missing final hidden state"))
 }
 
-fn run_prompt_to_final_hidden_quantized_ffn(
+fn run_prompt_to_final_hidden_rowwise_scaled_ffn(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
     weights: &ModelWeights,
@@ -4015,11 +4030,11 @@ fn run_prompt_to_final_hidden_quantized_ffn(
 
     for layer in 0..config.n_layers {
         let layer_host = read_layer_host_weights(weights, config, layer)?;
-        let layer_dev = upload_quantized_ffn_layer_weights(stream, config, &layer_host)?;
+        let layer_dev = upload_rowwise_scaled_ffn_layer_weights(stream, config, &layer_host)?;
         stream.synchronize()?;
         drop(layer_host);
 
-        hidden_states = run_prompt_layer_quantized_ffn_from_hidden_states(
+        hidden_states = run_prompt_layer_rowwise_scaled_ffn_from_hidden_states(
             stream,
             module,
             config,
@@ -4535,19 +4550,19 @@ fn upload_layer_weights(
     })
 }
 
-fn upload_quantized_ffn_layer_weights(
+fn upload_rowwise_scaled_ffn_layer_weights(
     stream: &Arc<CudaStream>,
     config: &TextConfig,
     weights: &LayerHostWeights,
-) -> Result<QuantizedFfnLayerDeviceWeights> {
+) -> Result<RowwiseScaledFfnLayerDeviceWeights> {
     let w1 =
-        QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.w1, config.hidden_dim, config.dim);
+        RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.w1, config.hidden_dim, config.dim);
     let w3 =
-        QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.w3, config.hidden_dim, config.dim);
+        RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.w3, config.hidden_dim, config.dim);
     let w2 =
-        QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.w2, config.dim, config.hidden_dim);
+        RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.w2, config.dim, config.hidden_dim);
 
-    Ok(QuantizedFfnLayerDeviceWeights {
+    Ok(RowwiseScaledFfnLayerDeviceWeights {
         attention_norm: DeviceBuffer::from_host(stream, &weights.attention_norm)?,
         wq: DeviceBuffer::from_host(stream, &weights.wq)?,
         wk: DeviceBuffer::from_host(stream, &weights.wk)?,
@@ -4560,19 +4575,19 @@ fn upload_quantized_ffn_layer_weights(
     })
 }
 
-fn upload_quantized_attention_layer_weights(
+fn upload_rowwise_scaled_attention_layer_weights(
     stream: &Arc<CudaStream>,
     config: &TextConfig,
     weights: &LayerHostWeights,
-) -> Result<QuantizedAttentionLayerDeviceWeights> {
+) -> Result<RowwiseScaledAttentionLayerDeviceWeights> {
     let q_len = config.n_heads * config.head_dim;
     let kv_len = config.n_kv_heads * config.head_dim;
-    let wq = QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.wq, q_len, config.dim);
-    let wk = QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.wk, kv_len, config.dim);
-    let wv = QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.wv, kv_len, config.dim);
-    let wo = QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.wo, config.dim, q_len);
+    let wq = RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.wq, q_len, config.dim);
+    let wk = RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.wk, kv_len, config.dim);
+    let wv = RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.wv, kv_len, config.dim);
+    let wo = RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.wo, config.dim, q_len);
 
-    Ok(QuantizedAttentionLayerDeviceWeights {
+    Ok(RowwiseScaledAttentionLayerDeviceWeights {
         attention_norm: DeviceBuffer::from_host(stream, &weights.attention_norm)?,
         wq: wq.to_device(stream)?,
         wk: wk.to_device(stream)?,
@@ -4585,25 +4600,25 @@ fn upload_quantized_attention_layer_weights(
     })
 }
 
-fn upload_quantized_attention_ffn_layer_weights(
+fn upload_rowwise_scaled_attention_ffn_layer_weights(
     stream: &Arc<CudaStream>,
     config: &TextConfig,
     weights: &LayerHostWeights,
-) -> Result<QuantizedAttentionFfnLayerDeviceWeights> {
+) -> Result<RowwiseScaledAttentionFfnLayerDeviceWeights> {
     let q_len = config.n_heads * config.head_dim;
     let kv_len = config.n_kv_heads * config.head_dim;
-    let wq = QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.wq, q_len, config.dim);
-    let wk = QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.wk, kv_len, config.dim);
-    let wv = QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.wv, kv_len, config.dim);
-    let wo = QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.wo, config.dim, q_len);
+    let wq = RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.wq, q_len, config.dim);
+    let wk = RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.wk, kv_len, config.dim);
+    let wv = RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.wv, kv_len, config.dim);
+    let wo = RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.wo, config.dim, q_len);
     let w1 =
-        QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.w1, config.hidden_dim, config.dim);
+        RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.w1, config.hidden_dim, config.dim);
     let w3 =
-        QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.w3, config.hidden_dim, config.dim);
+        RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.w3, config.hidden_dim, config.dim);
     let w2 =
-        QuantizedI8Matrix::from_bf16_rows_symmetric(&weights.w2, config.dim, config.hidden_dim);
+        RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weights.w2, config.dim, config.hidden_dim);
 
-    Ok(QuantizedAttentionFfnLayerDeviceWeights {
+    Ok(RowwiseScaledAttentionFfnLayerDeviceWeights {
         attention_norm: DeviceBuffer::from_host(stream, &weights.attention_norm)?,
         wq: wq.to_device(stream)?,
         wk: wk.to_device(stream)?,
@@ -4616,59 +4631,59 @@ fn upload_quantized_attention_ffn_layer_weights(
     })
 }
 
-fn upload_exported_quantized_attention_ffn_layer_weights(
+fn upload_exported_rowwise_scaled_attention_ffn_layer_weights(
     stream: &Arc<CudaStream>,
     config: &TextConfig,
     weights: &ModelWeights,
     layer: usize,
     export_dir: &Path,
-) -> Result<QuantizedAttentionFfnLayerDeviceWeights> {
+) -> Result<RowwiseScaledAttentionFfnLayerDeviceWeights> {
     let q_len = config.n_heads * config.head_dim;
     let kv_len = config.n_kv_heads * config.head_dim;
-    let index = |offset| exported_quantized_layer_tensor_index(layer, offset);
-    let wq = QuantizedI8Matrix::read_exported(
+    let index = |offset| exported_int8_layer_tensor_index(layer, offset);
+    let wq = RowwiseScaledI8Matrix::read_exported(
         export_dir,
         index(0),
         &format!("layers.{layer}.attention.wq.weight"),
         q_len,
         config.dim,
     )?;
-    let wk = QuantizedI8Matrix::read_exported(
+    let wk = RowwiseScaledI8Matrix::read_exported(
         export_dir,
         index(1),
         &format!("layers.{layer}.attention.wk.weight"),
         kv_len,
         config.dim,
     )?;
-    let wv = QuantizedI8Matrix::read_exported(
+    let wv = RowwiseScaledI8Matrix::read_exported(
         export_dir,
         index(2),
         &format!("layers.{layer}.attention.wv.weight"),
         kv_len,
         config.dim,
     )?;
-    let wo = QuantizedI8Matrix::read_exported(
+    let wo = RowwiseScaledI8Matrix::read_exported(
         export_dir,
         index(3),
         &format!("layers.{layer}.attention.wo.weight"),
         config.dim,
         q_len,
     )?;
-    let w1 = QuantizedI8Matrix::read_exported(
+    let w1 = RowwiseScaledI8Matrix::read_exported(
         export_dir,
         index(4),
         &format!("layers.{layer}.feed_forward.w1.weight"),
         config.hidden_dim,
         config.dim,
     )?;
-    let w3 = QuantizedI8Matrix::read_exported(
+    let w3 = RowwiseScaledI8Matrix::read_exported(
         export_dir,
         index(5),
         &format!("layers.{layer}.feed_forward.w3.weight"),
         config.hidden_dim,
         config.dim,
     )?;
-    let w2 = QuantizedI8Matrix::read_exported(
+    let w2 = RowwiseScaledI8Matrix::read_exported(
         export_dir,
         index(6),
         &format!("layers.{layer}.feed_forward.w2.weight"),
@@ -4676,7 +4691,7 @@ fn upload_exported_quantized_attention_ffn_layer_weights(
         config.hidden_dim,
     )?;
 
-    Ok(QuantizedAttentionFfnLayerDeviceWeights {
+    Ok(RowwiseScaledAttentionFfnLayerDeviceWeights {
         attention_norm: DeviceBuffer::from_host(
             stream,
             &read_bf16_shape(
@@ -4704,7 +4719,7 @@ fn upload_exported_quantized_attention_ffn_layer_weights(
 }
 
 #[derive(Debug)]
-struct ExportedQuantizedTensorSpec {
+struct ExportedInt8TensorSpec {
     index: usize,
     name: String,
     rows: usize,
@@ -4731,22 +4746,22 @@ fn validate_all_linear_int8_export_archive(
 
     let manifest_path = export_dir.join("manifest.json");
     validate_export_regular_file_len(&manifest_path, None, "all-linear int8 export manifest")?;
-    validate_quantized_export_manifest_metadata(&manifest_path, expected_weights_path)?;
+    validate_int8_export_manifest_metadata(&manifest_path, expected_weights_path)?;
 
     let expected_tensors = all_linear_int8_export_tensor_specs(config);
     for tensor in &expected_tensors {
         let (values_path, scales_path) =
-            quantized_export_file_paths(export_dir, tensor.index, &tensor.name);
+            rowwise_scaled_i8_export_file_paths(export_dir, tensor.index, &tensor.name);
         let values_bytes = checked_export_file_len(
             tensor.rows,
             tensor.cols,
-            "quantized values byte count",
+            "int8 values byte count",
             &tensor.name,
         )?;
         let scales_bytes = checked_export_file_len(
             tensor.rows,
             size_of::<f32>(),
-            "quantized scales byte count",
+            "int8 scales byte count",
             &tensor.name,
         )?;
         validate_export_regular_file_len(
@@ -4764,7 +4779,7 @@ fn validate_all_linear_int8_export_archive(
     Ok(())
 }
 
-fn validate_quantized_export_manifest_metadata(
+fn validate_int8_export_manifest_metadata(
     manifest_path: &Path,
     expected_weights_path: Option<&Path>,
 ) -> Result<()> {
@@ -4809,56 +4824,56 @@ fn paths_refer_to_same_file(lhs: &Path, rhs: &Path) -> bool {
     }
 }
 
-fn all_linear_int8_export_tensor_specs(config: &TextConfig) -> Vec<ExportedQuantizedTensorSpec> {
+fn all_linear_int8_export_tensor_specs(config: &TextConfig) -> Vec<ExportedInt8TensorSpec> {
     let q_len = config.n_heads * config.head_dim;
     let kv_len = config.n_kv_heads * config.head_dim;
     let mut specs = Vec::with_capacity(1 + config.n_layers * 7);
 
-    specs.push(ExportedQuantizedTensorSpec {
+    specs.push(ExportedInt8TensorSpec {
         index: 0,
         name: "output.weight".to_string(),
         rows: config.vocab_size,
         cols: config.dim,
     });
     for layer in 0..config.n_layers {
-        let index = |offset| exported_quantized_layer_tensor_index(layer, offset);
-        specs.push(ExportedQuantizedTensorSpec {
+        let index = |offset| exported_int8_layer_tensor_index(layer, offset);
+        specs.push(ExportedInt8TensorSpec {
             index: index(0),
             name: format!("layers.{layer}.attention.wq.weight"),
             rows: q_len,
             cols: config.dim,
         });
-        specs.push(ExportedQuantizedTensorSpec {
+        specs.push(ExportedInt8TensorSpec {
             index: index(1),
             name: format!("layers.{layer}.attention.wk.weight"),
             rows: kv_len,
             cols: config.dim,
         });
-        specs.push(ExportedQuantizedTensorSpec {
+        specs.push(ExportedInt8TensorSpec {
             index: index(2),
             name: format!("layers.{layer}.attention.wv.weight"),
             rows: kv_len,
             cols: config.dim,
         });
-        specs.push(ExportedQuantizedTensorSpec {
+        specs.push(ExportedInt8TensorSpec {
             index: index(3),
             name: format!("layers.{layer}.attention.wo.weight"),
             rows: config.dim,
             cols: q_len,
         });
-        specs.push(ExportedQuantizedTensorSpec {
+        specs.push(ExportedInt8TensorSpec {
             index: index(4),
             name: format!("layers.{layer}.feed_forward.w1.weight"),
             rows: config.hidden_dim,
             cols: config.dim,
         });
-        specs.push(ExportedQuantizedTensorSpec {
+        specs.push(ExportedInt8TensorSpec {
             index: index(5),
             name: format!("layers.{layer}.feed_forward.w3.weight"),
             rows: config.hidden_dim,
             cols: config.dim,
         });
-        specs.push(ExportedQuantizedTensorSpec {
+        specs.push(ExportedInt8TensorSpec {
             index: index(6),
             name: format!("layers.{layer}.feed_forward.w2.weight"),
             rows: config.dim,
@@ -4912,7 +4927,7 @@ fn validate_export_regular_file_len(
     Ok(())
 }
 
-fn exported_quantized_layer_tensor_index(layer: usize, offset: usize) -> usize {
+fn exported_int8_layer_tensor_index(layer: usize, offset: usize) -> usize {
     1 + layer * 7 + offset
 }
 
@@ -4931,16 +4946,16 @@ fn load_layer_device_weights(
     Ok(layers)
 }
 
-fn load_quantized_attention_ffn_layer_device_weights(
+fn load_rowwise_scaled_attention_ffn_layer_device_weights(
     stream: &Arc<CudaStream>,
     weights: &ModelWeights,
     config: &TextConfig,
-) -> Result<Vec<QuantizedAttentionFfnLayerDeviceWeights>> {
+) -> Result<Vec<RowwiseScaledAttentionFfnLayerDeviceWeights>> {
     let mut layers = Vec::with_capacity(config.n_layers);
 
     for layer_idx in 0..config.n_layers {
         let layer_host = read_layer_host_weights(weights, config, layer_idx)?;
-        layers.push(upload_quantized_attention_ffn_layer_weights(
+        layers.push(upload_rowwise_scaled_attention_ffn_layer_weights(
             stream,
             config,
             &layer_host,
@@ -4950,16 +4965,16 @@ fn load_quantized_attention_ffn_layer_device_weights(
     Ok(layers)
 }
 
-fn load_exported_quantized_attention_ffn_layer_device_weights(
+fn load_exported_rowwise_scaled_attention_ffn_layer_device_weights(
     stream: &Arc<CudaStream>,
     weights: &ModelWeights,
     config: &TextConfig,
     export_dir: &Path,
-) -> Result<Vec<QuantizedAttentionFfnLayerDeviceWeights>> {
+) -> Result<Vec<RowwiseScaledAttentionFfnLayerDeviceWeights>> {
     let mut layers = Vec::with_capacity(config.n_layers);
 
     for layer_idx in 0..config.n_layers {
-        layers.push(upload_exported_quantized_attention_ffn_layer_weights(
+        layers.push(upload_exported_rowwise_scaled_attention_ffn_layer_weights(
             stream, config, weights, layer_idx, export_dir,
         )?);
     }
@@ -5232,21 +5247,21 @@ fn layer_device_weight_bytes(layer: &LayerDeviceWeights) -> usize {
         * size_of::<Bf16>()
 }
 
-fn quantized_matrix_device_bytes(matrix: &DeviceQuantizedI8Matrix) -> usize {
+fn rowwise_scaled_matrix_device_bytes(matrix: &DeviceRowwiseScaledI8Matrix) -> usize {
     matrix.values.len() * size_of::<i8>() + matrix.scales.len() * size_of::<f32>()
 }
 
-fn quantized_attention_ffn_layer_device_weight_bytes(
-    layer: &QuantizedAttentionFfnLayerDeviceWeights,
+fn rowwise_scaled_attention_ffn_layer_device_weight_bytes(
+    layer: &RowwiseScaledAttentionFfnLayerDeviceWeights,
 ) -> usize {
     (layer.attention_norm.len() + layer.ffn_norm.len()) * size_of::<Bf16>()
-        + quantized_matrix_device_bytes(&layer.wq)
-        + quantized_matrix_device_bytes(&layer.wk)
-        + quantized_matrix_device_bytes(&layer.wv)
-        + quantized_matrix_device_bytes(&layer.wo)
-        + quantized_matrix_device_bytes(&layer.w1)
-        + quantized_matrix_device_bytes(&layer.w3)
-        + quantized_matrix_device_bytes(&layer.w2)
+        + rowwise_scaled_matrix_device_bytes(&layer.wq)
+        + rowwise_scaled_matrix_device_bytes(&layer.wk)
+        + rowwise_scaled_matrix_device_bytes(&layer.wv)
+        + rowwise_scaled_matrix_device_bytes(&layer.wo)
+        + rowwise_scaled_matrix_device_bytes(&layer.w1)
+        + rowwise_scaled_matrix_device_bytes(&layer.w3)
+        + rowwise_scaled_matrix_device_bytes(&layer.w2)
 }
 
 fn run_prefill_layer_device_with_cache<L>(
@@ -5480,11 +5495,11 @@ fn run_prefill_bf16_layer_device_with_cache(
     )
 }
 
-fn run_prefill_quantized_layer_device_with_cache(
+fn run_prefill_rowwise_scaled_layer_device_with_cache(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
     config: &TextConfig,
-    layer: &QuantizedAttentionFfnLayerDeviceWeights,
+    layer: &RowwiseScaledAttentionFfnLayerDeviceWeights,
     rope_freqs: &DeviceBuffer<f32>,
     max_seq_len: usize,
     prompt_len: usize,
@@ -6239,7 +6254,7 @@ fn output_top1_from_hidden_i8_into(
     config: &TextConfig,
     hidden: &DeviceBuffer<f32>,
     norm_weight: &DeviceBuffer<Bf16>,
-    output_weight: &DeviceQuantizedI8Matrix,
+    output_weight: &DeviceRowwiseScaledI8Matrix,
     normed: &mut DeviceBuffer<f32>,
     partial_tokens: &mut DeviceBuffer<u32>,
     partial_logits: &mut DeviceBuffer<f32>,
@@ -6406,11 +6421,11 @@ fn run_prompt_layer_from_hidden_states(
     Ok(next_hidden_states)
 }
 
-fn run_prompt_layer_quantized_ffn_from_hidden_states(
+fn run_prompt_layer_rowwise_scaled_ffn_from_hidden_states(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
     config: &TextConfig,
-    layer: &QuantizedFfnLayerDeviceWeights,
+    layer: &RowwiseScaledFfnLayerDeviceWeights,
     rope_freqs: &DeviceBuffer<f32>,
     hidden_states: &[Vec<f32>],
 ) -> Result<Vec<Vec<f32>>> {
@@ -6539,11 +6554,11 @@ fn run_prompt_layer_quantized_ffn_from_hidden_states(
     Ok(next_hidden_states)
 }
 
-fn run_prompt_layer_quantized_attention_from_hidden_states(
+fn run_prompt_layer_rowwise_scaled_attention_from_hidden_states(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
     config: &TextConfig,
-    layer: &QuantizedAttentionLayerDeviceWeights,
+    layer: &RowwiseScaledAttentionLayerDeviceWeights,
     rope_freqs: &DeviceBuffer<f32>,
     hidden_states: &[Vec<f32>],
 ) -> Result<Vec<Vec<f32>>> {
@@ -6672,11 +6687,11 @@ fn run_prompt_layer_quantized_attention_from_hidden_states(
     Ok(next_hidden_states)
 }
 
-fn run_prompt_layer_quantized_attention_ffn_from_hidden_states(
+fn run_prompt_layer_rowwise_scaled_attention_ffn_from_hidden_states(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
     config: &TextConfig,
-    layer: &QuantizedAttentionFfnLayerDeviceWeights,
+    layer: &RowwiseScaledAttentionFfnLayerDeviceWeights,
     rope_freqs: &DeviceBuffer<f32>,
     hidden_states: &[Vec<f32>],
 ) -> Result<Vec<Vec<f32>>> {
@@ -6946,23 +6961,23 @@ fn run_ffn_batched_i8_from_hidden_into(
     config: &TextConfig,
     hidden: &DeviceBuffer<f32>,
     ffn_norm: &DeviceBuffer<Bf16>,
-    w1: &DeviceQuantizedI8Matrix,
-    w3: &DeviceQuantizedI8Matrix,
-    w2: &DeviceQuantizedI8Matrix,
+    w1: &DeviceRowwiseScaledI8Matrix,
+    w3: &DeviceRowwiseScaledI8Matrix,
+    w2: &DeviceRowwiseScaledI8Matrix,
     batch: usize,
     output: &mut DeviceBuffer<f32>,
     scratch: &mut FfnScratch,
 ) -> Result<()> {
     let hidden_batch_len = batch
         .checked_mul(config.dim)
-        .ok_or_else(|| invalid_data("batched quantized FFN hidden shape overflow"))?;
+        .ok_or_else(|| invalid_data("batched rowwise scaled FFN hidden shape overflow"))?;
     let intermediate_batch_len = batch
         .checked_mul(config.hidden_dim)
-        .ok_or_else(|| invalid_data("batched quantized FFN intermediate shape overflow"))?;
+        .ok_or_else(|| invalid_data("batched rowwise scaled FFN intermediate shape overflow"))?;
 
     if hidden.len() < hidden_batch_len || output.len() < hidden_batch_len {
         return Err(invalid_data(format!(
-            "batched quantized FFN hidden buffer too short: input={}, output={}, expected at least {}",
+            "batched rowwise scaled FFN hidden buffer too short: input={}, output={}, expected at least {}",
             hidden.len(),
             output.len(),
             hidden_batch_len
@@ -6974,7 +6989,7 @@ fn run_ffn_batched_i8_from_hidden_into(
         || scratch.down_batch.len() < hidden_batch_len
     {
         return Err(invalid_data(
-            "batched quantized FFN scratch buffer too short",
+            "batched rowwise scaled FFN scratch buffer too short",
         ));
     }
 

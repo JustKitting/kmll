@@ -11,7 +11,7 @@ use std::{
 };
 
 use cuda_core::{CudaContext, CudaModule, CudaStream, DeviceBuffer};
-use nn_rust::{
+use nn_rust_inference::{
     dtypes::{Bf16, DType},
     inference::{
         self, ChatBackendComparisonResult, ChatForcedLogitsTraceOptions, ChatInferenceOptions,
@@ -24,15 +24,14 @@ use nn_rust::{
     kernels::activation::swiglu_reference,
     layout::{ColumnMajor, Layout2D, MatrixLayout, RowMajor},
     model::{
-        Bf16Top1Plan, GreedyGenerationStep, MinistralAllLinearQuantizedRuntime,
-        MinistralTextRuntime, RuntimeMemoryStats, TextConfig,
+        Bf16Top1Plan, GreedyGenerationStep, MinistralAllLinearInt8Runtime, MinistralTextRuntime,
+        RuntimeMemoryStats, TextConfig,
     },
-    ops,
-    quantization::QuantizedI8Matrix,
-    runtime,
+    ops, runtime,
     safetensors::{ModelTensor, ModelWeights, TensorInfo, model_tensor_alias},
     tokenizer::TekkenTokenizer,
 };
+use nn_rust_quantization::RowwiseScaledI8Matrix;
 
 type AppResult<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -81,9 +80,8 @@ fn run() -> AppResult<()> {
         }
         "ministral-stop-smoke" => run_ministral_stop_smoke(&args),
         "ministral-chat-backend-smoke" => run_ministral_chat_backend_smoke(&args),
-        "ministral-chat-all-linear-quantized-smoke"
-        | "ministral-chat-all-linear-quantized-session-smoke" => {
-            run_ministral_chat_all_linear_quantized_smoke(&args)
+        "ministral-chat-all-linear-int8-smoke" | "ministral-chat-all-linear-int8-session-smoke" => {
+            run_ministral_chat_all_linear_int8_smoke(&args)
         }
         "ministral-quantization-manifest" | "ministral-quantize-plan" => {
             run_ministral_quantization_manifest(&args)
@@ -195,7 +193,7 @@ fn run() -> AppResult<()> {
              `ministral-bf16-generation-compare`, \
              `ministral-stop-smoke`, \
              `ministral-chat-backend-smoke`, \
-             `ministral-chat-all-linear-quantized-smoke`, `ministral-chat`, \
+             `ministral-chat-all-linear-int8-smoke`, `ministral-chat`, \
              `ministral-quantization-manifest`, `ministral-quantize-export`, \
              `ministral-weight-source-compare`, \
              `ministral-quantize-validate`, `ministral-quantize-eval`, \
@@ -1944,7 +1942,7 @@ fn run_ministral_exported_decode_bench(args: &[String]) -> AppResult<()> {
 
     let stop_token_id = tokenizer.eos_token_id();
     let (stream, module) = cuda_handles()?;
-    let mut runtime = MinistralAllLinearQuantizedRuntime::new_from_export(
+    let mut runtime = MinistralAllLinearInt8Runtime::new_from_export(
         stream.clone(),
         module.clone(),
         &model_dir,
@@ -2104,14 +2102,14 @@ fn run_ministral_exported_prefill_compare(args: &[String]) -> AppResult<()> {
     for (prompt_index, prompt) in cli.prompts.iter().enumerate() {
         let prompt_tokens = tokenizer.encode_lossy(prompt, true)?;
         let max_seq_len = prompt_tokens.len().max(1);
-        let mut reference_runtime = MinistralAllLinearQuantizedRuntime::new_from_export(
+        let mut reference_runtime = MinistralAllLinearInt8Runtime::new_from_export(
             stream.clone(),
             module.clone(),
             &model_dir,
             &export_dir,
             max_seq_len,
         )?;
-        let mut batched_runtime = MinistralAllLinearQuantizedRuntime::new_from_export(
+        let mut batched_runtime = MinistralAllLinearInt8Runtime::new_from_export(
             stream.clone(),
             module.clone(),
             &model_dir,
@@ -3422,7 +3420,8 @@ fn run_linear_batched_i8_scaled_stress_case(
         input_dim,
         &mut seed,
     );
-    let weight = QuantizedI8Matrix::from_bf16_rows_symmetric(&weight_bf16, output_dim, input_dim);
+    let weight =
+        RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weight_bf16, output_dim, input_dim);
 
     let expected = cpu_batched_linear_i8_scaled_reference(
         &input,
@@ -3948,7 +3947,8 @@ fn run_linear_top1_i8_scaled_stress_case(
         weight_bf16[weight_layout.offset(forced_row, col)] = Bf16::from_f32(sign * 4.0);
     }
 
-    let weight = QuantizedI8Matrix::from_bf16_rows_symmetric(&weight_bf16, output_dim, input_dim);
+    let weight =
+        RowwiseScaledI8Matrix::from_bf16_rows_symmetric(&weight_bf16, output_dim, input_dim);
     let logits = weight.matvec_cpu(&input_matrix[..input_dim]);
     let (expected_token, expected_logit) = top1_from_logits(&logits)
         .ok_or_else(|| invalid_data("scaled-i8 top1 stress produced no CPU logits"))?;
@@ -4348,7 +4348,7 @@ fn cpu_batched_linear_bf16_reference(
 fn cpu_batched_linear_i8_scaled_reference(
     input: &[f32],
     input_layout: &MatrixLayout<RowMajor>,
-    weight: &QuantizedI8Matrix,
+    weight: &RowwiseScaledI8Matrix,
     batch: usize,
     output_dim: usize,
     input_dim: usize,
@@ -4359,7 +4359,7 @@ fn cpu_batched_linear_i8_scaled_reference(
         for col in 0..output_dim {
             let mut acc = 0.0_f32;
             for kk in 0..input_dim {
-                acc += input[input_layout.offset(row, kk)] * weight.dequantized_value(col, kk);
+                acc += input[input_layout.offset(row, kk)] * weight.scaled_value(col, kk);
             }
             out[output_layout.offset(row, col)] = acc;
         }
@@ -4493,7 +4493,7 @@ fn run_ministral_chat_backend_smoke(args: &[String]) -> AppResult<()> {
     Ok(())
 }
 
-fn run_ministral_chat_all_linear_quantized_smoke(args: &[String]) -> AppResult<()> {
+fn run_ministral_chat_all_linear_int8_smoke(args: &[String]) -> AppResult<()> {
     let mut index = 0;
     let model_dir = parse_model_dir(args, &mut index);
     let max_new_tokens = parse_optional_usize(args, &mut index, 1, "max_new_tokens")?;
@@ -4507,11 +4507,11 @@ fn run_ministral_chat_all_linear_quantized_smoke(args: &[String]) -> AppResult<(
         system_prompt: cli.system_prompt.clone(),
         stop_token_id: model_eos_token_id(&model_dir)?,
     };
-    let result = inference::run_ministral_all_linear_quantized_chat_comparison(
+    let result = inference::run_ministral_all_linear_int8_chat_comparison(
         stream, module, &model_dir, prompt, &options,
     )?;
 
-    println!("Ministral all-linear quantized chat: user_prompt={prompt:?}");
+    println!("Ministral all-linear int8 chat: user_prompt={prompt:?}");
     println!(
         "  use_default_system={}",
         matches!(cli.system_prompt, SystemPrompt::DefaultFromModel)
@@ -4520,16 +4520,16 @@ fn run_ministral_chat_all_linear_quantized_smoke(args: &[String]) -> AppResult<(
     println!("  generated_tokens={:?}", result.generated_tokens);
     println!("  generated_text={:?}", result.generated_text);
     println!(
-        "  reference_memory_bytes={} quantized_memory_bytes={}",
+        "  reference_memory_bytes={} int8_memory_bytes={}",
         result.reference_memory_stats.total_resident_bytes,
-        result.quantized_memory_stats.total_resident_bytes
+        result.int8_memory_stats.total_resident_bytes
     );
     for step in &result.steps {
         println!(
-            "  step={} reference_token={} quantized_token={} token_matches={} kl_divergence={:.12} max_abs_diff={:.8}",
+            "  step={} reference_token={} int8_token={} token_matches={} kl_divergence={:.12} max_abs_diff={:.8}",
             step.step,
             step.reference_token_id,
-            step.quantized_token_id,
+            step.int8_token_id,
             step.token_matches,
             step.kl_divergence,
             step.max_abs_diff
@@ -4734,7 +4734,7 @@ fn run_ministral_quantization_validate(args: &[String]) -> AppResult<()> {
     let model_dir = parse_model_dir(args, &mut index);
     let cli = parse_quantization_validate_cli(args, index)?;
     let manifest = build_all_linear_quantization_manifest(&model_dir)?;
-    let validation = nn_rust::model::validate_ministral_all_linear_int8_export_archive(
+    let validation = nn_rust_quantization::validate_ministral_all_linear_int8_export_archive(
         &model_dir,
         &cli.export_dir,
     );
@@ -4799,8 +4799,10 @@ fn run_ministral_quantize_eval(args: &[String]) -> AppResult<()> {
     let logits_top_k = parse_optional_usize(args, &mut index, top_k.max(3), "logits_top_k")?;
     let cli = parse_chat_cli(args, index)?;
 
-    match nn_rust::model::validate_ministral_all_linear_int8_export_archive(&model_dir, &export_dir)
-    {
+    match nn_rust_quantization::validate_ministral_all_linear_int8_export_archive(
+        &model_dir,
+        &export_dir,
+    ) {
         Ok(()) => {
             println!(
                 "Ministral quantize+eval: reusing complete all-linear-int8 export at {}",
@@ -4872,7 +4874,7 @@ impl QuantizationVariantSummary {
         }
     }
 
-    fn update(&mut self, result: &nn_rust::model::QuantizationSuiteVariantProbe) {
+    fn update(&mut self, result: &nn_rust_quantization::QuantizationSuiteVariantProbe) {
         self.prompt_count += 1;
         if result.token_matches {
             self.token_match_count += 1;
@@ -4903,7 +4905,7 @@ fn run_ministral_quantization_suite(args: &[String]) -> AppResult<()> {
         .map(|prompt| tokenizer.encode_lossy(prompt, true))
         .collect::<AppResult<_>>()?;
     let (stream, module) = cuda_handles()?;
-    let suite = nn_rust::model::run_ministral_quantization_suite_probe(
+    let suite = nn_rust_quantization::run_ministral_quantization_suite_probe(
         &stream, &module, &model_dir, &prompts, top_k,
     )?;
 
@@ -4937,13 +4939,13 @@ fn run_ministral_quantization_suite(args: &[String]) -> AppResult<()> {
             }
 
             println!(
-                "    variant={} token_matches={} reference_token={} quantized_token={} reference_logit={:.8} quantized_logit={:.8} kl_divergence={:.12} max_abs_diff={:.8} mean_abs_diff={:.8}",
+                "    variant={} token_matches={} reference_token={} int8_token={} reference_logit={:.8} int8_logit={:.8} kl_divergence={:.12} max_abs_diff={:.8} mean_abs_diff={:.8}",
                 variant.variant,
                 variant.token_matches,
                 variant.reference_token_id,
-                variant.quantized_token_id,
+                variant.int8_token_id,
                 variant.reference_logit,
-                variant.quantized_logit,
+                variant.int8_logit,
                 variant.kl_divergence,
                 variant.max_abs_diff,
                 variant.mean_abs_diff
@@ -4952,10 +4954,7 @@ fn run_ministral_quantization_suite(args: &[String]) -> AppResult<()> {
                 "      reference_top_logits={:?}",
                 variant.reference_top_logits
             );
-            println!(
-                "      quantized_top_logits={:?}",
-                variant.quantized_top_logits
-            );
+            println!("      int8_top_logits={:?}", variant.int8_top_logits);
         }
     }
 
@@ -4988,7 +4987,7 @@ fn run_ministral_output_projection_export_probe(args: &[String]) -> AppResult<()
     let top_k = parse_optional_usize(args, &mut index, 3, "top_k")?;
     let tokens = parse_remaining_token_ids(args, index)?;
     let (stream, module) = cuda_handles()?;
-    let result = nn_rust::model::run_ministral_output_projection_export_quantization_probe(
+    let result = nn_rust_quantization::run_ministral_output_projection_export_quantization_probe(
         &stream,
         &module,
         &model_dir,
@@ -5005,13 +5004,13 @@ fn run_ministral_output_projection_export_probe(args: &[String]) -> AppResult<()
     println!(
         "  top_token_matches={}",
         result.reference_top_logits.first().map(|(token, _)| token)
-            == result.quantized_top_logits.first().map(|(token, _)| token)
+            == result.int8_top_logits.first().map(|(token, _)| token)
     );
     println!("  kl_divergence={:.12}", result.kl_divergence);
     println!("  max_abs_diff={:.8}", result.max_abs_diff);
     println!("  mean_abs_diff={:.8}", result.mean_abs_diff);
     println!("  reference_top_logits={:?}", result.reference_top_logits);
-    println!("  quantized_top_logits={:?}", result.quantized_top_logits);
+    println!("  int8_top_logits={:?}", result.int8_top_logits);
 
     Ok(())
 }
@@ -5354,10 +5353,10 @@ fn export_all_linear_quantization_archive(
         let tensor = weights.tensor(&plan.name)?;
         validate_bf16_matrix_tensor(&tensor, &plan.shape)?;
         let weight = weights.read_bf16_tensor(&tensor)?;
-        let quantized = nn_rust::quantization::QuantizedI8Matrix::from_bf16_rows_symmetric(
+        let quantized = nn_rust_quantization::RowwiseScaledI8Matrix::from_bf16_rows_symmetric(
             &weight, plan.rows, plan.cols,
         );
-        let (values_path, scales_path) = nn_rust::quantization::quantized_export_file_paths(
+        let (values_path, scales_path) = nn_rust_quantization::rowwise_scaled_i8_export_file_paths(
             &cli.output_dir,
             plan_index,
             &plan.name,
@@ -5374,7 +5373,7 @@ fn export_all_linear_quantization_archive(
             rows: plan.rows,
             cols: plan.cols,
             values_bytes: quantized.values.len() as u64,
-            scales_bytes: (quantized.scales.len() * DType::F32.size_in_bytes()) as u64,
+            scales_bytes: (quantized.scales.len() * f32_dtype_size_in_bytes()) as u64,
             values_path,
             scales_path,
         });
@@ -5433,7 +5432,7 @@ fn selected_quantization_export_plans<'a>(
             .position(|plan| plan.name.as_str() == name.as_str())
         else {
             return Err(invalid_input(format!(
-                "quantization export tensor {name:?} is not an all-linear quantized tensor"
+                "quantization export tensor {name:?} is not an all-linear int8 tensor"
             )));
         };
         if seen.insert(plan_index) {
@@ -5571,8 +5570,9 @@ fn compare_weight_source_tensor_prefix(
                 &sharded_values,
             ))
         }
-        DType::I8 => Err(invalid_input(format!(
-            "weight source compare does not support I8 tensor {}",
+        dtype => Err(invalid_input(format!(
+            "weight source compare does not support {} tensor {}",
+            dtype.safetensors_name(),
             consolidated_tensor.name
         ))),
     }
@@ -5635,7 +5635,7 @@ fn write_i8_file(path: &Path, values: &[i8]) -> AppResult<()> {
 }
 
 fn write_f32_file(path: &Path, values: &[f32]) -> AppResult<()> {
-    let mut bytes = Vec::with_capacity(values.len() * DType::F32.size_in_bytes());
+    let mut bytes = Vec::with_capacity(values.len() * f32_dtype_size_in_bytes());
     for value in values {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
@@ -5655,7 +5655,7 @@ fn push_quantized_tensor_plan(
     let rows = expected_shape[0];
     let cols = expected_shape[1];
     let quantized_value_bytes = tensor.element_count() as u64;
-    let quantized_scale_bytes = rows as u64 * DType::F32.size_in_bytes() as u64;
+    let quantized_scale_bytes = rows as u64 * f32_dtype_size_in_bytes() as u64;
 
     out.push(QuantizationTensorPlan {
         name: name.to_string(),
@@ -8608,9 +8608,7 @@ fn parse_optional_backend(
 fn parse_backend(value: &str) -> Option<InferenceBackend> {
     match value {
         "bf16" => Some(InferenceBackend::Bf16),
-        "all-linear-int8" | "all-linear-quantized" | "int8" => {
-            Some(InferenceBackend::AllLinearInt8)
-        }
+        "all-linear-int8" | "int8" => Some(InferenceBackend::AllLinearInt8),
         _ => None,
     }
 }
@@ -12830,7 +12828,7 @@ fn push_json_field_chat_trace_steps(
 fn push_json_field_generation_steps(
     out: &mut String,
     name: &str,
-    steps: &[nn_rust::model::GreedyGenerationStep],
+    steps: &[nn_rust_inference::model::GreedyGenerationStep],
     indent: usize,
     comma: bool,
 ) {
@@ -13185,6 +13183,12 @@ fn finish_reason_label(reason: GenerationFinishReason) -> String {
         GenerationFinishReason::MaxNewTokens => "max-new-tokens".to_string(),
         GenerationFinishReason::StopToken(token) => format!("stop-token({token})"),
     }
+}
+
+fn f32_dtype_size_in_bytes() -> usize {
+    DType::F32
+        .size_in_bytes()
+        .expect("F32 dtype must be byte-aligned")
 }
 
 fn invalid_input(message: impl Into<String>) -> Box<dyn Error> {

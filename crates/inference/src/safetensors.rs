@@ -29,7 +29,7 @@ impl TensorInfo {
 
     pub fn typed_element_count<T: TensorElement>(&self) -> Result<usize> {
         self.expect_dtype::<T>()?;
-        Ok((self.byte_len() as usize) / T::DTYPE.size_in_bytes())
+        Ok((self.byte_len() as usize) / tensor_element_byte_size::<T>())
     }
 
     pub fn expect_dtype<T: TensorElement>(&self) -> Result<()> {
@@ -45,6 +45,12 @@ impl TensorInfo {
         ))
         .into())
     }
+}
+
+fn tensor_element_byte_size<T: TensorElement>() -> usize {
+    T::DTYPE
+        .size_in_bytes()
+        .expect("TensorElement dtype must be byte-aligned")
 }
 
 pub struct SafetensorsFile {
@@ -118,7 +124,7 @@ impl SafetensorsFile {
         element_start: usize,
         element_count: usize,
     ) -> Result<Vec<T>> {
-        let elem_bytes = T::DTYPE.size_in_bytes();
+        let elem_bytes = tensor_element_byte_size::<T>();
         let total_elements = tensor.typed_element_count::<T>()?;
         if element_start + element_count > total_elements {
             return Err(invalid_data(format!(

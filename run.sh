@@ -14,15 +14,19 @@ cd "$(dirname "$0")"
 case "${1:-build}" in
     build)
         shift
-        cargo oxide build "$@"
+        cargo oxide build -p nn-rust-inference "$@"
+        cargo build --release -p nn-rust
         ;;
     run)
         shift
-        cargo oxide build
+        cargo oxide build -p nn-rust-inference
+        cargo build --release -p nn-rust
         ./target/release/nn-rust "$@"
         ;;
     clean)
         rm -f nn_rust.ptx nn_rust.ll nn_rust.ltoir nn_rust.cubin
+        rm -f crates/inference/nn_rust.ptx crates/inference/nn_rust.ll
+        rm -f crates/inference/nn_rust.ltoir crates/inference/nn_rust.cubin
         cargo clean
         ;;
     *)

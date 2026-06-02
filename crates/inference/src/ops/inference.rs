@@ -20,7 +20,7 @@ use crate::{
 // cuda_launch! resolves cuda-oxide's generated __*_CudaKernel marker types by
 // bare name, so keep the wildcard import for kernels launched from this module.
 use crate::kernels::inference::*;
-use crate::quantization::DeviceQuantizedI8Matrix;
+use crate::rowwise_scaled::DeviceRowwiseScaledI8Matrix;
 
 type DefaultMatvecPlan = RowMajorWarpRows4MatvecPlan;
 type DefaultRmsNormPlan = BlockRmsNorm256Plan;
@@ -192,7 +192,7 @@ impl CudaLinearWeight for DeviceBuffer<Bf16> {
     }
 }
 
-impl CudaLinearWeight for DeviceQuantizedI8Matrix {
+impl CudaLinearWeight for DeviceRowwiseScaledI8Matrix {
     fn launch_linear(
         &self,
         stream: &Arc<CudaStream>,
@@ -207,11 +207,11 @@ impl CudaLinearWeight for DeviceQuantizedI8Matrix {
             self.rows,
             self.cols,
         )
-        .expect("linear quantized value shape mismatch");
+        .expect("linear rowwise scaled i8 value shape mismatch");
         let output = DeviceVectorMut::new(output);
         let problem =
             RowwiseScaledLinearProblem::<f32, i8, f32, f32, RowMajor>::new(input, weight, output)
-                .expect("linear quantized operand shape mismatch");
+                .expect("linear rowwise scaled i8 operand shape mismatch");
         let (input, weight, mut output) = problem.into_parts();
         let layout = weight.layout().values();
         let shape = layout.shape();
@@ -425,7 +425,7 @@ pub fn linear_top1_i8_scaled(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
     input: &DeviceBuffer<f32>,
-    weight: &DeviceQuantizedI8Matrix,
+    weight: &DeviceRowwiseScaledI8Matrix,
     partial_tokens: &mut DeviceBuffer<u32>,
     partial_logits: &mut DeviceBuffer<f32>,
     packed_out: &mut DeviceBuffer<u64>,

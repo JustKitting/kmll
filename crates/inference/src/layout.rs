@@ -4,7 +4,7 @@ use cuda_core::DeviceBuffer;
 
 use crate::{
     backends::Cuda,
-    dtypes::{AccumulatorWith, DeviceFloat, DeviceQuantized, TensorElement},
+    dtypes::{AccumulatorWith, DeviceFloat, DeviceStorageElement, TensorElement},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1258,7 +1258,7 @@ impl CudaLinearRoute<f32> for f32 {
 
 pub trait CudaRowwiseScaledLinearRoute<Weight, Scale>: DeviceFloat
 where
-    Weight: DeviceQuantized,
+    Weight: DeviceStorageElement,
     Scale: DeviceFloat,
 {
     type Accumulator: DeviceFloat;
@@ -1479,7 +1479,7 @@ where
 pub struct RowwiseScaledLinearProblem<'a, Input, Weight, Scale, Output, L>
 where
     Input: CudaRowwiseScaledLinearRoute<Weight, Scale, Output = Output>,
-    Weight: DeviceQuantized,
+    Weight: DeviceStorageElement,
     Scale: DeviceFloat,
     Output: TensorElement,
 {
@@ -1493,7 +1493,7 @@ impl<'a, Input, Weight, Scale, Output, L>
     RowwiseScaledLinearProblem<'a, Input, Weight, Scale, Output, L>
 where
     Input: CudaRowwiseScaledLinearRoute<Weight, Scale, Output = Output>,
-    Weight: DeviceQuantized,
+    Weight: DeviceStorageElement,
     Scale: DeviceFloat,
     Output: TensorElement,
 {
