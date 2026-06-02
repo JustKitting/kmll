@@ -28,7 +28,8 @@ use nn_rust_inference::{
     layout::{ColumnMajor, Layout2D, MatrixLayout, RowMajor},
     model::{
         Bf16Top1Plan, GreedyGenerationStep, MinistralAllLinearInt8Runtime, MinistralTextRuntime,
-        RuntimeMemoryStats, TextConfig,
+        Qwen35AttentionWeightLayout, RuntimeMemoryStats, TextConfig, TextModelKind,
+        qwen35_weight_layout_report,
     },
     ops, runtime,
     safetensors::{ModelTensor, ModelWeights, TensorInfo, model_tensor_alias},
@@ -128,6 +129,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         "ministral-output-projection-export-probe" => {
             run_ministral_output_projection_export_probe(&args)
         }
+        "qwen-weight-smoke" | "qwen3-5-weight-smoke" => run_qwen_weight_smoke(&args),
         "ministral-eval" => run_ministral_eval(&args),
         "ministral-eval-exported" => run_ministral_eval_exported(&args),
         "ministral-chat" | "ministral-chat-suite" => run_ministral_chat_suite(&args),
@@ -234,7 +236,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
              `ministral-text-forced-target-exported-compare`, `ministral-text-exported-compare`, \
              `ministral-text-compare`, \
              `ministral-tokens-generate`, `ministral-tokens-exported-generate`, \
-             `qwen-tokens-generate`, \
+             `qwen-weight-smoke`, `qwen-tokens-generate`, \
              `ministral-tokens-logits`, `ministral-tokens-exported-logits`, \
              `ministral-tokens-trace`, `ministral-tokens-exported-trace`, \
              `ministral-tokens-eval`, `ministral-tokens-eval-exported`, \
@@ -7203,6 +7205,94 @@ fn run_ministral_tokens_suite(args: &[String]) -> AppResult<()> {
     Ok(())
 }
 
+fn run_qwen_weight_smoke(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let model_dir = parse_optional_non_numeric_model_dir(args, &mut index, DEFAULT_QWEN3_06B_DIR);
+    if index != args.len() {
+        return Err(invalid_input(
+            "qwen-weight-smoke accepts at most [model_dir]",
+        ));
+    }
+
+    let report = qwen35_weight_layout_report(&model_dir)?;
+    let config = report.config;
+    println!(
+        "Qwen3.5 weight layout smoke passed: model_dir={} source={}",
+        model_dir.display(),
+        report.source_path.display()
+    );
+    println!(
+        "  dim={} hidden_dim={} layers={} full_attention_layers={} linear_attention_layers={} heads={} kv_heads={} head_dim={} rotary_dim={} vocab={} eos={:?}",
+        config.dim,
+        config.hidden_dim,
+        config.n_layers,
+        config.layer_kinds.full_attention_count(),
+        config.layer_kinds.linear_attention_count(),
+        config.n_heads,
+        config.n_kv_heads,
+        config.head_dim,
+        config.rotary_dim,
+        config.vocab_size,
+        config.eos_token_id
+    );
+    if let Some(params) = config.qwen3_5 {
+        println!(
+            "  linear_attention key_heads={} value_heads={} key_head_dim={} value_head_dim={} qkv_dim={} value_dim={} conv_kernel={}",
+            params.linear_num_key_heads,
+            params.linear_num_value_heads,
+            params.linear_key_head_dim,
+            params.linear_value_head_dim,
+            params.qkv_dim(),
+            params.value_dim(),
+            params.linear_conv_kernel_dim
+        );
+    }
+    println!(
+        "  embedding {}",
+        qwen35_tensor_layout_label(&report.embedding)
+    );
+    println!("  norm {}", qwen35_tensor_layout_label(&report.norm));
+    println!("  output {}", qwen35_tensor_layout_label(&report.output));
+
+    if let Some(layer) = report
+        .layers
+        .iter()
+        .find(|layer| matches!(layer.attention, Qwen35AttentionWeightLayout::Linear(_)))
+    {
+        println!("  first_linear_layer={}", layer.layer);
+        if let Qwen35AttentionWeightLayout::Linear(attn) = &layer.attention {
+            println!("    {}", qwen35_tensor_layout_label(&attn.in_proj_qkv));
+            println!("    {}", qwen35_tensor_layout_label(&attn.conv1d));
+            println!("    {}", qwen35_tensor_layout_label(&attn.out_proj));
+        }
+    }
+
+    if let Some(layer) = report
+        .layers
+        .iter()
+        .find(|layer| matches!(layer.attention, Qwen35AttentionWeightLayout::Full(_)))
+    {
+        println!("  first_full_attention_layer={}", layer.layer);
+        if let Qwen35AttentionWeightLayout::Full(attn) = &layer.attention {
+            println!("    {}", qwen35_tensor_layout_label(&attn.q_proj));
+            println!("    {}", qwen35_tensor_layout_label(&attn.k_proj));
+            println!("    {}", qwen35_tensor_layout_label(&attn.o_proj));
+        }
+    }
+
+    Ok(())
+}
+
+fn qwen35_tensor_layout_label(tensor: &nn_rust_inference::model::Qwen35TensorLayout) -> String {
+    format!(
+        "{} dtype={} shape={:?} bytes={}",
+        tensor.name,
+        tensor.dtype.safetensors_name(),
+        tensor.shape,
+        tensor.byte_len
+    )
+}
+
 fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
     let mut index = 0;
     let model_dir = parse_optional_non_numeric_model_dir(args, &mut index, DEFAULT_QWEN3_06B_DIR);
@@ -7215,7 +7305,18 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
         ));
     }
 
-    let stop_token_id = TextConfig::from_model_dir(&model_dir)?.eos_token_id;
+    let config = TextConfig::from_model_dir(&model_dir)?;
+    if config.model_kind == TextModelKind::Qwen35Text {
+        let report = qwen35_weight_layout_report(&model_dir)?;
+        return Err(invalid_input(format!(
+            "Qwen3.5 text layout is recognized and {} layer tensor layouts validate ({} linear attention, {} full attention), but Qwen3.5 execution kernels are not implemented yet",
+            report.layers.len(),
+            report.config.layer_kinds.linear_attention_count(),
+            report.config.layer_kinds.full_attention_count()
+        )));
+    }
+
+    let stop_token_id = config.eos_token_id;
     let (stream, module) = cuda_handles()?;
     let suite = if let Some(sampling) = cli.sampling {
         inference::run_ministral_generation_sampled_suite_with_backend(

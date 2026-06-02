@@ -1,9 +1,14 @@
-use std::{fs, io, mem::size_of, path::Path, sync::Arc};
+use std::{
+    fs, io,
+    mem::size_of,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use cuda_core::{CudaModule, CudaStream, DeviceBuffer, DriverError};
 
 use crate::{
-    dtypes::Bf16,
+    dtypes::{Bf16, DType},
     ops,
     rowwise_scaled::{
         DeviceRowwiseScaledI8Matrix, RowwiseScaledI8Matrix, rowwise_scaled_i8_export_file_paths,
@@ -16,6 +21,8 @@ pub struct TextConfig {
     pub dim: usize,
     pub hidden_dim: usize,
     pub n_layers: usize,
+    pub model_kind: TextModelKind,
+    pub layer_kinds: TextLayerKinds,
     pub n_heads: usize,
     pub n_kv_heads: usize,
     pub head_dim: usize,
@@ -26,6 +33,197 @@ pub struct TextConfig {
     pub vocab_size: usize,
     pub norm_eps: f32,
     pub eos_token_id: Option<u32>,
+    pub qwen3_5: Option<Qwen35TextParams>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextModelKind {
+    FullAttentionDecoder,
+    Qwen35Text,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextLayerKind {
+    FullAttention,
+    LinearAttention,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextLayerKinds {
+    len: usize,
+    explicit: bool,
+    full_attention_mask: u128,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Qwen35TextParams {
+    pub linear_conv_kernel_dim: usize,
+    pub linear_key_head_dim: usize,
+    pub linear_value_head_dim: usize,
+    pub linear_num_key_heads: usize,
+    pub linear_num_value_heads: usize,
+}
+
+impl TextLayerKinds {
+    pub const fn all_full_attention(len: usize) -> Self {
+        Self {
+            len,
+            explicit: false,
+            full_attention_mask: 0,
+        }
+    }
+
+    fn from_qwen_full_attention_interval(len: usize, interval: usize) -> Result<Self> {
+        if interval == 0 {
+            return Err(invalid_data(
+                "Qwen3.5 full_attention_interval must be nonzero",
+            ));
+        }
+        if len > u128::BITS as usize {
+            return Err(invalid_data(format!(
+                "explicit layer type masks support at most {} layers, got {len}",
+                u128::BITS
+            )));
+        }
+
+        let mut mask = 0u128;
+        for layer in 0..len {
+            if (layer + 1) % interval == 0 {
+                mask |= 1u128 << layer;
+            }
+        }
+        Self::explicit(len, mask)
+    }
+
+    fn from_layer_type_names(names: &[String]) -> Result<Self> {
+        if names.len() > u128::BITS as usize {
+            return Err(invalid_data(format!(
+                "explicit layer type masks support at most {} layers, got {}",
+                u128::BITS,
+                names.len()
+            )));
+        }
+        let mut mask = 0u128;
+        for (layer, name) in names.iter().enumerate() {
+            match name.as_str() {
+                "full_attention" => mask |= 1u128 << layer,
+                "linear_attention" => {}
+                _ => {
+                    return Err(invalid_data(format!(
+                        "unsupported text_config.layer_types[{layer}] value {name:?}"
+                    )));
+                }
+            }
+        }
+        Self::explicit(names.len(), mask)
+    }
+
+    fn explicit(len: usize, full_attention_mask: u128) -> Result<Self> {
+        if len > u128::BITS as usize {
+            return Err(invalid_data(format!(
+                "explicit layer type masks support at most {} layers, got {len}",
+                u128::BITS
+            )));
+        }
+        Ok(Self {
+            len,
+            explicit: true,
+            full_attention_mask,
+        })
+    }
+
+    pub fn validate_for_layers(&self, n_layers: usize) -> Result<()> {
+        if self.len != n_layers {
+            return Err(invalid_data(format!(
+                "text layer type count {} does not match num_hidden_layers {n_layers}",
+                self.len
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn kind(self, layer: usize) -> Result<TextLayerKind> {
+        if layer >= self.len {
+            return Err(invalid_data(format!(
+                "layer index {layer} exceeds text layer count {}",
+                self.len
+            )));
+        }
+        if !self.explicit || ((self.full_attention_mask >> layer) & 1) != 0 {
+            Ok(TextLayerKind::FullAttention)
+        } else {
+            Ok(TextLayerKind::LinearAttention)
+        }
+    }
+
+    pub fn len(self) -> usize {
+        self.len
+    }
+
+    pub fn full_attention_count(self) -> usize {
+        if self.explicit {
+            self.full_attention_mask.count_ones() as usize
+        } else {
+            self.len
+        }
+    }
+
+    pub fn linear_attention_count(self) -> usize {
+        self.len - self.full_attention_count()
+    }
+
+    pub fn has_linear_attention(self) -> bool {
+        self.linear_attention_count() > 0
+    }
+}
+
+impl Qwen35TextParams {
+    fn from_text_config_json(text_config: &str) -> Result<Self> {
+        Ok(Self {
+            linear_conv_kernel_dim: parse_json_usize_field(text_config, "linear_conv_kernel_dim")?,
+            linear_key_head_dim: parse_json_usize_field(text_config, "linear_key_head_dim")?,
+            linear_value_head_dim: parse_json_usize_field(text_config, "linear_value_head_dim")?,
+            linear_num_key_heads: parse_json_usize_field(text_config, "linear_num_key_heads")?,
+            linear_num_value_heads: parse_json_usize_field(text_config, "linear_num_value_heads")?,
+        })
+    }
+
+    fn validate_for_inference(self) -> Result<()> {
+        if self.linear_conv_kernel_dim == 0 {
+            return Err(invalid_data(
+                "Qwen3.5 linear_conv_kernel_dim must be nonzero",
+            ));
+        }
+        if self.linear_key_head_dim == 0 || self.linear_value_head_dim == 0 {
+            return Err(invalid_data(
+                "Qwen3.5 linear key/value head dims must be nonzero",
+            ));
+        }
+        if self.linear_num_key_heads == 0 || self.linear_num_value_heads == 0 {
+            return Err(invalid_data(
+                "Qwen3.5 linear key/value head counts must be nonzero",
+            ));
+        }
+        if self.linear_num_value_heads % self.linear_num_key_heads != 0 {
+            return Err(invalid_data(format!(
+                "Qwen3.5 linear_num_value_heads {} must be divisible by linear_num_key_heads {}",
+                self.linear_num_value_heads, self.linear_num_key_heads
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn key_dim(self) -> usize {
+        self.linear_num_key_heads * self.linear_key_head_dim
+    }
+
+    pub fn value_dim(self) -> usize {
+        self.linear_num_value_heads * self.linear_value_head_dim
+    }
+
+    pub fn qkv_dim(self) -> usize {
+        self.key_dim() * 2 + self.value_dim()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,6 +240,8 @@ impl TextConfig {
         dim: 4096,
         hidden_dim: 14336,
         n_layers: 34,
+        model_kind: TextModelKind::FullAttentionDecoder,
+        layer_kinds: TextLayerKinds::all_full_attention(34),
         n_heads: 32,
         n_kv_heads: 8,
         head_dim: 128,
@@ -60,6 +260,7 @@ impl TextConfig {
         vocab_size: 131_072,
         norm_eps: 1e-5,
         eos_token_id: Some(2),
+        qwen3_5: None,
     };
 
     pub fn from_model_dir(model_dir: impl AsRef<Path>) -> Result<Self> {
@@ -69,6 +270,15 @@ impl TextConfig {
 
     fn from_config_json(json: &str) -> Result<Self> {
         let text_config = parse_json_object_field(json, "text_config").unwrap_or(json);
+        let model_type = parse_optional_json_string_field(text_config, "model_type")
+            .or_else(|| parse_optional_json_string_field(json, "model_type"));
+        let raw_model_kind = if model_type.as_deref() == Some("qwen3_5_text")
+            || model_type.as_deref() == Some("qwen3_5")
+        {
+            TextModelKind::Qwen35Text
+        } else {
+            TextModelKind::FullAttentionDecoder
+        };
         let rope_parameters = parse_json_object_field(text_config, "rope_parameters").ok();
         let partial_rotary_factor = rope_parameters
             .and_then(|rope| parse_optional_json_f32_field(rope, "partial_rotary_factor"))
@@ -96,11 +306,40 @@ impl TextConfig {
                 })
             })
             .transpose()?;
+        let n_layers = parse_json_usize_field(text_config, "num_hidden_layers")?;
+        let explicit_layer_types =
+            parse_optional_json_string_array_field(text_config, "layer_types")?
+                .map(|names| TextLayerKinds::from_layer_type_names(&names))
+                .transpose()?;
+        let layer_kinds = match explicit_layer_types {
+            Some(layer_kinds) => layer_kinds,
+            None if raw_model_kind == TextModelKind::Qwen35Text => {
+                let interval =
+                    parse_optional_json_usize_field(text_config, "full_attention_interval")
+                        .unwrap_or(4);
+                TextLayerKinds::from_qwen_full_attention_interval(n_layers, interval)?
+            }
+            None => TextLayerKinds::all_full_attention(n_layers),
+        };
+        let model_kind =
+            if raw_model_kind == TextModelKind::Qwen35Text || layer_kinds.has_linear_attention() {
+                TextModelKind::Qwen35Text
+            } else {
+                TextModelKind::FullAttentionDecoder
+            };
+        let qwen3_5 =
+            if model_kind == TextModelKind::Qwen35Text || layer_kinds.has_linear_attention() {
+                Some(Qwen35TextParams::from_text_config_json(text_config)?)
+            } else {
+                None
+            };
 
         let config = Self {
             dim: parse_json_usize_field(text_config, "hidden_size")?,
             hidden_dim: parse_json_usize_field(text_config, "intermediate_size")?,
-            n_layers: parse_json_usize_field(text_config, "num_hidden_layers")?,
+            n_layers,
+            model_kind,
+            layer_kinds,
             n_heads: parse_json_usize_field(text_config, "num_attention_heads")?,
             n_kv_heads: parse_json_usize_field(text_config, "num_key_value_heads")?,
             head_dim,
@@ -120,6 +359,7 @@ impl TextConfig {
             eos_token_id: parse_optional_json_usize_field(text_config, "eos_token_id")
                 .or_else(|| parse_optional_json_usize_field(json, "eos_token_id"))
                 .map(|id| id as u32),
+            qwen3_5,
         };
         config.validate_for_inference()?;
         Ok(config)
@@ -139,6 +379,7 @@ impl TextConfig {
                 "text config num_hidden_layers must be nonzero",
             ));
         }
+        self.layer_kinds.validate_for_layers(self.n_layers)?;
         if self.n_heads == 0 {
             return Err(invalid_data(
                 "text config num_attention_heads must be nonzero",
@@ -197,6 +438,23 @@ impl TextConfig {
         }
         if let Some(yarn) = self.rope_yarn {
             yarn.validate_for_inference()?;
+        }
+        match (self.model_kind, self.qwen3_5) {
+            (TextModelKind::Qwen35Text, Some(params)) => params.validate_for_inference()?,
+            (TextModelKind::Qwen35Text, None) => {
+                return Err(invalid_data(
+                    "Qwen3.5 text config is missing linear-attention parameters",
+                ));
+            }
+            (TextModelKind::FullAttentionDecoder, Some(params)) => {
+                params.validate_for_inference()?
+            }
+            (TextModelKind::FullAttentionDecoder, None) => {}
+        }
+        if self.layer_kinds.has_linear_attention() && self.qwen3_5.is_none() {
+            return Err(invalid_data(
+                "linear-attention layers require Qwen3.5 linear parameters",
+            ));
         }
 
         Ok(())
@@ -547,6 +805,283 @@ pub struct RuntimeMemoryStats {
     pub kv_cache_bytes: usize,
     pub scratch_bytes: usize,
     pub total_resident_bytes: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct Qwen35WeightLayoutReport {
+    pub source_path: PathBuf,
+    pub config: TextConfig,
+    pub embedding: Qwen35TensorLayout,
+    pub norm: Qwen35TensorLayout,
+    pub output: Qwen35TensorLayout,
+    pub layers: Vec<Qwen35LayerWeightLayout>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Qwen35LayerWeightLayout {
+    pub layer: usize,
+    pub input_layernorm: Qwen35TensorLayout,
+    pub attention: Qwen35AttentionWeightLayout,
+    pub post_attention_layernorm: Qwen35TensorLayout,
+    pub mlp: Qwen35MlpWeightLayout,
+}
+
+#[derive(Debug, Clone)]
+pub enum Qwen35AttentionWeightLayout {
+    Full(Qwen35FullAttentionWeightLayout),
+    Linear(Qwen35LinearAttentionWeightLayout),
+}
+
+#[derive(Debug, Clone)]
+pub struct Qwen35FullAttentionWeightLayout {
+    pub q_proj: Qwen35TensorLayout,
+    pub k_proj: Qwen35TensorLayout,
+    pub v_proj: Qwen35TensorLayout,
+    pub o_proj: Qwen35TensorLayout,
+    pub q_norm: Qwen35TensorLayout,
+    pub k_norm: Qwen35TensorLayout,
+}
+
+#[derive(Debug, Clone)]
+pub struct Qwen35LinearAttentionWeightLayout {
+    pub in_proj_qkv: Qwen35TensorLayout,
+    pub in_proj_z: Qwen35TensorLayout,
+    pub in_proj_a: Qwen35TensorLayout,
+    pub in_proj_b: Qwen35TensorLayout,
+    pub conv1d: Qwen35TensorLayout,
+    pub a_log: Qwen35TensorLayout,
+    pub dt_bias: Qwen35TensorLayout,
+    pub norm: Qwen35TensorLayout,
+    pub out_proj: Qwen35TensorLayout,
+}
+
+#[derive(Debug, Clone)]
+pub struct Qwen35MlpWeightLayout {
+    pub gate_proj: Qwen35TensorLayout,
+    pub up_proj: Qwen35TensorLayout,
+    pub down_proj: Qwen35TensorLayout,
+}
+
+#[derive(Debug, Clone)]
+pub struct Qwen35TensorLayout {
+    pub name: String,
+    pub dtype: DType,
+    pub shape: Vec<usize>,
+    pub byte_len: u64,
+}
+
+pub fn qwen35_weight_layout_report(
+    model_dir: impl AsRef<Path>,
+) -> Result<Qwen35WeightLayoutReport> {
+    let model_dir = model_dir.as_ref();
+    let config = TextConfig::from_model_dir(model_dir)?;
+    if config.model_kind != TextModelKind::Qwen35Text {
+        return Err(invalid_data(format!(
+            "model {} is not a Qwen3.5 text config",
+            model_dir.display()
+        )));
+    }
+
+    let weights = ModelWeights::open_model_dir(model_dir)?;
+    let embedding = qwen35_tensor_layout(
+        &weights,
+        "model.language_model.embed_tokens.weight",
+        &[config.vocab_size, config.dim],
+    )?;
+    let norm = qwen35_tensor_layout(&weights, "model.language_model.norm.weight", &[config.dim])?;
+    let output =
+        qwen35_tensor_layout(&weights, "lm_head.weight", &[config.vocab_size, config.dim])?;
+
+    let mut layers = Vec::with_capacity(config.n_layers);
+    for layer in 0..config.n_layers {
+        layers.push(qwen35_layer_weight_layout(&weights, &config, layer)?);
+    }
+
+    Ok(Qwen35WeightLayoutReport {
+        source_path: weights.source_path().to_path_buf(),
+        config,
+        embedding,
+        norm,
+        output,
+        layers,
+    })
+}
+
+fn qwen35_layer_weight_layout(
+    weights: &ModelWeights,
+    config: &TextConfig,
+    layer: usize,
+) -> Result<Qwen35LayerWeightLayout> {
+    let prefix = format!("model.language_model.layers.{layer}");
+    let input_layernorm = qwen35_tensor_layout(
+        weights,
+        &format!("{prefix}.input_layernorm.weight"),
+        &[config.dim],
+    )?;
+    let attention = match config.layer_kinds.kind(layer)? {
+        TextLayerKind::FullAttention => Qwen35AttentionWeightLayout::Full(
+            qwen35_full_attention_weight_layout(weights, config, &prefix)?,
+        ),
+        TextLayerKind::LinearAttention => Qwen35AttentionWeightLayout::Linear(
+            qwen35_linear_attention_weight_layout(weights, config, &prefix)?,
+        ),
+    };
+    let post_attention_layernorm = qwen35_tensor_layout(
+        weights,
+        &format!("{prefix}.post_attention_layernorm.weight"),
+        &[config.dim],
+    )?;
+    let mlp = qwen35_mlp_weight_layout(weights, config, &prefix)?;
+
+    Ok(Qwen35LayerWeightLayout {
+        layer,
+        input_layernorm,
+        attention,
+        post_attention_layernorm,
+        mlp,
+    })
+}
+
+fn qwen35_full_attention_weight_layout(
+    weights: &ModelWeights,
+    config: &TextConfig,
+    prefix: &str,
+) -> Result<Qwen35FullAttentionWeightLayout> {
+    let q_dim = config.n_heads * config.head_dim;
+    let kv_dim = config.n_kv_heads * config.head_dim;
+    Ok(Qwen35FullAttentionWeightLayout {
+        q_proj: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.self_attn.q_proj.weight"),
+            &[q_dim * 2, config.dim],
+        )?,
+        k_proj: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.self_attn.k_proj.weight"),
+            &[kv_dim, config.dim],
+        )?,
+        v_proj: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.self_attn.v_proj.weight"),
+            &[kv_dim, config.dim],
+        )?,
+        o_proj: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.self_attn.o_proj.weight"),
+            &[config.dim, q_dim],
+        )?,
+        q_norm: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.self_attn.q_norm.weight"),
+            &[config.head_dim],
+        )?,
+        k_norm: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.self_attn.k_norm.weight"),
+            &[config.head_dim],
+        )?,
+    })
+}
+
+fn qwen35_linear_attention_weight_layout(
+    weights: &ModelWeights,
+    config: &TextConfig,
+    prefix: &str,
+) -> Result<Qwen35LinearAttentionWeightLayout> {
+    let Some(params) = config.qwen3_5 else {
+        return Err(invalid_data(
+            "Qwen3.5 linear attention parameters are missing",
+        ));
+    };
+    let qkv_dim = params.qkv_dim();
+    let value_dim = params.value_dim();
+    let value_heads = params.linear_num_value_heads;
+    Ok(Qwen35LinearAttentionWeightLayout {
+        in_proj_qkv: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.linear_attn.in_proj_qkv.weight"),
+            &[qkv_dim, config.dim],
+        )?,
+        in_proj_z: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.linear_attn.in_proj_z.weight"),
+            &[value_dim, config.dim],
+        )?,
+        in_proj_a: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.linear_attn.in_proj_a.weight"),
+            &[value_heads, config.dim],
+        )?,
+        in_proj_b: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.linear_attn.in_proj_b.weight"),
+            &[value_heads, config.dim],
+        )?,
+        conv1d: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.linear_attn.conv1d.weight"),
+            &[qkv_dim, 1, params.linear_conv_kernel_dim],
+        )?,
+        a_log: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.linear_attn.A_log"),
+            &[value_heads],
+        )?,
+        dt_bias: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.linear_attn.dt_bias"),
+            &[value_heads],
+        )?,
+        norm: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.linear_attn.norm.weight"),
+            &[params.linear_value_head_dim],
+        )?,
+        out_proj: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.linear_attn.out_proj.weight"),
+            &[config.dim, value_dim],
+        )?,
+    })
+}
+
+fn qwen35_mlp_weight_layout(
+    weights: &ModelWeights,
+    config: &TextConfig,
+    prefix: &str,
+) -> Result<Qwen35MlpWeightLayout> {
+    Ok(Qwen35MlpWeightLayout {
+        gate_proj: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.mlp.gate_proj.weight"),
+            &[config.hidden_dim, config.dim],
+        )?,
+        up_proj: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.mlp.up_proj.weight"),
+            &[config.hidden_dim, config.dim],
+        )?,
+        down_proj: qwen35_tensor_layout(
+            weights,
+            &format!("{prefix}.mlp.down_proj.weight"),
+            &[config.dim, config.hidden_dim],
+        )?,
+    })
+}
+
+fn qwen35_tensor_layout(
+    weights: &ModelWeights,
+    name: &str,
+    expected_shape: &[usize],
+) -> Result<Qwen35TensorLayout> {
+    let tensor = weights.tensor(name)?;
+    expect_shape(&tensor, expected_shape)?;
+    Ok(Qwen35TensorLayout {
+        name: tensor.name.clone(),
+        dtype: tensor.dtype,
+        shape: tensor.shape.clone(),
+        byte_len: tensor.byte_len(),
+    })
 }
 
 struct LayerHostWeights {
@@ -7753,6 +8288,48 @@ fn parse_json_string_field(json: &str, field: &str) -> Result<String> {
     parse_json_string_at(json, start).map(|(value, _)| value)
 }
 
+fn parse_optional_json_string_field(json: &str, field: &str) -> Option<String> {
+    let field_pos = find_json_field(json, field).ok()?;
+    let start = json_field_value_start(json, field_pos, field).ok()?;
+    parse_json_string_at(json, start)
+        .ok()
+        .map(|(value, _)| value)
+}
+
+fn parse_optional_json_string_array_field(json: &str, field: &str) -> Result<Option<Vec<String>>> {
+    let Ok(field_pos) = find_json_field(json, field) else {
+        return Ok(None);
+    };
+    let start = json_field_value_start(json, field_pos, field)?;
+    parse_json_string_array_at(json, start).map(Some)
+}
+
+fn parse_json_string_array_at(input: &str, start: usize) -> Result<Vec<String>> {
+    expect_json_byte(input, start, b'[')?;
+    let mut values = Vec::new();
+    let mut i = start + 1;
+
+    loop {
+        i = skip_json_ws(input, i);
+        if i >= input.len() {
+            return Err(invalid_data("unterminated JSON string array"));
+        }
+        if input.as_bytes()[i] == b']' {
+            return Ok(values);
+        }
+
+        let (value, next) = parse_json_string_at(input, i)?;
+        values.push(value);
+        i = skip_json_ws(input, next);
+        match input.as_bytes().get(i) {
+            Some(b',') => i += 1,
+            Some(b']') => return Ok(values),
+            Some(_) => return Err(invalid_data("expected comma or ] in JSON string array")),
+            None => return Err(invalid_data("unterminated JSON string array")),
+        }
+    }
+}
+
 fn find_json_field(json: &str, field: &str) -> Result<usize> {
     let needle = format!("\"{field}\"");
     json.find(&needle)
@@ -7938,6 +8515,38 @@ mod tests {
         )
     }
 
+    fn qwen35_config_json(layer_types: Option<&str>) -> String {
+        let layer_types_json =
+            layer_types.unwrap_or(r#""layer_types": ["linear_attention", "linear_attention", "linear_attention", "full_attention"],"#);
+        format!(
+            r#"{{
+                "model_type": "qwen3_5",
+                "text_config": {{
+                    "model_type": "qwen3_5_text",
+                    "hidden_size": 5120,
+                    "intermediate_size": 17408,
+                    "num_hidden_layers": 4,
+                    "num_attention_heads": 24,
+                    "num_key_value_heads": 4,
+                    "head_dim": 256,
+                    "rope_theta": 10000000.0,
+                    "partial_rotary_factor": 0.25,
+                    "max_position_embeddings": 262144,
+                    "vocab_size": 248320,
+                    "rms_norm_eps": 0.000001,
+                    "eos_token_id": 248044,
+                    "linear_conv_kernel_dim": 4,
+                    "linear_key_head_dim": 128,
+                    "linear_value_head_dim": 128,
+                    "linear_num_key_heads": 16,
+                    "linear_num_value_heads": 48,
+                    {layer_types_json}
+                    "tie_word_embeddings": false
+                }}
+            }}"#
+        )
+    }
+
     #[test]
     fn runtime_max_seq_len_respects_model_position_limit() {
         let config = TextConfig {
@@ -7960,6 +8569,47 @@ mod tests {
         assert_eq!(config.head_dim, 256);
         assert_eq!(config.rotary_dim, 64);
         assert_eq!(config.eos_token_id, Some(151645));
+    }
+
+    #[test]
+    fn text_config_parses_qwen35_layer_types() {
+        let config = TextConfig::from_config_json(&qwen35_config_json(None)).unwrap();
+
+        assert_eq!(config.model_kind, TextModelKind::Qwen35Text);
+        assert_eq!(config.layer_kinds.len(), 4);
+        assert_eq!(config.layer_kinds.full_attention_count(), 1);
+        assert_eq!(config.layer_kinds.linear_attention_count(), 3);
+        assert_eq!(
+            config.layer_kinds.kind(0).unwrap(),
+            TextLayerKind::LinearAttention
+        );
+        assert_eq!(
+            config.layer_kinds.kind(3).unwrap(),
+            TextLayerKind::FullAttention
+        );
+        assert_eq!(config.rotary_dim, 64);
+        assert_eq!(config.eos_token_id, Some(248044));
+
+        let params = config.qwen3_5.unwrap();
+        assert_eq!(params.key_dim(), 2048);
+        assert_eq!(params.value_dim(), 6144);
+        assert_eq!(params.qkv_dim(), 10240);
+    }
+
+    #[test]
+    fn text_config_derives_qwen35_default_attention_interval() {
+        let config = TextConfig::from_config_json(&qwen35_config_json(Some(""))).unwrap();
+
+        assert_eq!(config.layer_kinds.full_attention_count(), 1);
+        assert_eq!(config.layer_kinds.linear_attention_count(), 3);
+        assert_eq!(
+            config.layer_kinds.kind(0).unwrap(),
+            TextLayerKind::LinearAttention
+        );
+        assert_eq!(
+            config.layer_kinds.kind(3).unwrap(),
+            TextLayerKind::FullAttention
+        );
     }
 
     #[test]
