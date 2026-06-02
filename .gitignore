@@ -1,7 +1,8 @@
 # Build artifacts
 target/
 
-# cuda-oxide generated files
+# Managed cuda-oxide outputs live under target/cuda-oxide/.
+# Keep these wildcards for accidental source-adjacent outputs.
 *.ptx
 *.ll
 *.ltoir

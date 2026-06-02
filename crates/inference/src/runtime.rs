@@ -1,4 +1,5 @@
 use std::{
+    env,
     path::{Path, PathBuf},
     sync::Arc,
     time::SystemTime,
@@ -7,8 +8,17 @@ use std::{
 use cuda_core::{CudaContext, CudaModule};
 use cuda_host::LtoirError;
 
+pub const ARTIFACT_DIR_ENV: &str = "NN_RUST_CUDA_ARTIFACT_DIR";
+const DEFAULT_ARTIFACT_RELATIVE_DIR: &str = "target/cuda-oxide/inference";
+
 pub fn default_artifact_name() -> &'static str {
     "nn_rust_inference"
+}
+
+pub fn default_artifact_dir() -> PathBuf {
+    env::var_os(ARTIFACT_DIR_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root().join(DEFAULT_ARTIFACT_RELATIVE_DIR))
 }
 
 pub fn load_default_module(ctx: &Arc<CudaContext>) -> Result<Arc<CudaModule>, LtoirError> {
@@ -16,7 +26,7 @@ pub fn load_default_module(ctx: &Arc<CudaContext>) -> Result<Arc<CudaModule>, Lt
 }
 
 fn load_kernel_artifact(ctx: &Arc<CudaContext>, name: &str) -> Result<Arc<CudaModule>, LtoirError> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let dir = default_artifact_dir();
     let mut artifacts = Vec::new();
 
     for kind in [ArtifactKind::Cubin, ArtifactKind::Ptx, ArtifactKind::Ll] {
@@ -55,6 +65,15 @@ fn load_module_file(ctx: &Arc<CudaContext>, path: &Path) -> Result<Arc<CudaModul
 
 fn modified_time(path: &Path) -> Option<SystemTime> {
     path.metadata().ok()?.modified().ok()
+}
+
+fn workspace_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or(manifest_dir)
 }
 
 #[derive(Debug, Clone, Copy)]
