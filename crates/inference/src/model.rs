@@ -1966,16 +1966,18 @@ pub fn qwen35_linear_layer_smoke(
         ),
     )?;
     phase(
-        "z projection",
-        ops::linear(stream, module, &attention_normed, &attn.in_proj_z, &mut z),
-    )?;
-    phase(
-        "a projection",
-        ops::linear(stream, module, &attention_normed, &attn.in_proj_a, &mut a),
-    )?;
-    phase(
-        "b projection",
-        ops::linear(stream, module, &attention_normed, &attn.in_proj_b, &mut b),
+        "z/a/b projection",
+        ops::linear_triple_bf16(
+            stream,
+            module,
+            &attention_normed,
+            &attn.in_proj_z,
+            &attn.in_proj_a,
+            &attn.in_proj_b,
+            &mut z,
+            &mut a,
+            &mut b,
+        ),
     )?;
     phase(
         "linear conv silu",
@@ -3734,9 +3736,17 @@ fn qwen35_run_linear_attention_layer_position0(
         &attn.in_proj_qkv,
         &mut mixed_qkv,
     )?;
-    ops::linear(stream, module, &attention_normed, &attn.in_proj_z, &mut z)?;
-    ops::linear(stream, module, &attention_normed, &attn.in_proj_a, &mut a)?;
-    ops::linear(stream, module, &attention_normed, &attn.in_proj_b, &mut b)?;
+    ops::linear_triple_bf16(
+        stream,
+        module,
+        &attention_normed,
+        &attn.in_proj_z,
+        &attn.in_proj_a,
+        &attn.in_proj_b,
+        &mut z,
+        &mut a,
+        &mut b,
+    )?;
     ops::qwen_linear_conv_silu_step(
         stream,
         module,
@@ -3852,25 +3862,15 @@ fn qwen35_run_linear_attention_layer_with_state(
         &attn.in_proj_qkv,
         &mut scratch.mixed_qkv,
     )?;
-    ops::linear(
+    ops::linear_triple_bf16(
         stream,
         module,
         &scratch.attention_normed,
         &attn.in_proj_z,
-        &mut scratch.z,
-    )?;
-    ops::linear(
-        stream,
-        module,
-        &scratch.attention_normed,
         &attn.in_proj_a,
-        &mut scratch.a,
-    )?;
-    ops::linear(
-        stream,
-        module,
-        &scratch.attention_normed,
         &attn.in_proj_b,
+        &mut scratch.z,
+        &mut scratch.a,
         &mut scratch.b,
     )?;
     ops::qwen_linear_conv_silu_step(
