@@ -30,7 +30,7 @@ use nn_rust_inference::{
         Bf16Top1Plan, GreedyGenerationStep, MinistralAllLinearInt8Runtime, MinistralTextRuntime,
         Qwen35AttentionWeightLayout, RuntimeMemoryStats, TextConfig, TextLayerKind, TextModelKind,
         qwen35_full_layer_smoke, qwen35_linear_layer_smoke, qwen35_load_layer_smoke,
-        qwen35_prefix_layers_smoke, qwen35_weight_layout_report,
+        qwen35_prefix_layers_smoke, qwen35_single_token_top1_smoke, qwen35_weight_layout_report,
     },
     ops, runtime,
     safetensors::{ModelTensor, ModelWeights, TensorInfo, model_tensor_alias},
@@ -137,6 +137,9 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         }
         "qwen-prefix-layers-smoke" | "qwen3-5-prefix-layers-smoke" => {
             run_qwen_prefix_layers_smoke(&args)
+        }
+        "qwen-single-token-top1-smoke" | "qwen3-5-single-token-top1-smoke" => {
+            run_qwen_single_token_top1_smoke(&args)
         }
         "ministral-eval" => run_ministral_eval(&args),
         "ministral-eval-exported" => run_ministral_eval_exported(&args),
@@ -245,7 +248,8 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
              `ministral-text-compare`, \
              `ministral-tokens-generate`, `ministral-tokens-exported-generate`, \
              `qwen-weight-smoke`, `qwen-layer-load-smoke`, `qwen-full-layer-smoke`, \
-             `qwen-linear-layer-smoke`, `qwen-prefix-layers-smoke`, `qwen-tokens-generate`, \
+             `qwen-linear-layer-smoke`, `qwen-prefix-layers-smoke`, \
+             `qwen-single-token-top1-smoke`, `qwen-tokens-generate`, \
              `ministral-tokens-logits`, `ministral-tokens-exported-logits`, \
              `ministral-tokens-trace`, `ministral-tokens-exported-trace`, \
              `ministral-tokens-eval`, `ministral-tokens-eval-exported`, \
@@ -7480,6 +7484,50 @@ fn run_qwen_prefix_layers_smoke(args: &[String]) -> AppResult<()> {
     Ok(())
 }
 
+fn run_qwen_single_token_top1_smoke(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let model_dir = parse_optional_non_numeric_model_dir(args, &mut index, DEFAULT_QWEN3_6_27B_DIR);
+    let layer_count = parse_optional_usize(args, &mut index, 64, "layer_count")?;
+    let token_id = parse_optional_usize(args, &mut index, 248044, "token_id")?;
+    let token_id = u32::try_from(token_id)
+        .map_err(|_| invalid_input("qwen-single-token-top1-smoke token_id must fit u32"))?;
+    let prefix_len = parse_optional_usize(args, &mut index, 8, "prefix_len")?;
+    if index != args.len() {
+        return Err(invalid_input(
+            "qwen-single-token-top1-smoke accepts at most [model_dir] [layer_count] [token_id] [prefix_len]",
+        ));
+    }
+
+    let (stream, module) = cuda_handles().map_err(|error| {
+        invalid_input(format!(
+            "qwen-single-token-top1-smoke CUDA initialization failed: {error}"
+        ))
+    })?;
+    let smoke = qwen35_single_token_top1_smoke(
+        &stream,
+        &module,
+        &model_dir,
+        Some(layer_count),
+        token_id,
+        0,
+        prefix_len,
+    )?;
+    println!(
+        "Qwen3.5 single-token top1 smoke passed: model_dir={} layer_count={} linear_layers={} full_layers={} token_id={} position={} hidden_max_abs={:.8} top_token={} top_logit={:.8}",
+        model_dir.display(),
+        smoke.layer_count,
+        smoke.linear_layer_count,
+        smoke.full_layer_count,
+        smoke.token_id,
+        smoke.position,
+        smoke.hidden_max_abs,
+        smoke.top_token,
+        smoke.top_logit
+    );
+    println!("  hidden_prefix={:?}", smoke.hidden_prefix);
+    Ok(())
+}
+
 fn text_layer_kind_label(kind: TextLayerKind) -> &'static str {
     match kind {
         TextLayerKind::FullAttention => "full_attention",
@@ -7501,13 +7549,63 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
 
     let config = TextConfig::from_model_dir(&model_dir)?;
     if config.model_kind == TextModelKind::Qwen35Text {
-        let report = qwen35_weight_layout_report(&model_dir)?;
-        return Err(invalid_input(format!(
-            "Qwen3.5 text layout is recognized and {} layer tensor layouts validate ({} linear attention, {} full attention), but Qwen3.5 execution kernels are not implemented yet",
-            report.layers.len(),
-            report.config.layer_kinds.linear_attention_count(),
-            report.config.layer_kinds.full_attention_count()
-        )));
+        if cli.sampling.is_some() {
+            return Err(invalid_input(
+                "Qwen3.5 token generation currently supports only greedy top1 sampling",
+            ));
+        }
+        if max_new_tokens != 1 || top_k != 1 {
+            return Err(invalid_input(
+                "Qwen3.5 token generation currently supports exactly max_new_tokens=1 and top_k=1",
+            ));
+        }
+        if cli.prompts.len() != 1 || cli.prompts[0].len() != 1 {
+            return Err(invalid_input(
+                "Qwen3.5 token generation currently supports exactly one prompt containing one token",
+            ));
+        }
+
+        let prompt = &cli.prompts[0];
+        let stop_token_id = config.eos_token_id;
+        let (stream, module) = cuda_handles()?;
+        let smoke = qwen35_single_token_top1_smoke(
+            &stream,
+            &module,
+            &model_dir,
+            Some(config.n_layers),
+            prompt[0],
+            0,
+            8,
+        )?;
+        let generated_tokens = vec![smoke.top_token];
+        let mut all_tokens = prompt.clone();
+        all_tokens.extend_from_slice(&generated_tokens);
+        let finish_reason = if Some(smoke.top_token) == stop_token_id {
+            "eos"
+        } else {
+            "max-new-tokens"
+        };
+
+        println!(
+            "Qwen token suite: backend=bf16 decode_strategy=greedy prompts_len=1 eos_token_id={:?}",
+            stop_token_id
+        );
+        println!(
+            "  layer_count={} linear_layers={} full_layers={} hidden_max_abs={:.8}",
+            smoke.layer_count,
+            smoke.linear_layer_count,
+            smoke.full_layer_count,
+            smoke.hidden_max_abs
+        );
+        print_token_window("prompt_tokens", prompt);
+        println!("  generated_tokens={generated_tokens:?}");
+        println!("  all_tokens={all_tokens:?}");
+        println!(
+            "  top_token={} top_logit={:.8} finish_reason={}",
+            smoke.top_token, smoke.top_logit, finish_reason
+        );
+        println!("  hidden_prefix={:?}", smoke.hidden_prefix);
+        return Ok(());
     }
 
     let stop_token_id = config.eos_token_id;

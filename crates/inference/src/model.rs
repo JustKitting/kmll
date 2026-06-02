@@ -908,6 +908,19 @@ pub struct Qwen35PrefixLayerSmoke {
     pub output_max_abs: f32,
 }
 
+#[derive(Debug, Clone)]
+pub struct Qwen35SingleTokenTop1Smoke {
+    pub token_id: u32,
+    pub position: usize,
+    pub layer_count: usize,
+    pub linear_layer_count: usize,
+    pub full_layer_count: usize,
+    pub hidden_prefix: Vec<f32>,
+    pub hidden_max_abs: f32,
+    pub top_token: u32,
+    pub top_logit: f32,
+}
+
 pub fn qwen35_weight_layout_report(
     model_dir: impl AsRef<Path>,
 ) -> Result<Qwen35WeightLayoutReport> {
@@ -1907,6 +1920,142 @@ pub fn qwen35_prefix_layers_smoke(
     position: usize,
     prefix_len: usize,
 ) -> Result<Qwen35PrefixLayerSmoke> {
+    let model_dir = model_dir.as_ref();
+    let prefix = qwen35_run_prefix_layers_position0(
+        stream,
+        module,
+        model_dir,
+        layer_count,
+        token_id,
+        position,
+    )?;
+    let output_host = prefix.hidden.to_host_vec(stream)?;
+    let output_prefix = output_host
+        .iter()
+        .take(prefix_len.min(output_host.len()))
+        .copied()
+        .collect::<Vec<_>>();
+    let output_max_abs = output_host
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f32, f32::max);
+
+    Ok(Qwen35PrefixLayerSmoke {
+        token_id,
+        position,
+        layer_count: prefix.layer_count,
+        linear_layer_count: prefix.linear_layer_count,
+        full_layer_count: prefix.full_layer_count,
+        output_prefix,
+        output_max_abs,
+    })
+}
+
+pub fn qwen35_single_token_top1_smoke(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    model_dir: impl AsRef<Path>,
+    layer_count: Option<usize>,
+    token_id: u32,
+    position: usize,
+    prefix_len: usize,
+) -> Result<Qwen35SingleTokenTop1Smoke> {
+    fn phase<T, E: std::fmt::Display>(label: &str, result: std::result::Result<T, E>) -> Result<T> {
+        result.map_err(|error| {
+            invalid_data(format!(
+                "Qwen3.5 single-token top1 smoke {label} failed: {error}"
+            ))
+        })
+    }
+
+    let model_dir = model_dir.as_ref();
+    let config = TextConfig::from_model_dir(model_dir)?;
+    let layer_count = layer_count.unwrap_or(config.n_layers);
+    let prefix = qwen35_run_prefix_layers_position0(
+        stream,
+        module,
+        model_dir,
+        layer_count,
+        token_id,
+        position,
+    )?;
+    let weights = ModelWeights::open_model_dir(model_dir)?;
+    let norm_weight = phase("read final norm", read_model_norm_weight(&weights, &config))?;
+    let output_weight = phase("read lm_head", read_output_weight(&weights, &config))?;
+    let dev_norm_weight = phase(
+        "upload final norm",
+        DeviceBuffer::from_host(stream, &norm_weight),
+    )?;
+    let dev_output_weight = phase(
+        "upload lm_head",
+        DeviceBuffer::from_host(stream, &output_weight),
+    )?;
+    let mut normed = phase(
+        "allocate final normed hidden",
+        DeviceBuffer::<f32>::zeroed(stream, config.dim),
+    )?;
+    let partial_count = ops::linear_top1_bf16_partial_count(config.vocab_size);
+    let mut partial_tokens = phase(
+        "allocate top1 partial tokens",
+        DeviceBuffer::<u32>::zeroed(stream, partial_count),
+    )?;
+    let mut partial_logits = phase(
+        "allocate top1 partial logits",
+        DeviceBuffer::<f32>::zeroed(stream, partial_count),
+    )?;
+    let mut packed_top = phase(
+        "allocate packed top1",
+        DeviceBuffer::<u64>::zeroed(stream, 1),
+    )?;
+
+    let (top_token, top_logit) = phase(
+        "top1 projection",
+        qwen35_output_top1_from_hidden_bf16(
+            stream,
+            module,
+            &config,
+            &prefix.hidden,
+            &dev_norm_weight,
+            &dev_output_weight,
+            &mut normed,
+            &mut partial_tokens,
+            &mut partial_logits,
+            &mut packed_top,
+        ),
+    )?;
+    phase("top1 synchronize", stream.synchronize())?;
+    let hidden_host = phase("copy hidden to host", prefix.hidden.to_host_vec(stream))?;
+    let hidden_prefix = hidden_host
+        .iter()
+        .take(prefix_len.min(hidden_host.len()))
+        .copied()
+        .collect::<Vec<_>>();
+    let hidden_max_abs = hidden_host
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f32, f32::max);
+
+    Ok(Qwen35SingleTokenTop1Smoke {
+        token_id,
+        position,
+        layer_count: prefix.layer_count,
+        linear_layer_count: prefix.linear_layer_count,
+        full_layer_count: prefix.full_layer_count,
+        hidden_prefix,
+        hidden_max_abs,
+        top_token,
+        top_logit,
+    })
+}
+
+fn qwen35_run_prefix_layers_position0(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    model_dir: &Path,
+    layer_count: usize,
+    token_id: u32,
+    position: usize,
+) -> Result<Qwen35PrefixLayerDeviceRun> {
     fn phase<T, E: std::fmt::Display>(label: &str, result: std::result::Result<T, E>) -> Result<T> {
         result.map_err(|error| {
             invalid_data(format!(
@@ -1915,7 +2064,6 @@ pub fn qwen35_prefix_layers_smoke(
         })
     }
 
-    let model_dir = model_dir.as_ref();
     let config = TextConfig::from_model_dir(model_dir)?;
     if config.model_kind != TextModelKind::Qwen35Text {
         return Err(invalid_data(format!(
@@ -2021,26 +2169,57 @@ pub fn qwen35_prefix_layers_smoke(
         hidden = next_hidden;
     }
 
-    let output_host = phase("copy output to host", hidden.to_host_vec(stream))?;
-    let output_prefix = output_host
-        .iter()
-        .take(prefix_len.min(output_host.len()))
-        .copied()
-        .collect::<Vec<_>>();
-    let output_max_abs = output_host
-        .iter()
-        .map(|value| value.abs())
-        .fold(0.0_f32, f32::max);
-
-    Ok(Qwen35PrefixLayerSmoke {
-        token_id,
-        position,
+    Ok(Qwen35PrefixLayerDeviceRun {
+        hidden,
         layer_count,
         linear_layer_count,
         full_layer_count,
-        output_prefix,
-        output_max_abs,
     })
+}
+
+fn qwen35_output_top1_from_hidden_bf16(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    config: &TextConfig,
+    hidden: &DeviceBuffer<f32>,
+    norm_weight: &DeviceBuffer<Bf16>,
+    output_weight: &DeviceBuffer<Bf16>,
+    normed: &mut DeviceBuffer<f32>,
+    partial_tokens: &mut DeviceBuffer<u32>,
+    partial_logits: &mut DeviceBuffer<f32>,
+    packed_out: &mut DeviceBuffer<u64>,
+) -> Result<(u32, f32)> {
+    if normed.len() != config.dim {
+        return Err(invalid_data(format!(
+            "Qwen final norm scratch has length {}, expected {}",
+            normed.len(),
+            config.dim
+        )));
+    }
+    let expected_weight_len = config
+        .vocab_size
+        .checked_mul(config.dim)
+        .ok_or_else(|| invalid_data("Qwen output projection weight shape overflow"))?;
+    if output_weight.len() != expected_weight_len {
+        return Err(invalid_data(format!(
+            "Qwen output projection weight has length {}, expected {}",
+            output_weight.len(),
+            expected_weight_len
+        )));
+    }
+
+    ops::qwen_rmsnorm_bf16(stream, module, hidden, norm_weight, config.norm_eps, normed)?;
+    ops::linear_top1_bf16(
+        stream,
+        module,
+        normed,
+        output_weight,
+        partial_tokens,
+        partial_logits,
+        packed_out,
+    )?;
+    let packed = packed_out.to_host_vec(stream)?[0];
+    Ok(unpack_packed_top_logit(packed))
 }
 
 fn qwen35_run_full_attention_layer_position0(
@@ -2720,6 +2899,13 @@ struct Qwen35LayerDeviceWeights {
     attention: Qwen35AttentionDeviceWeights,
     post_attention_layernorm: DeviceBuffer<Bf16>,
     mlp: Qwen35MlpDeviceWeights,
+}
+
+struct Qwen35PrefixLayerDeviceRun {
+    hidden: DeviceBuffer<f32>,
+    layer_count: usize,
+    linear_layer_count: usize,
+    full_layer_count: usize,
 }
 
 enum Qwen35AttentionDeviceWeights {
