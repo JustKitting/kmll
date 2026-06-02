@@ -7555,7 +7555,10 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
     let runtime_start = Instant::now();
     let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
     let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
-    let stop_token_ids = qwen_text_stop_token_ids(runtime.config(), &tokenizer);
+    let stop_token_ids = qwen_with_stop_token_overrides(
+        qwen_text_stop_token_ids(runtime.config(), &tokenizer),
+        &cli.stop_token_ids,
+    );
 
     println!(
         "Qwen text suite: backend=bf16 decode_strategy={} top_k={} sampling={:?} prompts_len={} stop_token_ids={:?} runtime_init_seconds={:.6}",
@@ -7640,7 +7643,10 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
     let runtime_start = Instant::now();
     let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
     let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
-    let stop_token_ids = qwen_text_stop_token_ids(runtime.config(), &tokenizer);
+    let stop_token_ids = qwen_with_stop_token_overrides(
+        qwen_text_stop_token_ids(runtime.config(), &tokenizer),
+        &cli.stop_token_ids,
+    );
 
     println!(
         "Qwen chat suite: backend=bf16 decode_strategy={} top_k={} sampling={:?} prompts_len={} stop_token_ids={:?} runtime_init_seconds={:.6}",
@@ -7723,6 +7729,13 @@ fn qwen_text_stop_token_ids(
     push_unique_token_id(&mut ids, config.eos_token_id);
     push_unique_token_id(&mut ids, tokenizer.eos_token_id());
     push_unique_token_id(&mut ids, tokenizer.im_end_token_id());
+    ids
+}
+
+fn qwen_with_stop_token_overrides(mut ids: Vec<u32>, overrides: &[u32]) -> Vec<u32> {
+    for &token_id in overrides {
+        push_unique_token_id(&mut ids, Some(token_id));
+    }
     ids
 }
 
@@ -7816,19 +7829,23 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
         }
 
         let stop_token_id = config.eos_token_id;
-        let stop_token_ids = stop_token_id.into_iter().collect::<Vec<_>>();
+        let stop_token_ids = qwen_with_stop_token_overrides(
+            stop_token_id.into_iter().collect(),
+            &cli.stop_token_ids,
+        );
         let (stream, module) = cuda_handles()?;
         let runtime_start = Instant::now();
         let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
         let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
 
         println!(
-            "Qwen token suite: backend=bf16 decode_strategy={} top_k={} sampling={:?} prompts_len={} eos_token_id={:?} runtime_init_seconds={:.6}",
+            "Qwen token suite: backend=bf16 decode_strategy={} top_k={} sampling={:?} prompts_len={} eos_token_id={:?} stop_token_ids={:?} runtime_init_seconds={:.6}",
             qwen35_decode_strategy_label(cli.sampling, top_k),
             top_k,
             cli.sampling,
             cli.prompts.len(),
             stop_token_id,
+            stop_token_ids,
             runtime_init_seconds
         );
         for (prompt_index, prompt) in cli.prompts.iter().enumerate() {
@@ -9494,6 +9511,7 @@ struct ChatCli {
     forced_target_pairs: Vec<(String, String)>,
     prompt_file_paths: Vec<PathBuf>,
     pair_file_paths: Vec<PathBuf>,
+    stop_token_ids: Vec<u32>,
     report_path: Option<PathBuf>,
     driver: GenerationComparisonDriver,
     thresholds: ChatCompareThresholds,
@@ -9593,6 +9611,7 @@ fn parse_chat_cli(args: &[String], start: usize) -> AppResult<ChatCli> {
     let mut forced_target_pairs = Vec::new();
     let mut prompt_file_paths = Vec::new();
     let mut pair_file_paths = Vec::new();
+    let mut stop_token_ids = Vec::new();
     let mut current_prompt = Vec::new();
     let mut index = start;
 
@@ -9625,6 +9644,12 @@ fn parse_chat_cli(args: &[String], start: usize) -> AppResult<ChatCli> {
                 pair_file_paths.push(PathBuf::from(value));
                 forced_target_pairs
                     .extend(read_forced_target_pair_file(value, "eval forced target")?);
+            }
+            "--stop-token" => {
+                let value = parse_required_flag_value(args, &mut index, "--stop-token")?;
+                stop_token_ids.push(value.parse::<u32>().map_err(|error| {
+                    invalid_input(format!("stop token id {value:?} is not a u32: {error}"))
+                })?);
             }
             "--drive-reference" => {
                 driver = GenerationComparisonDriver::Reference;
@@ -9686,6 +9711,7 @@ fn parse_chat_cli(args: &[String], start: usize) -> AppResult<ChatCli> {
         forced_target_pairs,
         prompt_file_paths,
         pair_file_paths,
+        stop_token_ids,
         report_path,
         driver,
         thresholds,
@@ -9897,6 +9923,7 @@ fn parse_chat_forced_target_cli(args: &[String], start: usize) -> AppResult<Chat
 struct TokenCli {
     prompts: Vec<Vec<u32>>,
     prompt_file_paths: Vec<PathBuf>,
+    stop_token_ids: Vec<u32>,
     report_path: Option<PathBuf>,
     sampling: Option<SamplingOptions>,
 }
@@ -9915,6 +9942,7 @@ fn parse_token_cli(args: &[String], start: usize) -> AppResult<TokenCli> {
     let mut sampling = None;
     let mut prompts = Vec::new();
     let mut prompt_file_paths = Vec::new();
+    let mut stop_token_ids = Vec::new();
     let mut current_prompt = Vec::new();
     let mut index = start;
 
@@ -9928,6 +9956,12 @@ fn parse_token_cli(args: &[String], start: usize) -> AppResult<TokenCli> {
                 let value = parse_required_flag_value(args, &mut index, "--prompts-file")?;
                 prompt_file_paths.push(PathBuf::from(value));
                 prompts.extend(read_token_prompt_file(value)?);
+            }
+            "--stop-token" => {
+                let value = parse_required_flag_value(args, &mut index, "--stop-token")?;
+                stop_token_ids.push(value.parse::<u32>().map_err(|error| {
+                    invalid_input(format!("stop token id {value:?} is not a u32: {error}"))
+                })?);
             }
             "--sample-temperature" => {
                 let value = parse_required_flag_value(args, &mut index, "--sample-temperature")?;
@@ -9969,6 +10003,7 @@ fn parse_token_cli(args: &[String], start: usize) -> AppResult<TokenCli> {
     Ok(TokenCli {
         prompts,
         prompt_file_paths,
+        stop_token_ids,
         report_path,
         sampling,
     })
@@ -14030,5 +14065,19 @@ mod tests {
     fn chat_cli_prompt_flag_flushes_positional_prompt() {
         let cli = parse_chat_cli(&args(&["hello", "--prompt", "goodbye"]), 0).unwrap();
         assert_eq!(cli.prompts, vec!["hello", "goodbye"]);
+    }
+
+    #[test]
+    fn chat_cli_accepts_stop_token_overrides() {
+        let cli =
+            parse_chat_cli(&args(&["--stop-token", "2", "--stop-token", "248046"]), 0).unwrap();
+        assert_eq!(cli.stop_token_ids, vec![2, 248046]);
+    }
+
+    #[test]
+    fn token_cli_accepts_stop_token_overrides() {
+        let cli = parse_token_cli(&args(&["248044", "--stop-token", "2"]), 0).unwrap();
+        assert_eq!(cli.prompts, vec![vec![248044]]);
+        assert_eq!(cli.stop_token_ids, vec![2]);
     }
 }
