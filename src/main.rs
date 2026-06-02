@@ -7555,6 +7555,7 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
     let runtime_start = Instant::now();
     let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
     let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
+    let memory = runtime.memory_stats();
     let stop_token_ids = qwen_with_stop_token_overrides(
         qwen_text_stop_token_ids(runtime.config(), &tokenizer),
         &cli.stop_token_ids,
@@ -7569,6 +7570,7 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
         stop_token_ids,
         runtime_init_seconds
     );
+    print_runtime_memory_bytes("  ", &memory);
     for (prompt_index, prompt_text) in cli.prompts.iter().enumerate() {
         let prompt_tokens = tokenizer.encode_lossy(prompt_text, false)?;
         if prompt_tokens.is_empty() {
@@ -7576,6 +7578,8 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
                 "Qwen text prompt {prompt_index} encoded to zero tokens"
             )));
         }
+        let max_seq_len = qwen_generation_max_seq_len(prompt_tokens.len(), max_new_tokens)?;
+        let decode_state_bytes = runtime.decode_state_bytes(max_seq_len)?;
         let generation_start = Instant::now();
         let result = qwen35_generate_cli_tokens(
             &mut runtime,
@@ -7593,6 +7597,10 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
 
         println!("  prompt_index={prompt_index} prompt={prompt_text:?}");
         print_token_window("prompt_tokens", &result.prompt_tokens);
+        println!(
+            "  decode_state_bytes max_seq_len={} bytes={}",
+            max_seq_len, decode_state_bytes
+        );
         println!("  generated_tokens={:?}", result.generated_tokens);
         println!("  generated_text={generated_text:?}");
         println!("  all_text={all_text:?}");
@@ -7643,6 +7651,7 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
     let runtime_start = Instant::now();
     let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
     let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
+    let memory = runtime.memory_stats();
     let stop_token_ids = qwen_with_stop_token_overrides(
         qwen_text_stop_token_ids(runtime.config(), &tokenizer),
         &cli.stop_token_ids,
@@ -7657,6 +7666,7 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
         stop_token_ids,
         runtime_init_seconds
     );
+    print_runtime_memory_bytes("  ", &memory);
     println!(
         "  use_default_system={}",
         matches!(cli.system_prompt, SystemPrompt::DefaultFromModel)
@@ -7674,6 +7684,8 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
                 "Qwen chat prompt {prompt_index} encoded to zero tokens"
             )));
         }
+        let max_seq_len = qwen_generation_max_seq_len(prompt_tokens.len(), max_new_tokens)?;
+        let decode_state_bytes = runtime.decode_state_bytes(max_seq_len)?;
         let generation_start = Instant::now();
         let result = qwen35_generate_cli_tokens(
             &mut runtime,
@@ -7692,6 +7704,10 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
         println!("  prompt_index={prompt_index} user_prompt={user_prompt:?}");
         println!("  formatted_prompt={formatted_prompt:?}");
         print_token_window("prompt_tokens", &result.prompt_tokens);
+        println!(
+            "  decode_state_bytes max_seq_len={} bytes={}",
+            max_seq_len, decode_state_bytes
+        );
         println!("  generated_tokens={:?}", result.generated_tokens);
         println!("  generated_text={generated_text:?}");
         println!("  all_text={all_text:?}");
@@ -7794,6 +7810,22 @@ fn qwen35_generate_cli_tokens(
     Ok(runtime.generate_tokens(prompt_tokens, max_new_tokens, stop_token_ids, 8)?)
 }
 
+fn qwen_generation_max_seq_len(prompt_len: usize, max_new_tokens: usize) -> AppResult<usize> {
+    prompt_len
+        .checked_add(max_new_tokens)
+        .ok_or_else(|| invalid_input("Qwen3.5 generation sequence length overflow"))
+}
+
+fn print_runtime_memory_bytes(prefix: &str, memory: &RuntimeMemoryStats) {
+    println!(
+        "{prefix}memory_bytes weights={} kv_cache={} scratch={} total={}",
+        memory.weights_bytes,
+        memory.kv_cache_bytes,
+        memory.scratch_bytes,
+        memory.total_resident_bytes
+    );
+}
+
 fn push_unique_token_id(ids: &mut Vec<u32>, token_id: Option<u32>) {
     if let Some(token_id) = token_id
         && !ids.contains(&token_id)
@@ -7838,6 +7870,7 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
         let runtime_start = Instant::now();
         let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
         let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
+        let memory = runtime.memory_stats();
 
         println!(
             "Qwen token suite: backend=bf16 decode_strategy={} top_k={} sampling={:?} prompts_len={} eos_token_id={:?} stop_token_ids={:?} runtime_init_seconds={:.6}",
@@ -7849,7 +7882,10 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
             stop_token_ids,
             runtime_init_seconds
         );
+        print_runtime_memory_bytes("  ", &memory);
         for (prompt_index, prompt) in cli.prompts.iter().enumerate() {
+            let max_seq_len = qwen_generation_max_seq_len(prompt.len(), max_new_tokens)?;
+            let decode_state_bytes = runtime.decode_state_bytes(max_seq_len)?;
             let generation_start = Instant::now();
             let result = qwen35_generate_cli_tokens(
                 &mut runtime,
@@ -7869,6 +7905,10 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
                 result.linear_layer_count, result.full_layer_count, result.last_hidden_max_abs
             );
             print_token_window("prompt_tokens", &result.prompt_tokens);
+            println!(
+                "  decode_state_bytes max_seq_len={} bytes={}",
+                max_seq_len, decode_state_bytes
+            );
             println!("  generated_tokens={:?}", result.generated_tokens);
             println!("  all_tokens={:?}", result.all_tokens);
             println!("  finish_reason={}", result.finish_reason);

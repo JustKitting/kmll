@@ -1112,6 +1112,31 @@ impl Qwen35GreedyRuntime {
     pub fn config(&self) -> &TextConfig {
         &self.config
     }
+
+    pub fn memory_stats(&self) -> RuntimeMemoryStats {
+        let weights_bytes = self.dev_tok_embeddings.num_bytes()
+            + self.dev_rope_freqs.num_bytes()
+            + self.dev_norm_weight.num_bytes()
+            + self.dev_output_weight.num_bytes()
+            + self
+                .layer_weights
+                .iter()
+                .map(qwen35_layer_device_weight_bytes)
+                .sum::<usize>();
+        let scratch_bytes = self.output_scratch.bytes() + self.forward_scratch.bytes();
+
+        RuntimeMemoryStats {
+            weights_bytes,
+            kv_cache_bytes: 0,
+            scratch_bytes,
+            total_resident_bytes: weights_bytes + scratch_bytes,
+        }
+    }
+
+    pub fn decode_state_bytes(&self, max_seq_len: usize) -> Result<usize> {
+        validate_runtime_max_seq_len(&self.config, max_seq_len)?;
+        qwen35_decode_state_bytes(&self.config, self.params, max_seq_len)
+    }
 }
 
 pub fn qwen35_weight_layout_report(
@@ -3009,6 +3034,43 @@ fn qwen35_allocate_decode_states(
     Ok(states)
 }
 
+fn qwen35_decode_state_bytes(
+    config: &TextConfig,
+    params: Qwen35TextParams,
+    max_seq_len: usize,
+) -> Result<usize> {
+    let kv_len = config.n_kv_heads * config.head_dim;
+    let qkv_dim = params.qkv_dim();
+    let conv_state_len = qkv_dim
+        .checked_mul(params.linear_conv_kernel_dim)
+        .ok_or_else(|| invalid_data("Qwen3.5 linear conv state shape overflow"))?;
+    let recurrent_state_len = params
+        .linear_num_value_heads
+        .checked_mul(params.linear_key_head_dim)
+        .and_then(|len| len.checked_mul(params.linear_value_head_dim))
+        .ok_or_else(|| invalid_data("Qwen3.5 recurrent state shape overflow"))?;
+    let kv_cache_len = max_seq_len
+        .checked_mul(kv_len)
+        .ok_or_else(|| invalid_data("Qwen3.5 KV cache shape overflow"))?;
+
+    let mut bytes = 0usize;
+    for layer in 0..config.n_layers {
+        bytes = bytes
+            .checked_add(match config.layer_kinds.kind(layer)? {
+                TextLayerKind::FullAttention => kv_cache_len
+                    .checked_mul(2)
+                    .and_then(|len| len.checked_mul(size_of::<f32>()))
+                    .ok_or_else(|| invalid_data("Qwen3.5 full attention state byte overflow"))?,
+                TextLayerKind::LinearAttention => conv_state_len
+                    .checked_add(recurrent_state_len)
+                    .and_then(|len| len.checked_mul(size_of::<f32>()))
+                    .ok_or_else(|| invalid_data("Qwen3.5 linear attention state byte overflow"))?,
+            })
+            .ok_or_else(|| invalid_data("Qwen3.5 decode state byte overflow"))?;
+    }
+    Ok(bytes)
+}
+
 fn qwen35_upload_resident_layer_weights(
     stream: &Arc<CudaStream>,
     weights: &ModelWeights,
@@ -4400,11 +4462,30 @@ impl Qwen35ForwardScratch {
             layers,
         })
     }
+
+    fn bytes(&self) -> usize {
+        self.hidden_a.num_bytes()
+            + self.hidden_b.num_bytes()
+            + self
+                .layers
+                .iter()
+                .map(Qwen35LayerForwardScratch::bytes)
+                .sum::<usize>()
+    }
 }
 
 enum Qwen35LayerForwardScratch {
     Full(Qwen35FullAttentionForwardScratch),
     Linear(Qwen35LinearAttentionForwardScratch),
+}
+
+impl Qwen35LayerForwardScratch {
+    fn bytes(&self) -> usize {
+        match self {
+            Self::Full(scratch) => scratch.bytes(),
+            Self::Linear(scratch) => scratch.bytes(),
+        }
+    }
 }
 
 struct Qwen35FullAttentionForwardScratch {
@@ -4446,6 +4527,24 @@ impl Qwen35FullAttentionForwardScratch {
             attention_residual: DeviceBuffer::<f32>::zeroed(stream, config.dim)?,
             mlp: Qwen35MlpForwardScratch::new(stream, config)?,
         })
+    }
+
+    fn bytes(&self) -> usize {
+        self.attention_normed.num_bytes()
+            + self.q_gate.num_bytes()
+            + self.query.num_bytes()
+            + self.gate.num_bytes()
+            + self.query_normed.num_bytes()
+            + self.key.num_bytes()
+            + self.key_normed.num_bytes()
+            + self.value.num_bytes()
+            + self.query_rot.num_bytes()
+            + self.key_rot.num_bytes()
+            + self.attention_heads.num_bytes()
+            + self.gated_attention_heads.num_bytes()
+            + self.attention_delta.num_bytes()
+            + self.attention_residual.num_bytes()
+            + self.mlp.bytes()
     }
 }
 
@@ -4507,6 +4606,26 @@ impl Qwen35LinearAttentionForwardScratch {
             mlp: Qwen35MlpForwardScratch::new(stream, config)?,
         })
     }
+
+    fn bytes(&self) -> usize {
+        self.attention_normed.num_bytes()
+            + self.mixed_qkv.num_bytes()
+            + self.conv_state_next.num_bytes()
+            + self.conv_qkv.num_bytes()
+            + self.query.num_bytes()
+            + self.key.num_bytes()
+            + self.value.num_bytes()
+            + self.z.num_bytes()
+            + self.a.num_bytes()
+            + self.b.num_bytes()
+            + self.decay.num_bytes()
+            + self.recurrent_state_next.num_bytes()
+            + self.delta_out.num_bytes()
+            + self.gated_norm.num_bytes()
+            + self.attention_delta.num_bytes()
+            + self.attention_residual.num_bytes()
+            + self.mlp.bytes()
+    }
 }
 
 struct Qwen35MlpForwardScratch {
@@ -4522,6 +4641,10 @@ impl Qwen35MlpForwardScratch {
             ffn_activated: DeviceBuffer::<f32>::zeroed(stream, config.hidden_dim)?,
             ffn_down: DeviceBuffer::<f32>::zeroed(stream, config.dim)?,
         })
+    }
+
+    fn bytes(&self) -> usize {
+        self.ffn_normed.num_bytes() + self.ffn_activated.num_bytes() + self.ffn_down.num_bytes()
     }
 }
 
@@ -4543,6 +4666,14 @@ impl Qwen35OutputScratch {
             partial_logits: DeviceBuffer::<f32>::zeroed(stream, partial_count)?,
             packed_top: DeviceBuffer::<u64>::zeroed(stream, 1)?,
         })
+    }
+
+    fn bytes(&self) -> usize {
+        self.normed.num_bytes()
+            + self.logits.num_bytes()
+            + self.partial_tokens.num_bytes()
+            + self.partial_logits.num_bytes()
+            + self.packed_top.num_bytes()
     }
 }
 
