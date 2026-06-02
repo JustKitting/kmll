@@ -897,6 +897,17 @@ pub struct Qwen35LinearLayerSmoke {
     pub recurrent_state_max_abs: f32,
 }
 
+#[derive(Debug, Clone)]
+pub struct Qwen35PrefixLayerSmoke {
+    pub token_id: u32,
+    pub position: usize,
+    pub layer_count: usize,
+    pub linear_layer_count: usize,
+    pub full_layer_count: usize,
+    pub output_prefix: Vec<f32>,
+    pub output_max_abs: f32,
+}
+
 pub fn qwen35_weight_layout_report(
     model_dir: impl AsRef<Path>,
 ) -> Result<Qwen35WeightLayoutReport> {
@@ -1885,6 +1896,464 @@ pub fn qwen35_linear_layer_smoke(
         output_max_abs,
         recurrent_state_max_abs,
     })
+}
+
+pub fn qwen35_prefix_layers_smoke(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    model_dir: impl AsRef<Path>,
+    layer_count: usize,
+    token_id: u32,
+    position: usize,
+    prefix_len: usize,
+) -> Result<Qwen35PrefixLayerSmoke> {
+    fn phase<T, E: std::fmt::Display>(label: &str, result: std::result::Result<T, E>) -> Result<T> {
+        result.map_err(|error| {
+            invalid_data(format!(
+                "Qwen3.5 prefix layer smoke {label} failed: {error}"
+            ))
+        })
+    }
+
+    let model_dir = model_dir.as_ref();
+    let config = TextConfig::from_model_dir(model_dir)?;
+    if config.model_kind != TextModelKind::Qwen35Text {
+        return Err(invalid_data(format!(
+            "model {} is not a Qwen3.5 text config",
+            model_dir.display()
+        )));
+    }
+    if position != 0 {
+        return Err(invalid_data(
+            "Qwen3.5 prefix layer smoke currently supports only position 0",
+        ));
+    }
+    if layer_count == 0 {
+        return Err(invalid_data(
+            "Qwen3.5 prefix layer smoke layer_count must be nonzero",
+        ));
+    }
+    if layer_count > config.n_layers {
+        return Err(invalid_data(format!(
+            "Qwen3.5 prefix layer smoke requested {layer_count} layers but model has {}",
+            config.n_layers
+        )));
+    }
+    validate_token(&config, token_id)?;
+    let Some(params) = config.qwen3_5 else {
+        return Err(invalid_data(
+            "Qwen3.5 prefix layer smoke requires linear-attention params",
+        ));
+    };
+
+    let weights = ModelWeights::open_model_dir(model_dir)?;
+    let token_row = read_embedding_row(&weights, &config, token_id)?;
+    let dev_token_row = phase(
+        "upload embedding row",
+        DeviceBuffer::from_host(stream, &token_row),
+    )?;
+    let rope_freqs = rope_frequencies(&config);
+    let dev_rope_freqs = phase(
+        "upload rope frequencies",
+        DeviceBuffer::from_host(stream, &rope_freqs),
+    )?;
+
+    let mut hidden = phase(
+        "allocate hidden",
+        DeviceBuffer::<f32>::zeroed(stream, config.dim),
+    )?;
+    phase(
+        "embedding",
+        ops::embedding(stream, module, &dev_token_row, 0, config.dim, &mut hidden),
+    )?;
+    phase("embedding synchronize", stream.synchronize())?;
+
+    let mut linear_layer_count = 0usize;
+    let mut full_layer_count = 0usize;
+    for layer in 0..layer_count {
+        let layer_host = phase(
+            &format!("read layer {layer} weights"),
+            read_qwen35_layer_host_weights(&weights, &config, layer),
+        )?;
+        let layer_dev = phase(
+            &format!("upload layer {layer} weights"),
+            upload_qwen35_layer_weights(stream, &layer_host),
+        )?;
+        let mut next_hidden = phase(
+            &format!("allocate layer {layer} output"),
+            DeviceBuffer::<f32>::zeroed(stream, config.dim),
+        )?;
+        match &layer_dev.attention {
+            Qwen35AttentionDeviceWeights::Full(attn) => {
+                full_layer_count += 1;
+                phase(
+                    &format!("run full-attention layer {layer}"),
+                    qwen35_run_full_attention_layer_position0(
+                        stream,
+                        module,
+                        &config,
+                        &layer_dev,
+                        attn,
+                        &dev_rope_freqs,
+                        &hidden,
+                        &mut next_hidden,
+                    ),
+                )?;
+            }
+            Qwen35AttentionDeviceWeights::Linear(attn) => {
+                linear_layer_count += 1;
+                phase(
+                    &format!("run linear-attention layer {layer}"),
+                    qwen35_run_linear_attention_layer_position0(
+                        stream,
+                        module,
+                        &config,
+                        params,
+                        &layer_dev,
+                        attn,
+                        &hidden,
+                        &mut next_hidden,
+                    ),
+                )?;
+            }
+        }
+        phase(&format!("synchronize layer {layer}"), stream.synchronize())?;
+        hidden = next_hidden;
+    }
+
+    let output_host = phase("copy output to host", hidden.to_host_vec(stream))?;
+    let output_prefix = output_host
+        .iter()
+        .take(prefix_len.min(output_host.len()))
+        .copied()
+        .collect::<Vec<_>>();
+    let output_max_abs = output_host
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f32, f32::max);
+
+    Ok(Qwen35PrefixLayerSmoke {
+        token_id,
+        position,
+        layer_count,
+        linear_layer_count,
+        full_layer_count,
+        output_prefix,
+        output_max_abs,
+    })
+}
+
+fn qwen35_run_full_attention_layer_position0(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    config: &TextConfig,
+    layer: &Qwen35LayerDeviceWeights,
+    attn: &Qwen35FullAttentionDeviceWeights,
+    dev_rope_freqs: &DeviceBuffer<f32>,
+    hidden: &DeviceBuffer<f32>,
+    output: &mut DeviceBuffer<f32>,
+) -> Result<()> {
+    let position = 0usize;
+    let max_seq_len = 1usize;
+    let q_len = config.n_heads * config.head_dim;
+    let kv_len = config.n_kv_heads * config.head_dim;
+
+    let mut attention_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
+    let mut q_gate = DeviceBuffer::<f32>::zeroed(stream, q_len * 2)?;
+    let mut query = DeviceBuffer::<f32>::zeroed(stream, q_len)?;
+    let mut gate = DeviceBuffer::<f32>::zeroed(stream, q_len)?;
+    let mut query_normed = DeviceBuffer::<f32>::zeroed(stream, q_len)?;
+    let mut key = DeviceBuffer::<f32>::zeroed(stream, kv_len)?;
+    let mut key_normed = DeviceBuffer::<f32>::zeroed(stream, kv_len)?;
+    let mut value = DeviceBuffer::<f32>::zeroed(stream, kv_len)?;
+    let mut query_rot = DeviceBuffer::<f32>::zeroed(stream, q_len)?;
+    let mut key_rot = DeviceBuffer::<f32>::zeroed(stream, kv_len)?;
+    let mut key_cache = DeviceBuffer::<f32>::zeroed(stream, max_seq_len * kv_len)?;
+    let mut value_cache = DeviceBuffer::<f32>::zeroed(stream, max_seq_len * kv_len)?;
+    let mut attention_heads = DeviceBuffer::<f32>::zeroed(stream, q_len)?;
+    let mut gated_attention_heads = DeviceBuffer::<f32>::zeroed(stream, q_len)?;
+    let mut attention_delta = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
+    let mut attention_residual = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
+
+    ops::qwen_rmsnorm_bf16(
+        stream,
+        module,
+        hidden,
+        &layer.input_layernorm,
+        config.norm_eps,
+        &mut attention_normed,
+    )?;
+    ops::linear(stream, module, &attention_normed, &attn.q_proj, &mut q_gate)?;
+    ops::qwen_split_query_gate(
+        stream,
+        module,
+        &q_gate,
+        config.n_heads,
+        config.head_dim,
+        &mut query,
+        &mut gate,
+    )?;
+    ops::linear(stream, module, &attention_normed, &attn.k_proj, &mut key)?;
+    ops::linear(stream, module, &attention_normed, &attn.v_proj, &mut value)?;
+    ops::qwen_rmsnorm_batched_bf16(
+        stream,
+        module,
+        &query,
+        &attn.q_norm,
+        config.n_heads,
+        config.head_dim,
+        config.norm_eps,
+        &mut query_normed,
+    )?;
+    ops::qwen_rmsnorm_batched_bf16(
+        stream,
+        module,
+        &key,
+        &attn.k_norm,
+        config.n_kv_heads,
+        config.head_dim,
+        config.norm_eps,
+        &mut key_normed,
+    )?;
+    ops::apply_rope(
+        stream,
+        module,
+        &query_normed,
+        dev_rope_freqs,
+        position,
+        config.head_dim,
+        &mut query_rot,
+    )?;
+    ops::apply_rope(
+        stream,
+        module,
+        &key_normed,
+        dev_rope_freqs,
+        position,
+        config.head_dim,
+        &mut key_rot,
+    )?;
+    ops::write_kv_cache(
+        stream,
+        module,
+        &key_rot,
+        position,
+        max_seq_len,
+        config.n_kv_heads,
+        config.head_dim,
+        &mut key_cache,
+    )?;
+    ops::write_kv_cache(
+        stream,
+        module,
+        &value,
+        position,
+        max_seq_len,
+        config.n_kv_heads,
+        config.head_dim,
+        &mut value_cache,
+    )?;
+    ops::single_query_attention(
+        stream,
+        module,
+        &query_rot,
+        &key_cache,
+        &value_cache,
+        max_seq_len,
+        max_seq_len,
+        config.n_heads,
+        config.n_kv_heads,
+        config.head_dim,
+        &mut attention_heads,
+    )?;
+    ops::sigmoid_mul(
+        stream,
+        module,
+        &gate,
+        &attention_heads,
+        &mut gated_attention_heads,
+    )?;
+    ops::linear(
+        stream,
+        module,
+        &gated_attention_heads,
+        &attn.o_proj,
+        &mut attention_delta,
+    )?;
+    ops::add(
+        stream,
+        module,
+        hidden,
+        &attention_delta,
+        &mut attention_residual,
+    )?;
+    qwen35_run_mlp_residual(stream, module, config, layer, &attention_residual, output)
+}
+
+fn qwen35_run_linear_attention_layer_position0(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    config: &TextConfig,
+    params: Qwen35TextParams,
+    layer: &Qwen35LayerDeviceWeights,
+    attn: &Qwen35LinearAttentionDeviceWeights,
+    hidden: &DeviceBuffer<f32>,
+    output: &mut DeviceBuffer<f32>,
+) -> Result<()> {
+    let qkv_dim = params.qkv_dim();
+    let value_dim = params.value_dim();
+    let key_state_dim = params.linear_num_value_heads * params.linear_key_head_dim;
+    let conv_state_len = qkv_dim
+        .checked_mul(params.linear_conv_kernel_dim)
+        .ok_or_else(|| invalid_data("Qwen3.5 linear conv state shape overflow"))?;
+    let recurrent_state_len = params
+        .linear_num_value_heads
+        .checked_mul(params.linear_key_head_dim)
+        .and_then(|len| len.checked_mul(params.linear_value_head_dim))
+        .ok_or_else(|| invalid_data("Qwen3.5 recurrent state shape overflow"))?;
+
+    let mut attention_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
+    let mut mixed_qkv = DeviceBuffer::<f32>::zeroed(stream, qkv_dim)?;
+    let conv_state_in = DeviceBuffer::<f32>::zeroed(stream, conv_state_len)?;
+    let mut conv_state_out = DeviceBuffer::<f32>::zeroed(stream, conv_state_len)?;
+    let mut conv_qkv = DeviceBuffer::<f32>::zeroed(stream, qkv_dim)?;
+    let mut query = DeviceBuffer::<f32>::zeroed(stream, key_state_dim)?;
+    let mut key = DeviceBuffer::<f32>::zeroed(stream, key_state_dim)?;
+    let mut value = DeviceBuffer::<f32>::zeroed(stream, value_dim)?;
+    let mut z = DeviceBuffer::<f32>::zeroed(stream, value_dim)?;
+    let mut a = DeviceBuffer::<f32>::zeroed(stream, params.linear_num_value_heads)?;
+    let mut b = DeviceBuffer::<f32>::zeroed(stream, params.linear_num_value_heads)?;
+    let mut decay = DeviceBuffer::<f32>::zeroed(stream, params.linear_num_value_heads)?;
+    let recurrent_state_in = DeviceBuffer::<f32>::zeroed(stream, recurrent_state_len)?;
+    let mut recurrent_state_out = DeviceBuffer::<f32>::zeroed(stream, recurrent_state_len)?;
+    let mut delta_out = DeviceBuffer::<f32>::zeroed(stream, value_dim)?;
+    let mut gated_norm = DeviceBuffer::<f32>::zeroed(stream, value_dim)?;
+    let mut attention_delta = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
+    let mut attention_residual = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
+
+    ops::qwen_rmsnorm_bf16(
+        stream,
+        module,
+        hidden,
+        &layer.input_layernorm,
+        config.norm_eps,
+        &mut attention_normed,
+    )?;
+    ops::linear(
+        stream,
+        module,
+        &attention_normed,
+        &attn.in_proj_qkv,
+        &mut mixed_qkv,
+    )?;
+    ops::linear(stream, module, &attention_normed, &attn.in_proj_z, &mut z)?;
+    ops::linear(stream, module, &attention_normed, &attn.in_proj_a, &mut a)?;
+    ops::linear(stream, module, &attention_normed, &attn.in_proj_b, &mut b)?;
+    ops::qwen_linear_conv_silu_step(
+        stream,
+        module,
+        &mixed_qkv,
+        &attn.conv1d,
+        &conv_state_in,
+        qkv_dim,
+        params.linear_conv_kernel_dim,
+        &mut conv_state_out,
+        &mut conv_qkv,
+    )?;
+    ops::qwen_split_linear_qkv(
+        stream,
+        module,
+        &conv_qkv,
+        params.linear_num_value_heads,
+        params.linear_num_key_heads,
+        params.linear_key_head_dim,
+        params.linear_value_head_dim,
+        &mut query,
+        &mut key,
+        &mut value,
+    )?;
+    ops::qwen_gated_delta_decay(stream, module, &a, &attn.a_log, &attn.dt_bias, &mut decay)?;
+    ops::qwen_gated_delta_step(
+        stream,
+        module,
+        &query,
+        &key,
+        &value,
+        &decay,
+        &b,
+        &recurrent_state_in,
+        params.linear_num_value_heads,
+        params.linear_key_head_dim,
+        params.linear_value_head_dim,
+        &mut delta_out,
+        &mut recurrent_state_out,
+    )?;
+    ops::qwen_gated_rmsnorm_bf16(
+        stream,
+        module,
+        &delta_out,
+        &z,
+        &attn.norm,
+        params.linear_num_value_heads,
+        params.linear_value_head_dim,
+        config.norm_eps,
+        &mut gated_norm,
+    )?;
+    ops::linear(
+        stream,
+        module,
+        &gated_norm,
+        &attn.out_proj,
+        &mut attention_delta,
+    )?;
+    ops::add(
+        stream,
+        module,
+        hidden,
+        &attention_delta,
+        &mut attention_residual,
+    )?;
+    qwen35_run_mlp_residual(stream, module, config, layer, &attention_residual, output)
+}
+
+fn qwen35_run_mlp_residual(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    config: &TextConfig,
+    layer: &Qwen35LayerDeviceWeights,
+    attention_residual: &DeviceBuffer<f32>,
+    output: &mut DeviceBuffer<f32>,
+) -> Result<()> {
+    let mut ffn_normed = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
+    let mut ffn_activated = DeviceBuffer::<f32>::zeroed(stream, config.hidden_dim)?;
+    let mut ffn_down = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
+
+    ops::qwen_rmsnorm_bf16(
+        stream,
+        module,
+        attention_residual,
+        &layer.post_attention_layernorm,
+        config.norm_eps,
+        &mut ffn_normed,
+    )?;
+    ops::silu_gate_up_bf16(
+        stream,
+        module,
+        &ffn_normed,
+        &layer.mlp.gate_proj,
+        &layer.mlp.up_proj,
+        &mut ffn_activated,
+    )?;
+    ops::linear(
+        stream,
+        module,
+        &ffn_activated,
+        &layer.mlp.down_proj,
+        &mut ffn_down,
+    )?;
+    ops::add(stream, module, attention_residual, &ffn_down, output)?;
+    stream.synchronize()?;
+    Ok(())
 }
 
 fn read_qwen35_layer_host_weights(

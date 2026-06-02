@@ -30,7 +30,7 @@ use nn_rust_inference::{
         Bf16Top1Plan, GreedyGenerationStep, MinistralAllLinearInt8Runtime, MinistralTextRuntime,
         Qwen35AttentionWeightLayout, RuntimeMemoryStats, TextConfig, TextLayerKind, TextModelKind,
         qwen35_full_layer_smoke, qwen35_linear_layer_smoke, qwen35_load_layer_smoke,
-        qwen35_weight_layout_report,
+        qwen35_prefix_layers_smoke, qwen35_weight_layout_report,
     },
     ops, runtime,
     safetensors::{ModelTensor, ModelWeights, TensorInfo, model_tensor_alias},
@@ -134,6 +134,9 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         "qwen-full-layer-smoke" | "qwen3-5-full-layer-smoke" => run_qwen_full_layer_smoke(&args),
         "qwen-linear-layer-smoke" | "qwen3-5-linear-layer-smoke" => {
             run_qwen_linear_layer_smoke(&args)
+        }
+        "qwen-prefix-layers-smoke" | "qwen3-5-prefix-layers-smoke" => {
+            run_qwen_prefix_layers_smoke(&args)
         }
         "ministral-eval" => run_ministral_eval(&args),
         "ministral-eval-exported" => run_ministral_eval_exported(&args),
@@ -242,7 +245,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
              `ministral-text-compare`, \
              `ministral-tokens-generate`, `ministral-tokens-exported-generate`, \
              `qwen-weight-smoke`, `qwen-layer-load-smoke`, `qwen-full-layer-smoke`, \
-             `qwen-linear-layer-smoke`, `qwen-tokens-generate`, \
+             `qwen-linear-layer-smoke`, `qwen-prefix-layers-smoke`, `qwen-tokens-generate`, \
              `ministral-tokens-logits`, `ministral-tokens-exported-logits`, \
              `ministral-tokens-trace`, `ministral-tokens-exported-trace`, \
              `ministral-tokens-eval`, `ministral-tokens-eval-exported`, \
@@ -7430,6 +7433,48 @@ fn run_qwen_linear_layer_smoke(args: &[String]) -> AppResult<()> {
         smoke.position,
         smoke.output_max_abs,
         smoke.recurrent_state_max_abs
+    );
+    println!("  output_prefix={:?}", smoke.output_prefix);
+    Ok(())
+}
+
+fn run_qwen_prefix_layers_smoke(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let model_dir = parse_optional_non_numeric_model_dir(args, &mut index, DEFAULT_QWEN3_6_27B_DIR);
+    let layer_count = parse_optional_usize(args, &mut index, 4, "layer_count")?;
+    let token_id = parse_optional_usize(args, &mut index, 248044, "token_id")?;
+    let token_id = u32::try_from(token_id)
+        .map_err(|_| invalid_input("qwen-prefix-layers-smoke token_id must fit u32"))?;
+    let prefix_len = parse_optional_usize(args, &mut index, 8, "prefix_len")?;
+    if index != args.len() {
+        return Err(invalid_input(
+            "qwen-prefix-layers-smoke accepts at most [model_dir] [layer_count] [token_id] [prefix_len]",
+        ));
+    }
+
+    let (stream, module) = cuda_handles().map_err(|error| {
+        invalid_input(format!(
+            "qwen-prefix-layers-smoke CUDA initialization failed: {error}"
+        ))
+    })?;
+    let smoke = qwen35_prefix_layers_smoke(
+        &stream,
+        &module,
+        &model_dir,
+        layer_count,
+        token_id,
+        0,
+        prefix_len,
+    )?;
+    println!(
+        "Qwen3.5 prefix layer smoke passed: model_dir={} layer_count={} linear_layers={} full_layers={} token_id={} position={} output_max_abs={:.8}",
+        model_dir.display(),
+        smoke.layer_count,
+        smoke.linear_layer_count,
+        smoke.full_layer_count,
+        smoke.token_id,
+        smoke.position,
+        smoke.output_max_abs
     );
     println!("  output_prefix={:?}", smoke.output_prefix);
     Ok(())
