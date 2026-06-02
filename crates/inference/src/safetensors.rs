@@ -199,9 +199,12 @@ impl ModelWeights {
 
     pub fn open_consolidated_model_dir(model_dir: impl AsRef<Path>) -> Result<Self> {
         let model_dir = model_dir.as_ref();
-        Ok(Self::Consolidated(SafetensorsFile::open(
-            default_consolidated_path(model_dir),
-        )?))
+        let path = if default_consolidated_path(model_dir).exists() {
+            default_consolidated_path(model_dir)
+        } else {
+            default_model_safetensors_path(model_dir)
+        };
+        Ok(Self::Consolidated(SafetensorsFile::open(path)?))
     }
 
     pub fn open_sharded_model_dir(model_dir: impl AsRef<Path>) -> Result<Self> {
@@ -214,12 +217,16 @@ impl ModelWeights {
     }
 
     pub fn tensor(&self, name: &str) -> Result<ModelTensor<'_>> {
+        self.tensor_opt(name)?
+            .ok_or_else(|| invalid_data(format!("missing tensor {name}")).into())
+    }
+
+    pub fn tensor_opt(&self, name: &str) -> Result<Option<ModelTensor<'_>>> {
         match self {
-            Self::Consolidated(file) => Ok(ModelTensor {
-                file,
-                tensor: file.tensor(name)?,
-            }),
-            Self::Sharded(sharded) => sharded.tensor(name),
+            Self::Consolidated(file) => {
+                Ok(resolve_file_tensor(file, name).map(|tensor| ModelTensor { file, tensor }))
+            }
+            Self::Sharded(sharded) => sharded.tensor_opt(name),
         }
     }
 
@@ -342,16 +349,22 @@ impl ShardedSafetensors {
     }
 
     pub fn tensor(&self, name: &str) -> Result<ModelTensor<'_>> {
-        let resolved_name = self
-            .resolve_tensor_name(name)
-            .ok_or_else(|| invalid_data(format!("missing tensor {name}")))?;
+        self.tensor_opt(name)?
+            .ok_or_else(|| invalid_data(format!("missing tensor {name}")).into())
+    }
+
+    pub fn tensor_opt(&self, name: &str) -> Result<Option<ModelTensor<'_>>> {
+        let resolved_name = self.resolve_tensor_name(name);
+        let Some(resolved_name) = resolved_name else {
+            return Ok(None);
+        };
         let file_index = self.tensor_file_index[resolved_name.as_str()];
         let file = &self.files[file_index];
 
-        Ok(ModelTensor {
+        Ok(Some(ModelTensor {
             file,
             tensor: file.tensor(&resolved_name)?,
-        })
+        }))
     }
 
     fn resolve_tensor_name(&self, name: &str) -> Option<String> {
@@ -359,15 +372,30 @@ impl ShardedSafetensors {
             return Some(name.to_string());
         }
 
-        let alias = model_tensor_alias(name)?;
-        self.tensor_file_index
-            .contains_key(alias.as_str())
-            .then_some(alias)
+        model_tensor_aliases(name)
+            .into_iter()
+            .find(|alias| self.tensor_file_index.contains_key(alias.as_str()))
     }
+}
+
+fn resolve_file_tensor<'a>(file: &'a SafetensorsFile, name: &str) -> Option<&'a TensorInfo> {
+    file.tensors()
+        .iter()
+        .find(|tensor| tensor.name == name)
+        .or_else(|| {
+            let aliases = model_tensor_aliases(name);
+            file.tensors()
+                .iter()
+                .find(|tensor| aliases.iter().any(|alias| alias == &tensor.name))
+        })
 }
 
 pub fn default_consolidated_path(model_dir: impl AsRef<Path>) -> PathBuf {
     model_dir.as_ref().join("consolidated.safetensors")
+}
+
+pub fn default_model_safetensors_path(model_dir: impl AsRef<Path>) -> PathBuf {
+    model_dir.as_ref().join("model.safetensors")
 }
 
 fn parse_weight_map(index_json: &str) -> Result<Vec<(String, String)>> {
@@ -406,17 +434,38 @@ fn parse_weight_map(index_json: &str) -> Result<Vec<(String, String)>> {
 }
 
 pub fn model_tensor_alias(name: &str) -> Option<String> {
+    model_tensor_aliases(name).into_iter().next()
+}
+
+pub fn model_tensor_aliases(name: &str) -> Vec<String> {
+    let mut aliases = Vec::new();
     match name {
         "tok_embeddings.weight" => {
-            return Some("language_model.model.embed_tokens.weight".to_string());
+            aliases.push("language_model.model.embed_tokens.weight".to_string());
+            aliases.push("model.embed_tokens.weight".to_string());
+            aliases.push("model.language_model.embed_tokens.weight".to_string());
+            return aliases;
         }
-        "norm.weight" => return Some("language_model.model.norm.weight".to_string()),
-        "output.weight" => return Some("language_model.lm_head.weight".to_string()),
+        "norm.weight" => {
+            aliases.push("language_model.model.norm.weight".to_string());
+            aliases.push("model.norm.weight".to_string());
+            aliases.push("model.language_model.norm.weight".to_string());
+            return aliases;
+        }
+        "output.weight" => {
+            aliases.push("language_model.lm_head.weight".to_string());
+            aliases.push("lm_head.weight".to_string());
+            return aliases;
+        }
         _ => {}
     }
 
-    let rest = name.strip_prefix("layers.")?;
-    let (layer, suffix) = rest.split_once('.')?;
+    let Some(rest) = name.strip_prefix("layers.") else {
+        return aliases;
+    };
+    let Some((layer, suffix)) = rest.split_once('.') else {
+        return aliases;
+    };
     let hf_suffix = match suffix {
         "attention_norm.weight" => "input_layernorm.weight",
         "ffn_norm.weight" => "post_attention_layernorm.weight",
@@ -424,13 +473,18 @@ pub fn model_tensor_alias(name: &str) -> Option<String> {
         "attention.wk.weight" => "self_attn.k_proj.weight",
         "attention.wv.weight" => "self_attn.v_proj.weight",
         "attention.wo.weight" => "self_attn.o_proj.weight",
+        "attention.q_norm.weight" => "self_attn.q_norm.weight",
+        "attention.k_norm.weight" => "self_attn.k_norm.weight",
         "feed_forward.w1.weight" => "mlp.gate_proj.weight",
         "feed_forward.w2.weight" => "mlp.down_proj.weight",
         "feed_forward.w3.weight" => "mlp.up_proj.weight",
-        _ => return None,
+        _ => return aliases,
     };
 
-    Some(format!("language_model.model.layers.{layer}.{hf_suffix}"))
+    aliases.push(format!("language_model.model.layers.{layer}.{hf_suffix}"));
+    aliases.push(format!("model.layers.{layer}.{hf_suffix}"));
+    aliases.push(format!("model.language_model.layers.{layer}.{hf_suffix}"));
+    aliases
 }
 
 fn parse_header(header: &str) -> Result<Vec<TensorInfo>> {
@@ -706,6 +760,35 @@ mod tests {
         assert_eq!(
             model_tensor_alias("layers.12.feed_forward.w3.weight").as_deref(),
             Some("language_model.model.layers.12.mlp.up_proj.weight")
+        );
+    }
+
+    #[test]
+    fn model_tensor_aliases_include_qwen_names() {
+        assert!(
+            model_tensor_aliases("tok_embeddings.weight")
+                .iter()
+                .any(|alias| alias == "model.embed_tokens.weight")
+        );
+        assert!(
+            model_tensor_aliases("layers.2.attention.wq.weight")
+                .iter()
+                .any(|alias| alias == "model.layers.2.self_attn.q_proj.weight")
+        );
+        assert!(
+            model_tensor_aliases("layers.2.attention.q_norm.weight")
+                .iter()
+                .any(|alias| alias == "model.layers.2.self_attn.q_norm.weight")
+        );
+        assert!(
+            model_tensor_aliases("layers.2.attention.wq.weight")
+                .iter()
+                .any(|alias| alias == "model.language_model.layers.2.self_attn.q_proj.weight")
+        );
+        assert!(
+            model_tensor_aliases("output.weight")
+                .iter()
+                .any(|alias| alias == "lm_head.weight")
         );
     }
 

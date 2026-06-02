@@ -37,6 +37,8 @@ type AppResult<T> = std::result::Result<T, Box<dyn Error>>;
 
 const N: usize = 1024;
 const DEFAULT_MINISTRAL_DIR: &str = "models/Ministral-3-8B-Reasoning-2512";
+const DEFAULT_QWEN3_06B_DIR: &str =
+    "models/Qwen3-0.6B-GSM8K-verl-atropos-adv";
 
 fn main() {
     if let Err(error) = run() {
@@ -134,6 +136,7 @@ fn run() -> AppResult<()> {
         "ministral-text-exported-compare" => run_ministral_text_exported_compare(&args),
         "ministral-text-compare" => run_ministral_text_compare(&args),
         "ministral-tokens-generate" | "ministral-tokens-suite" => run_ministral_tokens_suite(&args),
+        "qwen-tokens-generate" | "qwen-tokens-suite" => run_qwen_tokens_suite(&args),
         "ministral-tokens-exported-generate" | "ministral-tokens-exported-suite" => {
             run_ministral_tokens_exported_suite(&args)
         }
@@ -209,6 +212,7 @@ fn run() -> AppResult<()> {
              `ministral-text-forced-target-exported-compare`, `ministral-text-exported-compare`, \
              `ministral-text-compare`, \
              `ministral-tokens-generate`, `ministral-tokens-exported-generate`, \
+             `qwen-tokens-generate`, \
              `ministral-tokens-logits`, `ministral-tokens-exported-logits`, \
              `ministral-tokens-trace`, `ministral-tokens-exported-trace`, \
              `ministral-tokens-eval`, `ministral-tokens-eval-exported`, \
@@ -7146,6 +7150,59 @@ fn run_ministral_tokens_suite(args: &[String]) -> AppResult<()> {
     Ok(())
 }
 
+fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let model_dir = parse_optional_non_numeric_model_dir(args, &mut index, DEFAULT_QWEN3_06B_DIR);
+    let max_new_tokens = parse_optional_usize(args, &mut index, 1, "max_new_tokens")?;
+    let top_k = parse_optional_usize(args, &mut index, 1, "top_k")?;
+    let cli = parse_token_cli(args, index)?;
+    if cli.report_path.is_some() {
+        return Err(invalid_input(
+            "qwen token reports need a Qwen tokenizer implementation; omit --report for now",
+        ));
+    }
+
+    let stop_token_id = TextConfig::from_model_dir(&model_dir)?.eos_token_id;
+    let (stream, module) = cuda_handles()?;
+    let suite = if let Some(sampling) = cli.sampling {
+        inference::run_ministral_generation_sampled_suite_with_backend(
+            stream,
+            module,
+            &model_dir,
+            &cli.prompts,
+            InferenceBackend::Bf16,
+            max_new_tokens,
+            top_k,
+            stop_token_id,
+            sampling,
+        )?
+    } else {
+        inference::run_ministral_generation_suite_with_backend(
+            stream,
+            module,
+            &model_dir,
+            &cli.prompts,
+            InferenceBackend::Bf16,
+            max_new_tokens,
+            top_k,
+            stop_token_id,
+        )?
+    };
+
+    println!(
+        "Qwen token suite: backend=bf16 decode_strategy={} prompts_len={} eos_token_id={:?}",
+        decode_strategy_label(cli.sampling),
+        suite.prompts.len(),
+        stop_token_id
+    );
+    for (index, result) in suite.prompts.iter().enumerate() {
+        println!("  prompt[{index}]={:?}", result.prompt_tokens);
+        print_generation_result(result, None)?;
+    }
+
+    Ok(())
+}
+
 fn run_ministral_tokens_exported_suite(args: &[String]) -> AppResult<()> {
     let mut index = 0;
     let model_dir = parse_model_dir(args, &mut index);
@@ -8573,6 +8630,23 @@ fn parse_model_dir(args: &[String], index: &mut usize) -> PathBuf {
         path
     } else {
         PathBuf::from(DEFAULT_MINISTRAL_DIR)
+    }
+}
+
+fn parse_optional_non_numeric_model_dir(
+    args: &[String],
+    index: &mut usize,
+    default: &str,
+) -> PathBuf {
+    if *index < args.len()
+        && !args[*index].starts_with("--")
+        && args[*index].parse::<usize>().is_err()
+    {
+        let path = PathBuf::from(&args[*index]);
+        *index += 1;
+        path
+    } else {
+        PathBuf::from(default)
     }
 }
 

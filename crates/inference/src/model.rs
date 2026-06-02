@@ -24,6 +24,7 @@ pub struct TextConfig {
     pub max_position_embeddings: usize,
     pub vocab_size: usize,
     pub norm_eps: f32,
+    pub eos_token_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -56,6 +57,7 @@ impl TextConfig {
         max_position_embeddings: 262_144,
         vocab_size: 131_072,
         norm_eps: 1e-5,
+        eos_token_id: Some(2),
     };
 
     pub fn from_model_dir(model_dir: impl AsRef<Path>) -> Result<Self> {
@@ -64,8 +66,17 @@ impl TextConfig {
     }
 
     fn from_config_json(json: &str) -> Result<Self> {
-        let text_config = parse_json_object_field(json, "text_config")?;
+        let text_config = parse_json_object_field(json, "text_config").unwrap_or(json);
         let rope_parameters = parse_json_object_field(text_config, "rope_parameters").ok();
+        let partial_rotary_factor = rope_parameters
+            .and_then(|rope| parse_optional_json_f32_field(rope, "partial_rotary_factor"))
+            .or_else(|| parse_optional_json_f32_field(text_config, "partial_rotary_factor"))
+            .unwrap_or(1.0);
+        if (partial_rotary_factor - 1.0).abs() > f32::EPSILON {
+            return Err(invalid_data(format!(
+                "partial rotary factor {partial_rotary_factor} is not supported by the current full-head RoPE kernels"
+            )));
+        }
         let rope_yarn = rope_parameters
             .and_then(|rope| {
                 let rope_type = parse_json_string_field(rope, "rope_type")
@@ -106,6 +117,9 @@ impl TextConfig {
             )?,
             vocab_size: parse_json_usize_field(text_config, "vocab_size")?,
             norm_eps: parse_json_f32_field(text_config, "rms_norm_eps")?,
+            eos_token_id: parse_optional_json_usize_field(text_config, "eos_token_id")
+                .or_else(|| parse_optional_json_usize_field(json, "eos_token_id"))
+                .map(|id| id as u32),
         };
         config.validate_for_inference()?;
         Ok(config)
@@ -141,12 +155,6 @@ impl TextConfig {
                 self.head_dim
             )));
         }
-        if self.dim != self.n_heads * self.head_dim {
-            return Err(invalid_data(format!(
-                "text config hidden_size {} must equal num_attention_heads {} * head_dim {}",
-                self.dim, self.n_heads, self.head_dim
-            )));
-        }
         if self.n_heads % self.n_kv_heads != 0 {
             return Err(invalid_data(format!(
                 "text config num_attention_heads {} must be divisible by num_key_value_heads {}",
@@ -171,6 +179,14 @@ impl TextConfig {
             return Err(invalid_data(format!(
                 "text config rms_norm_eps must be finite and positive, got {}",
                 self.norm_eps
+            )));
+        }
+        if let Some(eos_token_id) = self.eos_token_id
+            && eos_token_id as usize >= self.vocab_size
+        {
+            return Err(invalid_data(format!(
+                "text config eos_token_id {} must be less than vocab_size {}",
+                eos_token_id, self.vocab_size
             )));
         }
         if let Some(yarn) = self.rope_yarn {
@@ -513,6 +529,8 @@ struct LayerHostWeights {
     wk: Vec<Bf16>,
     wv: Vec<Bf16>,
     wo: Vec<Bf16>,
+    q_norm: Option<Vec<Bf16>>,
+    k_norm: Option<Vec<Bf16>>,
     ffn_norm: Vec<Bf16>,
     w1: Vec<Bf16>,
     w3: Vec<Bf16>,
@@ -525,6 +543,8 @@ struct LayerDeviceWeights {
     wk: DeviceBuffer<Bf16>,
     wv: DeviceBuffer<Bf16>,
     wo: DeviceBuffer<Bf16>,
+    q_norm: Option<DeviceBuffer<Bf16>>,
+    k_norm: Option<DeviceBuffer<Bf16>>,
     ffn_norm: DeviceBuffer<Bf16>,
     w1: DeviceBuffer<Bf16>,
     w3: DeviceBuffer<Bf16>,
@@ -537,6 +557,8 @@ struct RowwiseScaledFfnLayerDeviceWeights {
     wk: DeviceBuffer<Bf16>,
     wv: DeviceBuffer<Bf16>,
     wo: DeviceBuffer<Bf16>,
+    q_norm: Option<DeviceBuffer<Bf16>>,
+    k_norm: Option<DeviceBuffer<Bf16>>,
     ffn_norm: DeviceBuffer<Bf16>,
     w1: DeviceRowwiseScaledI8Matrix,
     w3: DeviceRowwiseScaledI8Matrix,
@@ -549,6 +571,8 @@ struct RowwiseScaledAttentionLayerDeviceWeights {
     wk: DeviceRowwiseScaledI8Matrix,
     wv: DeviceRowwiseScaledI8Matrix,
     wo: DeviceRowwiseScaledI8Matrix,
+    q_norm: Option<DeviceBuffer<Bf16>>,
+    k_norm: Option<DeviceBuffer<Bf16>>,
     ffn_norm: DeviceBuffer<Bf16>,
     w1: DeviceBuffer<Bf16>,
     w3: DeviceBuffer<Bf16>,
@@ -561,6 +585,8 @@ struct RowwiseScaledAttentionFfnLayerDeviceWeights {
     wk: DeviceRowwiseScaledI8Matrix,
     wv: DeviceRowwiseScaledI8Matrix,
     wo: DeviceRowwiseScaledI8Matrix,
+    q_norm: Option<DeviceBuffer<Bf16>>,
+    k_norm: Option<DeviceBuffer<Bf16>>,
     ffn_norm: DeviceBuffer<Bf16>,
     w1: DeviceRowwiseScaledI8Matrix,
     w3: DeviceRowwiseScaledI8Matrix,
@@ -578,6 +604,8 @@ trait AttentionLayerWeights {
     fn wk(&self) -> &Self::Wk;
     fn wv(&self) -> &Self::Wv;
     fn wo(&self) -> &Self::Wo;
+    fn q_norm(&self) -> Option<&DeviceBuffer<Bf16>>;
+    fn k_norm(&self) -> Option<&DeviceBuffer<Bf16>>;
 }
 
 trait FfnLayerWeights {
@@ -615,6 +643,14 @@ impl AttentionLayerWeights for LayerDeviceWeights {
 
     fn wo(&self) -> &Self::Wo {
         &self.wo
+    }
+
+    fn q_norm(&self) -> Option<&DeviceBuffer<Bf16>> {
+        self.q_norm.as_ref()
+    }
+
+    fn k_norm(&self) -> Option<&DeviceBuffer<Bf16>> {
+        self.k_norm.as_ref()
     }
 }
 
@@ -665,6 +701,14 @@ impl AttentionLayerWeights for RowwiseScaledFfnLayerDeviceWeights {
     fn wo(&self) -> &Self::Wo {
         &self.wo
     }
+
+    fn q_norm(&self) -> Option<&DeviceBuffer<Bf16>> {
+        self.q_norm.as_ref()
+    }
+
+    fn k_norm(&self) -> Option<&DeviceBuffer<Bf16>> {
+        self.k_norm.as_ref()
+    }
 }
 
 impl FfnLayerWeights for RowwiseScaledFfnLayerDeviceWeights {
@@ -714,6 +758,14 @@ impl AttentionLayerWeights for RowwiseScaledAttentionLayerDeviceWeights {
     fn wo(&self) -> &Self::Wo {
         &self.wo
     }
+
+    fn q_norm(&self) -> Option<&DeviceBuffer<Bf16>> {
+        self.q_norm.as_ref()
+    }
+
+    fn k_norm(&self) -> Option<&DeviceBuffer<Bf16>> {
+        self.k_norm.as_ref()
+    }
 }
 
 impl FfnLayerWeights for RowwiseScaledAttentionLayerDeviceWeights {
@@ -762,6 +814,14 @@ impl AttentionLayerWeights for RowwiseScaledAttentionFfnLayerDeviceWeights {
 
     fn wo(&self) -> &Self::Wo {
         &self.wo
+    }
+
+    fn q_norm(&self) -> Option<&DeviceBuffer<Bf16>> {
+        self.q_norm.as_ref()
+    }
+
+    fn k_norm(&self) -> Option<&DeviceBuffer<Bf16>> {
+        self.k_norm.as_ref()
     }
 }
 
@@ -841,9 +901,13 @@ struct LayerScratch {
     attention_normed: DeviceBuffer<f32>,
     attention_normed_batch: DeviceBuffer<f32>,
     query: DeviceBuffer<f32>,
+    query_normed: DeviceBuffer<f32>,
     query_batch: DeviceBuffer<f32>,
+    query_normed_batch: DeviceBuffer<f32>,
     key: DeviceBuffer<f32>,
+    key_normed: DeviceBuffer<f32>,
     key_batch: DeviceBuffer<f32>,
+    key_normed_batch: DeviceBuffer<f32>,
     value: DeviceBuffer<f32>,
     value_batch: DeviceBuffer<f32>,
     query_rot: DeviceBuffer<f32>,
@@ -4502,6 +4566,16 @@ fn read_layer_host_weights(
             &format!("layers.{layer}.attention.wo.weight"),
             &[config.dim, config.n_heads * config.head_dim],
         )?,
+        q_norm: read_optional_bf16_shape(
+            weights,
+            &format!("layers.{layer}.attention.q_norm.weight"),
+            &[config.head_dim],
+        )?,
+        k_norm: read_optional_bf16_shape(
+            weights,
+            &format!("layers.{layer}.attention.k_norm.weight"),
+            &[config.head_dim],
+        )?,
         ffn_norm: read_bf16_shape(
             weights,
             &format!("layers.{layer}.ffn_norm.weight"),
@@ -4543,11 +4617,22 @@ fn upload_layer_weights(
         wk: DeviceBuffer::from_host(stream, &weights.wk)?,
         wv: DeviceBuffer::from_host(stream, &weights.wv)?,
         wo: DeviceBuffer::from_host(stream, &weights.wo)?,
+        q_norm: optional_device_buffer_from_host(stream, weights.q_norm.as_deref())?,
+        k_norm: optional_device_buffer_from_host(stream, weights.k_norm.as_deref())?,
         ffn_norm: DeviceBuffer::from_host(stream, &weights.ffn_norm)?,
         w1: DeviceBuffer::from_host(stream, &weights.w1)?,
         w3: DeviceBuffer::from_host(stream, &weights.w3)?,
         w2: DeviceBuffer::from_host(stream, &weights.w2)?,
     })
+}
+
+fn optional_device_buffer_from_host(
+    stream: &Arc<CudaStream>,
+    values: Option<&[Bf16]>,
+) -> Result<Option<DeviceBuffer<Bf16>>> {
+    values
+        .map(|values| DeviceBuffer::from_host(stream, values).map_err(Into::into))
+        .transpose()
 }
 
 fn upload_rowwise_scaled_ffn_layer_weights(
@@ -4568,6 +4653,8 @@ fn upload_rowwise_scaled_ffn_layer_weights(
         wk: DeviceBuffer::from_host(stream, &weights.wk)?,
         wv: DeviceBuffer::from_host(stream, &weights.wv)?,
         wo: DeviceBuffer::from_host(stream, &weights.wo)?,
+        q_norm: optional_device_buffer_from_host(stream, weights.q_norm.as_deref())?,
+        k_norm: optional_device_buffer_from_host(stream, weights.k_norm.as_deref())?,
         ffn_norm: DeviceBuffer::from_host(stream, &weights.ffn_norm)?,
         w1: w1.to_device(stream)?,
         w3: w3.to_device(stream)?,
@@ -4593,6 +4680,8 @@ fn upload_rowwise_scaled_attention_layer_weights(
         wk: wk.to_device(stream)?,
         wv: wv.to_device(stream)?,
         wo: wo.to_device(stream)?,
+        q_norm: optional_device_buffer_from_host(stream, weights.q_norm.as_deref())?,
+        k_norm: optional_device_buffer_from_host(stream, weights.k_norm.as_deref())?,
         ffn_norm: DeviceBuffer::from_host(stream, &weights.ffn_norm)?,
         w1: DeviceBuffer::from_host(stream, &weights.w1)?,
         w3: DeviceBuffer::from_host(stream, &weights.w3)?,
@@ -4624,6 +4713,8 @@ fn upload_rowwise_scaled_attention_ffn_layer_weights(
         wk: wk.to_device(stream)?,
         wv: wv.to_device(stream)?,
         wo: wo.to_device(stream)?,
+        q_norm: optional_device_buffer_from_host(stream, weights.q_norm.as_deref())?,
+        k_norm: optional_device_buffer_from_host(stream, weights.k_norm.as_deref())?,
         ffn_norm: DeviceBuffer::from_host(stream, &weights.ffn_norm)?,
         w1: w1.to_device(stream)?,
         w3: w3.to_device(stream)?,
@@ -4704,6 +4795,8 @@ fn upload_exported_rowwise_scaled_attention_ffn_layer_weights(
         wk: wk.to_device(stream)?,
         wv: wv.to_device(stream)?,
         wo: wo.to_device(stream)?,
+        q_norm: None,
+        k_norm: None,
         ffn_norm: DeviceBuffer::from_host(
             stream,
             &read_bf16_shape(
@@ -5151,9 +5244,13 @@ impl LayerScratch {
                 attention_normed_batch_len,
             )?,
             query: DeviceBuffer::<f32>::zeroed(stream, q_len)?,
+            query_normed: DeviceBuffer::<f32>::zeroed(stream, q_len)?,
             query_batch: DeviceBuffer::<f32>::zeroed(stream, q_batch_len)?,
+            query_normed_batch: DeviceBuffer::<f32>::zeroed(stream, q_batch_len)?,
             key: DeviceBuffer::<f32>::zeroed(stream, kv_len)?,
+            key_normed: DeviceBuffer::<f32>::zeroed(stream, kv_len)?,
             key_batch: DeviceBuffer::<f32>::zeroed(stream, kv_batch_len)?,
+            key_normed_batch: DeviceBuffer::<f32>::zeroed(stream, kv_batch_len)?,
             value: DeviceBuffer::<f32>::zeroed(stream, kv_len)?,
             value_batch: DeviceBuffer::<f32>::zeroed(stream, kv_batch_len)?,
             query_rot: DeviceBuffer::<f32>::zeroed(stream, q_len)?,
@@ -5177,9 +5274,13 @@ impl LayerScratch {
         (self.attention_normed.len()
             + self.attention_normed_batch.len()
             + self.query.len()
+            + self.query_normed.len()
             + self.query_batch.len()
+            + self.query_normed_batch.len()
             + self.key.len()
+            + self.key_normed.len()
             + self.key_batch.len()
+            + self.key_normed_batch.len()
             + self.value.len()
             + self.value_batch.len()
             + self.query_rot.len()
@@ -5235,6 +5336,8 @@ impl FfnScratch {
 }
 
 fn layer_device_weight_bytes(layer: &LayerDeviceWeights) -> usize {
+    let qk_norm_bytes =
+        optional_device_buffer_bytes(&layer.q_norm) + optional_device_buffer_bytes(&layer.k_norm);
     (layer.attention_norm.len()
         + layer.wq.len()
         + layer.wk.len()
@@ -5245,6 +5348,11 @@ fn layer_device_weight_bytes(layer: &LayerDeviceWeights) -> usize {
         + layer.w3.len()
         + layer.w2.len())
         * size_of::<Bf16>()
+        + qk_norm_bytes
+}
+
+fn optional_device_buffer_bytes<T>(buffer: &Option<DeviceBuffer<T>>) -> usize {
+    buffer.as_ref().map(DeviceBuffer::num_bytes).unwrap_or(0)
 }
 
 fn rowwise_scaled_matrix_device_bytes(matrix: &DeviceRowwiseScaledI8Matrix) -> usize {
@@ -5255,6 +5363,8 @@ fn rowwise_scaled_attention_ffn_layer_device_weight_bytes(
     layer: &RowwiseScaledAttentionFfnLayerDeviceWeights,
 ) -> usize {
     (layer.attention_norm.len() + layer.ffn_norm.len()) * size_of::<Bf16>()
+        + optional_device_buffer_bytes(&layer.q_norm)
+        + optional_device_buffer_bytes(&layer.k_norm)
         + rowwise_scaled_matrix_device_bytes(&layer.wq)
         + rowwise_scaled_matrix_device_bytes(&layer.wk)
         + rowwise_scaled_matrix_device_bytes(&layer.wv)
@@ -5392,17 +5502,50 @@ fn run_prefill_bf16_layer_device_with_cache(
         || scratch.key_batch.len() != kv_batch_len
         || scratch.value_batch.len() != kv_batch_len
         || scratch.query_rot_batch.len() != q_batch_len
+        || scratch.query_normed_batch.len() != q_batch_len
+        || scratch.key_normed_batch.len() != kv_batch_len
     {
         return Err(invalid_data(
             "prefill attention batch scratch length mismatch",
         ));
     }
 
+    let query_batch_for_attention = if let Some(q_norm) = layer.q_norm.as_ref() {
+        ops::rmsnorm_batched_bf16(
+            stream,
+            module,
+            &scratch.query_batch,
+            q_norm,
+            prompt_len * config.n_heads,
+            config.head_dim,
+            config.norm_eps,
+            &mut scratch.query_normed_batch,
+        )?;
+        &scratch.query_normed_batch
+    } else {
+        &scratch.query_batch
+    };
+    let key_batch_for_attention = if let Some(k_norm) = layer.k_norm.as_ref() {
+        ops::rmsnorm_batched_bf16(
+            stream,
+            module,
+            &scratch.key_batch,
+            k_norm,
+            prompt_len * config.n_kv_heads,
+            config.head_dim,
+            config.norm_eps,
+            &mut scratch.key_normed_batch,
+        )?;
+        &scratch.key_normed_batch
+    } else {
+        &scratch.key_batch
+    };
+
     ops::prepare_prefill_attention_batch(
         stream,
         module,
-        &scratch.query_batch,
-        &scratch.key_batch,
+        query_batch_for_attention,
+        key_batch_for_attention,
         &scratch.value_batch,
         rope_freqs,
         prompt_len,
@@ -5575,17 +5718,50 @@ fn run_prefill_rowwise_scaled_layer_device_with_cache(
         || scratch.key_batch.len() != kv_batch_len
         || scratch.value_batch.len() != kv_batch_len
         || scratch.query_rot_batch.len() != q_batch_len
+        || scratch.query_normed_batch.len() != q_batch_len
+        || scratch.key_normed_batch.len() != kv_batch_len
     {
         return Err(invalid_data(
             "prefill attention batch scratch length mismatch",
         ));
     }
 
+    let query_batch_for_attention = if let Some(q_norm) = layer.q_norm.as_ref() {
+        ops::rmsnorm_batched_bf16(
+            stream,
+            module,
+            &scratch.query_batch,
+            q_norm,
+            prompt_len * config.n_heads,
+            config.head_dim,
+            config.norm_eps,
+            &mut scratch.query_normed_batch,
+        )?;
+        &scratch.query_normed_batch
+    } else {
+        &scratch.query_batch
+    };
+    let key_batch_for_attention = if let Some(k_norm) = layer.k_norm.as_ref() {
+        ops::rmsnorm_batched_bf16(
+            stream,
+            module,
+            &scratch.key_batch,
+            k_norm,
+            prompt_len * config.n_kv_heads,
+            config.head_dim,
+            config.norm_eps,
+            &mut scratch.key_normed_batch,
+        )?;
+        &scratch.key_normed_batch
+    } else {
+        &scratch.key_batch
+    };
+
     ops::prepare_prefill_attention_batch(
         stream,
         module,
-        &scratch.query_batch,
-        &scratch.key_batch,
+        query_batch_for_attention,
+        key_batch_for_attention,
         &scratch.value_batch,
         rope_freqs,
         prompt_len,
@@ -5824,10 +6000,40 @@ where
         layer.wv(),
         &mut scratch.value,
     )?;
+    let query_for_attention = if let Some(q_norm) = layer.q_norm() {
+        ops::rmsnorm_batched_bf16(
+            stream,
+            module,
+            &scratch.query,
+            q_norm,
+            config.n_heads,
+            config.head_dim,
+            config.norm_eps,
+            &mut scratch.query_normed,
+        )?;
+        &scratch.query_normed
+    } else {
+        &scratch.query
+    };
+    let key_for_attention = if let Some(k_norm) = layer.k_norm() {
+        ops::rmsnorm_batched_bf16(
+            stream,
+            module,
+            &scratch.key,
+            k_norm,
+            config.n_kv_heads,
+            config.head_dim,
+            config.norm_eps,
+            &mut scratch.key_normed,
+        )?;
+        &scratch.key_normed
+    } else {
+        &scratch.key
+    };
     ops::apply_rope(
         stream,
         module,
-        &scratch.query,
+        query_for_attention,
         rope_freqs,
         position,
         config.head_dim,
@@ -5836,7 +6042,7 @@ where
     ops::apply_rope(
         stream,
         module,
-        &scratch.key,
+        key_for_attention,
         rope_freqs,
         position,
         config.head_dim,
@@ -7491,6 +7697,13 @@ fn parse_json_usize_field(json: &str, field: &str) -> Result<usize> {
     Ok(json[start..end].parse()?)
 }
 
+fn parse_optional_json_usize_field(json: &str, field: &str) -> Option<usize> {
+    let field_pos = find_json_field(json, field).ok()?;
+    let start = json_field_value_start(json, field_pos, field).ok()?;
+    let end = json_number_end(json, start).ok()?;
+    json[start..end].parse().ok()
+}
+
 fn parse_json_f32_field(json: &str, field: &str) -> Result<f32> {
     parse_optional_json_f32_field(json, field)
         .ok_or_else(|| invalid_data(format!("missing JSON field {field}")))
@@ -7642,6 +7855,18 @@ fn read_bf16_shape(
     let tensor = weights.tensor(name)?;
     expect_shape(&tensor, expected_shape)?;
     weights.read_bf16_tensor(&tensor)
+}
+
+fn read_optional_bf16_shape(
+    weights: &ModelWeights,
+    name: &str,
+    expected_shape: &[usize],
+) -> Result<Option<Vec<Bf16>>> {
+    let Some(tensor) = weights.tensor_opt(name)? else {
+        return Ok(None);
+    };
+    expect_shape(&tensor, expected_shape)?;
+    Ok(Some(weights.read_bf16_tensor(&tensor)?))
 }
 
 fn expect_shape(tensor: &TensorInfo, expected: &[usize]) -> Result<()> {
