@@ -12,12 +12,56 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::AppResult;
 
-type CudaWorkerJob =
-    Box<dyn FnOnce(&Arc<CudaStream>, &Arc<CudaModule>) -> Result<(), String> + Send + 'static>;
+pub(crate) const SMOKE_LAUNCH_TAPE: [CudaLaunchDescriptor; 3] = [
+    CudaLaunchDescriptor::new(CudaLaunchOp::SmokeRelu),
+    CudaLaunchDescriptor::new(CudaLaunchOp::SmokeSwiglu),
+    CudaLaunchDescriptor::new(CudaLaunchOp::SmokeVecAdd),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CudaLaunchDescriptor {
+    op: CudaLaunchOp,
+}
+
+impl CudaLaunchDescriptor {
+    pub(crate) const fn new(op: CudaLaunchOp) -> Self {
+        Self { op }
+    }
+
+    fn label(self) -> &'static str {
+        self.op.label()
+    }
+
+    fn run(self, stream: &Arc<CudaStream>, module: &Arc<CudaModule>) -> Result<(), String> {
+        match self.op {
+            CudaLaunchOp::SmokeRelu => crate::run_relu(stream, module),
+            CudaLaunchOp::SmokeSwiglu => crate::run_swiglu(stream, module),
+            CudaLaunchOp::SmokeVecAdd => crate::run_vecadd(stream, module),
+        }
+        .map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CudaLaunchOp {
+    SmokeRelu,
+    SmokeSwiglu,
+    SmokeVecAdd,
+}
+
+impl CudaLaunchOp {
+    fn label(self) -> &'static str {
+        match self {
+            Self::SmokeRelu => "smoke-relu",
+            Self::SmokeSwiglu => "smoke-swiglu",
+            Self::SmokeVecAdd => "smoke-vecadd",
+        }
+    }
+}
 
 enum CudaWorkerMessage {
     Run {
-        job: CudaWorkerJob,
+        descriptor: CudaLaunchDescriptor,
         complete: oneshot::Sender<Result<(), String>>,
     },
 }
@@ -68,15 +112,12 @@ impl CudaWorkerPool {
         self.senders.len()
     }
 
-    pub(crate) async fn submit<F>(&self, job: F) -> AppResult<()>
-    where
-        F: FnOnce(&Arc<CudaStream>, &Arc<CudaModule>) -> Result<(), String> + Send + 'static,
-    {
+    pub(crate) async fn submit(&self, descriptor: CudaLaunchDescriptor) -> AppResult<()> {
         let worker_index = self.next_worker.fetch_add(1, Ordering::Relaxed) % self.senders.len();
         let (complete, finished) = oneshot::channel();
         self.senders[worker_index]
             .send(CudaWorkerMessage::Run {
-                job: Box::new(job),
+                descriptor,
                 complete,
             })
             .await
@@ -85,7 +126,12 @@ impl CudaWorkerPool {
         let result = finished
             .await
             .map_err(|_| invalid_worker_config("CUDA worker stopped before completing the job"))?;
-        result.map_err(|error| invalid_worker_config(format!("CUDA worker job failed: {error}")))
+        result.map_err(|error| {
+            invalid_worker_config(format!(
+                "CUDA worker job {} failed: {error}",
+                descriptor.label()
+            ))
+        })
     }
 }
 
@@ -103,9 +149,12 @@ fn run_worker(mut receiver: mpsc::Receiver<CudaWorkerMessage>, device_index: usi
         crate::cuda_worker_handles_for_device(device_index).map_err(|error| error.to_string());
     while let Some(message) = receiver.blocking_recv() {
         match message {
-            CudaWorkerMessage::Run { job, complete } => {
+            CudaWorkerMessage::Run {
+                descriptor,
+                complete,
+            } => {
                 let result = match &handles {
-                    Ok((stream, module)) => job(stream, module),
+                    Ok((stream, module)) => descriptor.run(stream, module),
                     Err(error) => Err(error.clone()),
                 };
                 let _ = complete.send(result);

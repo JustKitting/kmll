@@ -13,7 +13,7 @@ use std::{
 mod cuda_worker;
 
 use cuda_core::{CudaContext, CudaModule, CudaStream, DeviceBuffer};
-use cuda_worker::CudaWorkerPool;
+use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
     dtypes::{Bf16, DType},
     inference::{
@@ -283,12 +283,10 @@ async fn run_smoke_workers(args: &[String]) -> AppResult<()> {
 
     let device_index = cuda_device_index_from_env()?;
     let pool = CudaWorkerPool::new(worker_count, queue_depth, device_index)?;
-    let relu =
-        pool.submit(|stream, module| run_relu(stream, module).map_err(|error| error.to_string()));
-    let swiglu =
-        pool.submit(|stream, module| run_swiglu(stream, module).map_err(|error| error.to_string()));
-    let vecadd =
-        pool.submit(|stream, module| run_vecadd(stream, module).map_err(|error| error.to_string()));
+    let [relu_descriptor, swiglu_descriptor, vecadd_descriptor] = SMOKE_LAUNCH_TAPE;
+    let relu = pool.submit(relu_descriptor);
+    let swiglu = pool.submit(swiglu_descriptor);
+    let vecadd = pool.submit(vecadd_descriptor);
     tokio::try_join!(relu, swiglu, vecadd)?;
 
     println!(
