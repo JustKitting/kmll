@@ -305,16 +305,34 @@ async fn run_smoke_workers(args: &[String]) -> AppResult<()> {
     let device_index = cuda_device_index_from_env()?;
     let pool = CudaWorkerPool::new(worker_count, queue_depth, device_index)?;
     let [relu_descriptor, swiglu_descriptor, vecadd_descriptor] = SMOKE_LAUNCH_TAPE;
-    let relu = pool.submit(relu_descriptor);
-    let swiglu = pool.submit(swiglu_descriptor);
-    let vecadd = pool.submit(vecadd_descriptor);
-    tokio::try_join!(relu, swiglu, vecadd)?;
+    let relu = pool.submit_profiled(relu_descriptor);
+    let swiglu = pool.submit_profiled(swiglu_descriptor);
+    let vecadd = pool.submit_profiled(vecadd_descriptor);
+    let (relu_profile, swiglu_profile, vecadd_profile) = tokio::try_join!(relu, swiglu, vecadd)?;
 
     println!(
         "worker smoke passed: workers={} queue_depth={queue_depth}",
         pool.worker_count()
     );
+    print_queue_operation_profile(&relu_profile);
+    print_queue_operation_profile(&swiglu_profile);
+    print_queue_operation_profile(&vecadd_profile);
     Ok(())
+}
+
+fn print_queue_operation_profile(profile: &nn_rust_profiling::QueueOperationProfile) {
+    println!(
+        "  op={} kind={} route={} worker={} send_wait_seconds={:.6} queue_to_worker_seconds={:.6} worker_execute_seconds={:.6} completion_wait_seconds={:.6} total_seconds={:.6}",
+        profile.operation.name,
+        profile.operation.kind.label(),
+        profile.operation.route.label(),
+        profile.worker_index,
+        profile.send_wait.as_seconds_f64(),
+        profile.queue_to_worker.as_seconds_f64(),
+        profile.worker_execute.as_seconds_f64(),
+        profile.completion_wait.as_seconds_f64(),
+        profile.total.as_seconds_f64()
+    );
 }
 
 fn run_relu(stream: &Arc<CudaStream>, module: &Arc<CudaModule>) -> AppResult<()> {
