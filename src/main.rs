@@ -7661,11 +7661,12 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
         "  use_default_system={}",
         matches!(cli.system_prompt, SystemPrompt::DefaultFromModel)
     );
+    println!("  enable_thinking={}", cli.enable_thinking);
     for (prompt_index, user_prompt) in cli.prompts.iter().enumerate() {
         let formatted_prompt = chat::format_qwen_single_turn_chat(
             qwen_system_prompt(&cli.system_prompt),
             user_prompt,
-            true,
+            cli.enable_thinking,
         );
         let prompt_tokens = tokenizer.encode_lossy(&formatted_prompt, false)?;
         if prompt_tokens.is_empty() {
@@ -9507,6 +9508,7 @@ fn parse_required_flag_value<'a>(
 #[derive(Debug)]
 struct ChatCli {
     system_prompt: SystemPrompt,
+    enable_thinking: bool,
     prompts: Vec<String>,
     forced_target_pairs: Vec<(String, String)>,
     prompt_file_paths: Vec<PathBuf>,
@@ -9603,6 +9605,7 @@ struct ChatForcedTargetCli {
 
 fn parse_chat_cli(args: &[String], start: usize) -> AppResult<ChatCli> {
     let mut system_prompt = SystemPrompt::DefaultFromModel;
+    let mut enable_thinking = true;
     let mut report_path = None;
     let mut driver = GenerationComparisonDriver::Candidate;
     let mut thresholds = ChatCompareThresholds::default();
@@ -9619,6 +9622,14 @@ fn parse_chat_cli(args: &[String], start: usize) -> AppResult<ChatCli> {
         match args[index].as_str() {
             "--no-system" => {
                 system_prompt = SystemPrompt::None;
+                index += 1;
+            }
+            "--thinking" => {
+                enable_thinking = true;
+                index += 1;
+            }
+            "--no-thinking" => {
+                enable_thinking = false;
                 index += 1;
             }
             "--system" => {
@@ -9707,6 +9718,7 @@ fn parse_chat_cli(args: &[String], start: usize) -> AppResult<ChatCli> {
 
     Ok(ChatCli {
         system_prompt,
+        enable_thinking,
         prompts,
         forced_target_pairs,
         prompt_file_paths,
@@ -14059,12 +14071,27 @@ mod tests {
     fn chat_cli_keeps_positional_prompt_behavior() {
         let cli = parse_chat_cli(&args(&["hello"]), 0).unwrap();
         assert_eq!(cli.prompts, vec!["hello"]);
+        assert!(cli.enable_thinking);
     }
 
     #[test]
     fn chat_cli_prompt_flag_flushes_positional_prompt() {
         let cli = parse_chat_cli(&args(&["hello", "--prompt", "goodbye"]), 0).unwrap();
         assert_eq!(cli.prompts, vec!["hello", "goodbye"]);
+    }
+
+    #[test]
+    fn chat_cli_accepts_no_thinking_mode() {
+        let cli = parse_chat_cli(&args(&["--no-thinking", "--prompt", "hello"]), 0).unwrap();
+        assert_eq!(cli.prompts, vec!["hello"]);
+        assert!(!cli.enable_thinking);
+
+        let cli = parse_chat_cli(
+            &args(&["--no-thinking", "--thinking", "--prompt", "hello"]),
+            0,
+        )
+        .unwrap();
+        assert!(cli.enable_thinking);
     }
 
     #[test]
