@@ -29,8 +29,9 @@ use nn_rust_inference::{
     model::{
         Bf16Top1Plan, GreedyGenerationStep, MinistralAllLinearInt8Runtime, MinistralTextRuntime,
         Qwen35AttentionWeightLayout, RuntimeMemoryStats, TextConfig, TextLayerKind, TextModelKind,
-        qwen35_full_layer_smoke, qwen35_linear_layer_smoke, qwen35_load_layer_smoke,
-        qwen35_prefix_layers_smoke, qwen35_single_token_top1_smoke, qwen35_weight_layout_report,
+        qwen35_full_layer_smoke, qwen35_generate_greedy_tokens, qwen35_linear_layer_smoke,
+        qwen35_load_layer_smoke, qwen35_prefix_layers_smoke, qwen35_single_token_top1_smoke,
+        qwen35_weight_layout_report,
     },
     ops, runtime,
     safetensors::{ModelTensor, ModelWeights, TensorInfo, model_tensor_alias},
@@ -7554,57 +7555,49 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
                 "Qwen3.5 token generation currently supports only greedy top1 sampling",
             ));
         }
-        if max_new_tokens != 1 || top_k != 1 {
+        if top_k != 1 {
             return Err(invalid_input(
-                "Qwen3.5 token generation currently supports exactly max_new_tokens=1 and top_k=1",
+                "Qwen3.5 token generation currently supports exactly top_k=1",
             ));
         }
-        if cli.prompts.len() != 1 || cli.prompts[0].len() != 1 {
+        if cli.prompts.len() != 1 {
             return Err(invalid_input(
-                "Qwen3.5 token generation currently supports exactly one prompt containing one token",
+                "Qwen3.5 token generation currently supports exactly one prompt",
             ));
         }
 
         let prompt = &cli.prompts[0];
         let stop_token_id = config.eos_token_id;
         let (stream, module) = cuda_handles()?;
-        let smoke = qwen35_single_token_top1_smoke(
+        let result = qwen35_generate_greedy_tokens(
             &stream,
             &module,
             &model_dir,
-            Some(config.n_layers),
-            prompt[0],
-            0,
+            prompt,
+            max_new_tokens,
+            stop_token_id,
             8,
         )?;
-        let generated_tokens = vec![smoke.top_token];
-        let mut all_tokens = prompt.clone();
-        all_tokens.extend_from_slice(&generated_tokens);
-        let finish_reason = if Some(smoke.top_token) == stop_token_id {
-            "eos"
-        } else {
-            "max-new-tokens"
-        };
 
         println!(
             "Qwen token suite: backend=bf16 decode_strategy=greedy prompts_len=1 eos_token_id={:?}",
             stop_token_id
         );
         println!(
-            "  layer_count={} linear_layers={} full_layers={} hidden_max_abs={:.8}",
-            smoke.layer_count,
-            smoke.linear_layer_count,
-            smoke.full_layer_count,
-            smoke.hidden_max_abs
+            "  linear_layers={} full_layers={} last_hidden_max_abs={:.8}",
+            result.linear_layer_count, result.full_layer_count, result.last_hidden_max_abs
         );
-        print_token_window("prompt_tokens", prompt);
-        println!("  generated_tokens={generated_tokens:?}");
-        println!("  all_tokens={all_tokens:?}");
-        println!(
-            "  top_token={} top_logit={:.8} finish_reason={}",
-            smoke.top_token, smoke.top_logit, finish_reason
-        );
-        println!("  hidden_prefix={:?}", smoke.hidden_prefix);
+        print_token_window("prompt_tokens", &result.prompt_tokens);
+        println!("  generated_tokens={:?}", result.generated_tokens);
+        println!("  all_tokens={:?}", result.all_tokens);
+        println!("  finish_reason={}", result.finish_reason);
+        for step in &result.steps {
+            println!(
+                "  step position={} input_token={} token={} logit={:.8}",
+                step.position, step.input_token, step.token_id, step.logit
+            );
+        }
+        println!("  hidden_prefix={:?}", result.last_hidden_prefix);
         return Ok(());
     }
 
