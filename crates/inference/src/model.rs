@@ -2132,6 +2132,10 @@ pub fn qwen35_generate_greedy_tokens(
         "upload lm_head",
         DeviceBuffer::from_host(stream, &output_weight),
     )?;
+    let layer_weights = phase(
+        "upload resident layer weights",
+        qwen35_upload_resident_layer_weights(stream, &weights, &config),
+    )?;
     let mut states = phase(
         "allocate decoder state",
         qwen35_allocate_decode_states(stream, &config, params, max_seq_len),
@@ -2148,12 +2152,13 @@ pub fn qwen35_generate_greedy_tokens(
     for (position, &token_id) in prompt_tokens.iter().enumerate() {
         let step = phase(
             &format!("prefill token at position {position}"),
-            qwen35_forward_token_top1_streaming(
+            qwen35_forward_token_top1_resident(
                 stream,
                 module,
                 &weights,
                 &config,
                 params,
+                &layer_weights,
                 &dev_rope_freqs,
                 &dev_norm_weight,
                 &dev_output_weight,
@@ -2207,12 +2212,13 @@ pub fn qwen35_generate_greedy_tokens(
         let decode_position = predicted_position;
         let decode = phase(
             &format!("decode token at position {decode_position}"),
-            qwen35_forward_token_top1_streaming(
+            qwen35_forward_token_top1_resident(
                 stream,
                 module,
                 &weights,
                 &config,
                 params,
+                &layer_weights,
                 &dev_rope_freqs,
                 &dev_norm_weight,
                 &dev_output_weight,
@@ -2471,12 +2477,27 @@ fn qwen35_allocate_decode_states(
     Ok(states)
 }
 
-fn qwen35_forward_token_top1_streaming(
+fn qwen35_upload_resident_layer_weights(
+    stream: &Arc<CudaStream>,
+    weights: &ModelWeights,
+    config: &TextConfig,
+) -> Result<Vec<Qwen35LayerDeviceWeights>> {
+    let mut layers = Vec::with_capacity(config.n_layers);
+    for layer in 0..config.n_layers {
+        let host = read_qwen35_layer_host_weights(weights, config, layer)?;
+        layers.push(upload_qwen35_layer_weights(stream, &host)?);
+    }
+    stream.synchronize()?;
+    Ok(layers)
+}
+
+fn qwen35_forward_token_top1_resident(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
     weights: &ModelWeights,
     config: &TextConfig,
     params: Qwen35TextParams,
+    layer_weights: &[Qwen35LayerDeviceWeights],
     dev_rope_freqs: &DeviceBuffer<f32>,
     dev_norm_weight: &DeviceBuffer<Bf16>,
     dev_output_weight: &DeviceBuffer<Bf16>,
@@ -2490,6 +2511,13 @@ fn qwen35_forward_token_top1_streaming(
         return Err(invalid_data(format!(
             "Qwen3.5 decode state has {} layers, expected {}",
             states.len(),
+            config.n_layers
+        )));
+    }
+    if layer_weights.len() != config.n_layers {
+        return Err(invalid_data(format!(
+            "Qwen3.5 resident layer weights have {} layers, expected {}",
+            layer_weights.len(),
             config.n_layers
         )));
     }
@@ -2509,8 +2537,7 @@ fn qwen35_forward_token_top1_streaming(
     let mut linear_layer_count = 0usize;
     let mut full_layer_count = 0usize;
     for layer in 0..config.n_layers {
-        let layer_host = read_qwen35_layer_host_weights(weights, config, layer)?;
-        let layer_dev = upload_qwen35_layer_weights(stream, &layer_host)?;
+        let layer_dev = &layer_weights[layer];
         let mut next_hidden = DeviceBuffer::<f32>::zeroed(stream, config.dim)?;
         match (&layer_dev.attention, &mut states[layer]) {
             (Qwen35AttentionDeviceWeights::Full(attn), Qwen35LayerDecodeState::Full(state)) => {
