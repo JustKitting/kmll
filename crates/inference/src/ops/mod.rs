@@ -23,8 +23,11 @@ pub use matmul::{
     linear_batched_i8_scaled, linear_qkv_batched_bf16, linear_qkv_batched_i8_scaled,
 };
 pub use qwen::{
-    qwen_gated_delta_decay, qwen_gated_delta_step, qwen_gated_rmsnorm_bf16,
-    qwen_linear_conv_silu_step, qwen_rmsnorm_batched_bf16, qwen_rmsnorm_bf16,
-    qwen_split_linear_qkv, qwen_split_query_gate,
+    QwenLaunchPlan, qwen_gated_delta_decay, qwen_gated_delta_decay_plan, qwen_gated_delta_step,
+    qwen_gated_delta_step_plan, qwen_gated_rmsnorm_bf16, qwen_gated_rmsnorm_bf16_plan,
+    qwen_linear_conv_silu_step, qwen_linear_conv_silu_step_plan, qwen_rmsnorm_batched_bf16,
+    qwen_rmsnorm_batched_bf16_plan, qwen_rmsnorm_bf16, qwen_rmsnorm_bf16_plan,
+    qwen_split_linear_qkv, qwen_split_linear_qkv_plan, qwen_split_query_gate,
+    qwen_split_query_gate_plan,
 };
 pub use vector::vecadd;
