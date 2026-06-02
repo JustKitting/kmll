@@ -13,10 +13,12 @@ pub use inference::{
     linear_top1_bf16_partial_count, linear_top1_bf16_rows1, linear_top1_bf16_rows2,
     linear_top1_bf16_rows8, linear_top1_i8_scaled, linear_top1_i8_scaled_partial_count,
     linear_triple_bf16, prefill_causal_attention, prepare_incremental_attention,
-    prepare_prefill_attention_batch, qwen_rmsnorm_batched_bf16, qwen_rmsnorm_bf16,
-    qwen_split_query_gate, rmsnorm, rmsnorm_batched_bf16, sigmoid_mul, silu_gate_up_bf16,
-    silu_gate_up_bf16_rows8, silu_mul, silu_mul_prefix, single_query_attention, single_token_gqa,
-    softmax_value, softmax_value_to_matrix_row, top_k_f32, write_kv_cache,
+    prepare_prefill_attention_batch, qwen_gated_delta_decay, qwen_gated_delta_step,
+    qwen_gated_rmsnorm_bf16, qwen_linear_conv_silu_step, qwen_rmsnorm_batched_bf16,
+    qwen_rmsnorm_bf16, qwen_split_linear_qkv, qwen_split_query_gate, rmsnorm, rmsnorm_batched_bf16,
+    sigmoid_mul, silu_gate_up_bf16, silu_gate_up_bf16_rows8, silu_mul, silu_mul_prefix,
+    single_query_attention, single_token_gqa, softmax_value, softmax_value_to_matrix_row,
+    top_k_f32, write_kv_cache,
 };
 pub use matmul::{
     gemm_f32, gemm_f32_bf16, gemm_f32_bf16_prefix, gemm_f32_i8_scaled_prefix,

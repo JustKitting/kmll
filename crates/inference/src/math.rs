@@ -15,6 +15,9 @@ pub struct Cos;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Exp;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Log;
+
 pub trait UnaryOp<Op, Backend>: Sized {
     fn apply(self) -> Self;
 }
@@ -59,6 +62,14 @@ where
     <T as UnaryOp<Exp, Backend>>::apply(x)
 }
 
+#[inline(always)]
+pub fn log<Backend, T>(x: T) -> T
+where
+    T: UnaryOp<Log, Backend>,
+{
+    <T as UnaryOp<Log, Backend>>::apply(x)
+}
+
 impl UnaryOp<Rsqrt, Cuda> for f32 {
     #[inline(always)]
     fn apply(self) -> Self {
@@ -91,5 +102,12 @@ impl UnaryOp<Exp, Cuda> for f32 {
     #[inline(always)]
     fn apply(self) -> Self {
         self.exp()
+    }
+}
+
+impl UnaryOp<Log, Cuda> for f32 {
+    #[inline(always)]
+    fn apply(self) -> Self {
+        self.ln()
     }
 }
