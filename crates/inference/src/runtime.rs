@@ -8,7 +8,7 @@ use cuda_core::{CudaContext, CudaModule};
 use cuda_host::LtoirError;
 
 pub fn default_artifact_name() -> &'static str {
-    "nn_rust"
+    "nn_rust_inference"
 }
 
 pub fn load_default_module(ctx: &Arc<CudaContext>) -> Result<Arc<CudaModule>, LtoirError> {
