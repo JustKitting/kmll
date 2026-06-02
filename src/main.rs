@@ -40,15 +40,29 @@ const DEFAULT_MINISTRAL_DIR: &str = "models/Ministral-3-8B-Reasoning-2512";
 const DEFAULT_QWEN3_06B_DIR: &str =
     "models/Qwen3-0.6B-GSM8K-verl-atropos-adv";
 
-fn main() {
-    if let Err(error) = run() {
+#[tokio::main(flavor = "multi_thread")]
+async fn main() {
+    if let Err(error) = run().await {
         eprintln!("error: {error}");
         process::exit(1);
     }
 }
 
-fn run() -> AppResult<()> {
-    let mut args: Vec<String> = env::args().skip(1).collect();
+async fn run() -> AppResult<()> {
+    let args: Vec<String> = env::args().skip(1).collect();
+    run_cli_async(args).await
+}
+
+async fn run_cli_async(args: Vec<String>) -> AppResult<()> {
+    let result =
+        tokio::task::spawn_blocking(move || run_cli(args).map_err(|error| error.to_string()))
+            .await
+            .map_err(|error| io::Error::other(format!("async CLI task failed: {error}")))?;
+
+    result.map_err(|error| io::Error::other(error).into())
+}
+
+fn run_cli(mut args: Vec<String>) -> AppResult<()> {
     let command = if args.is_empty() {
         "smoke".to_string()
     } else {
