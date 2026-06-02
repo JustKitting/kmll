@@ -3611,19 +3611,11 @@ fn qwen35_run_full_attention_layer_with_cache(
         config.head_dim,
         &mut scratch.query_rot,
     )?;
-    ops::apply_rope(
+    ops::apply_rope_write_kv_cache(
         stream,
         module,
         &scratch.key_normed,
         dev_rope_freqs,
-        position,
-        config.head_dim,
-        &mut scratch.key_rot,
-    )?;
-    ops::write_kv_cache(
-        stream,
-        module,
-        &scratch.key_rot,
         position,
         max_seq_len,
         config.n_kv_heads,
@@ -4498,7 +4490,6 @@ struct Qwen35FullAttentionForwardScratch {
     key_normed: DeviceBuffer<f32>,
     value: DeviceBuffer<f32>,
     query_rot: DeviceBuffer<f32>,
-    key_rot: DeviceBuffer<f32>,
     attention_heads: DeviceBuffer<f32>,
     gated_attention_heads: DeviceBuffer<f32>,
     attention_delta: DeviceBuffer<f32>,
@@ -4520,7 +4511,6 @@ impl Qwen35FullAttentionForwardScratch {
             key_normed: DeviceBuffer::<f32>::zeroed(stream, kv_len)?,
             value: DeviceBuffer::<f32>::zeroed(stream, kv_len)?,
             query_rot: DeviceBuffer::<f32>::zeroed(stream, q_len)?,
-            key_rot: DeviceBuffer::<f32>::zeroed(stream, kv_len)?,
             attention_heads: DeviceBuffer::<f32>::zeroed(stream, q_len)?,
             gated_attention_heads: DeviceBuffer::<f32>::zeroed(stream, q_len)?,
             attention_delta: DeviceBuffer::<f32>::zeroed(stream, config.dim)?,
@@ -4539,7 +4529,6 @@ impl Qwen35FullAttentionForwardScratch {
             + self.key_normed.num_bytes()
             + self.value.num_bytes()
             + self.query_rot.num_bytes()
-            + self.key_rot.num_bytes()
             + self.attention_heads.num_bytes()
             + self.gated_attention_heads.num_bytes()
             + self.attention_delta.num_bytes()
