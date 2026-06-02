@@ -10,7 +10,10 @@ use std::{
     time::Instant,
 };
 
+mod cuda_worker;
+
 use cuda_core::{CudaContext, CudaModule, CudaStream, DeviceBuffer};
+use cuda_worker::CudaWorkerPool;
 use nn_rust_inference::{
     dtypes::{Bf16, DType},
     inference::{
@@ -54,21 +57,26 @@ async fn run() -> AppResult<()> {
 }
 
 async fn run_cli_async(args: Vec<String>) -> AppResult<()> {
-    let result =
-        tokio::task::spawn_blocking(move || run_cli(args).map_err(|error| error.to_string()))
-            .await
-            .map_err(|error| io::Error::other(format!("async CLI task failed: {error}")))?;
-
-    result.map_err(|error| io::Error::other(error).into())
-}
-
-fn run_cli(mut args: Vec<String>) -> AppResult<()> {
+    let mut args = args;
     let command = if args.is_empty() {
         "smoke".to_string()
     } else {
         args.remove(0)
     };
 
+    if matches!(command.as_str(), "smoke-workers" | "worker-smoke") {
+        return run_smoke_workers(&args).await;
+    }
+
+    let result = tokio::task::spawn_blocking(move || {
+        run_cli_command(command, args).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| io::Error::other(format!("async CLI task failed: {error}")))?;
+    result.map_err(|error| io::Error::other(error).into())
+}
+
+fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
     match command.as_str() {
         "smoke" => run_smoke(),
         "gemm-stress" | "matmul-stress" => run_gemm_stress(&args),
@@ -203,7 +211,7 @@ fn run_cli(mut args: Vec<String>) -> AppResult<()> {
         "ministral-chat-exported-compare" => run_ministral_chat_exported_compare(&args),
         "ministral-chat-compare" => run_ministral_chat_compare(&args),
         other => Err(invalid_input(format!(
-            "unknown command {other:?}; expected `smoke`, `gemm-stress`, `ministral-gemm-stress`, `decode-matvec-bench`, `logit-stress`, `attention-stress`, \
+            "unknown command {other:?}; expected `smoke`, `smoke-workers`, `gemm-stress`, `ministral-gemm-stress`, `decode-matvec-bench`, `logit-stress`, `attention-stress`, \
              `ministral-bf16-prefill-bench`, `ministral-bf16-decode-bench`, \
              `ministral-exported-decode-bench`, `ministral-exported-prefill-compare`, \
              `ministral-bf16-prefill-compare`, \
@@ -254,6 +262,39 @@ fn run_smoke() -> AppResult<()> {
     run_vecadd(&stream, &module)?;
 
     println!("all tests passed");
+    Ok(())
+}
+
+async fn run_smoke_workers(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let worker_count = parse_optional_usize(args, &mut index, 3, "worker_count")?;
+    let queue_depth = parse_optional_usize(args, &mut index, 8, "queue_depth")?;
+    if index != args.len() {
+        return Err(invalid_input(
+            "smoke-workers accepts at most [worker_count] [queue_depth]",
+        ));
+    }
+    if worker_count == 0 {
+        return Err(invalid_input("smoke-workers worker_count must be nonzero"));
+    }
+    if queue_depth == 0 {
+        return Err(invalid_input("smoke-workers queue_depth must be nonzero"));
+    }
+
+    let device_index = cuda_device_index_from_env()?;
+    let pool = CudaWorkerPool::new(worker_count, queue_depth, device_index)?;
+    let relu =
+        pool.submit(|stream, module| run_relu(stream, module).map_err(|error| error.to_string()));
+    let swiglu =
+        pool.submit(|stream, module| run_swiglu(stream, module).map_err(|error| error.to_string()));
+    let vecadd =
+        pool.submit(|stream, module| run_vecadd(stream, module).map_err(|error| error.to_string()));
+    tokio::try_join!(relu, swiglu, vecadd)?;
+
+    println!(
+        "worker smoke passed: workers={} queue_depth={queue_depth}",
+        pool.worker_count()
+    );
     Ok(())
 }
 
@@ -8607,8 +8648,23 @@ fn run_ministral_chat_exported_compare(args: &[String]) -> AppResult<()> {
 
 fn cuda_handles() -> AppResult<(Arc<CudaStream>, Arc<CudaModule>)> {
     let device_index = cuda_device_index_from_env()?;
+    cuda_handles_for_device(device_index)
+}
+
+pub(crate) fn cuda_handles_for_device(
+    device_index: usize,
+) -> AppResult<(Arc<CudaStream>, Arc<CudaModule>)> {
     let ctx = CudaContext::new(device_index)?;
     let stream = ctx.default_stream();
+    let module = runtime::load_default_module(&ctx)?;
+    Ok((stream, module))
+}
+
+pub(crate) fn cuda_worker_handles_for_device(
+    device_index: usize,
+) -> AppResult<(Arc<CudaStream>, Arc<CudaModule>)> {
+    let ctx = CudaContext::new(device_index)?;
+    let stream = ctx.new_stream()?;
     let module = runtime::load_default_module(&ctx)?;
     Ok((stream, module))
 }
