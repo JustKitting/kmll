@@ -7,6 +7,7 @@ edition = "2024"
 members = [
     ".",
     "crates/inference",
+    "crates/profiling",
     "crates/quantization",
 ]
 resolver = "3"
@@ -14,5 +15,6 @@ resolver = "3"
 [dependencies]
 cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", tag = "v0.1.0" }
 nn-rust-inference = { path = "crates/inference" }
+nn-rust-profiling = { path = "crates/profiling" }
 nn-rust-quantization = { path = "crates/quantization" }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "sync"] }

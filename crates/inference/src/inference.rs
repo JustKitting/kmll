@@ -2,10 +2,11 @@ use std::{
     io::{self, ErrorKind},
     path::Path,
     sync::Arc,
-    time::Instant,
 };
 
 use cuda_core::{CudaModule, CudaStream};
+pub use nn_rust_profiling::GenerationTimings;
+use nn_rust_profiling::ProfileTimer;
 
 use crate::{
     chat,
@@ -377,33 +378,6 @@ impl GenerationFinishReason {
             Self::MaxNewTokens => None,
             Self::StopToken(token_id) => Some(token_id),
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct GenerationTimings {
-    pub prefill_seconds: f64,
-    pub decode_seconds: f64,
-}
-
-impl GenerationTimings {
-    pub fn new(prefill_seconds: f64, decode_seconds: f64) -> Self {
-        Self {
-            prefill_seconds,
-            decode_seconds,
-        }
-    }
-
-    pub fn total_seconds(self) -> f64 {
-        self.prefill_seconds + self.decode_seconds
-    }
-
-    pub fn decode_tokens_per_second(self, generated_token_count: usize) -> Option<f64> {
-        tokens_per_second(generated_token_count, self.decode_seconds)
-    }
-
-    pub fn total_tokens_per_second(self, generated_token_count: usize) -> Option<f64> {
-        tokens_per_second(generated_token_count, self.total_seconds())
     }
 }
 
@@ -1459,7 +1433,7 @@ impl MinistralGenerationBackendSession {
             }
         }
 
-        let prefill_start = Instant::now();
+        let prefill_timer = ProfileTimer::start();
         prefill_runtime_for_request(
             self,
             prompt_tokens,
@@ -1467,17 +1441,17 @@ impl MinistralGenerationBackendSession {
             "backend generation request",
         )?;
         self.synchronize()?;
-        let prefill_seconds = prefill_start.elapsed().as_secs_f64();
+        let prefill_seconds = prefill_timer.elapsed_seconds();
         let memory_stats = self.memory_stats();
         let backend = self.backend();
-        let decode_start = Instant::now();
+        let decode_timer = ProfileTimer::start();
         let steps = self.generate_greedy_until(
             options.max_new_tokens,
             options.top_k,
             options.stop_token_id,
         )?;
         self.synchronize()?;
-        let decode_seconds = decode_start.elapsed().as_secs_f64();
+        let decode_seconds = decode_timer.elapsed_seconds();
         let all_tokens = self.tokens().to_vec();
 
         Ok(GenerationResult {
@@ -1512,7 +1486,7 @@ impl MinistralGenerationBackendSession {
             options.max_new_tokens,
             "backend sampled generation request",
         )?;
-        let prefill_start = Instant::now();
+        let prefill_timer = ProfileTimer::start();
         prefill_runtime_for_request(
             self,
             prompt_tokens,
@@ -1520,10 +1494,10 @@ impl MinistralGenerationBackendSession {
             "backend sampled generation request",
         )?;
         self.synchronize()?;
-        let prefill_seconds = prefill_start.elapsed().as_secs_f64();
+        let prefill_seconds = prefill_timer.elapsed_seconds();
         let memory_stats = self.memory_stats();
         let backend = self.backend();
-        let decode_start = Instant::now();
+        let decode_timer = ProfileTimer::start();
         let steps = self.generate_top_k_sample_until(
             options.max_new_tokens,
             options.top_k,
@@ -1531,7 +1505,7 @@ impl MinistralGenerationBackendSession {
             sampling,
         )?;
         self.synchronize()?;
-        let decode_seconds = decode_start.elapsed().as_secs_f64();
+        let decode_seconds = decode_timer.elapsed_seconds();
         let all_tokens = self.tokens().to_vec();
 
         Ok(GenerationResult {
@@ -6476,21 +6450,21 @@ where
 {
     let requested_seq_len =
         requested_seq_len_for_prompt(prompt_tokens, options.max_new_tokens, context)?;
-    let prefill_start = Instant::now();
+    let prefill_timer = ProfileTimer::start();
     prefill_runtime_for_request(runtime, prompt_tokens, requested_seq_len, context)?;
     runtime.synchronize()?;
-    let prefill_seconds = prefill_start.elapsed().as_secs_f64();
+    let prefill_seconds = prefill_timer.elapsed_seconds();
     let memory_stats = runtime.memory_stats();
     let backend = runtime.backend();
 
-    let decode_start = Instant::now();
+    let decode_timer = ProfileTimer::start();
     let steps = runtime.generate_greedy_until(
         options.max_new_tokens,
         options.top_k,
         options.stop_token_id,
     )?;
     runtime.synchronize()?;
-    let decode_seconds = decode_start.elapsed().as_secs_f64();
+    let decode_seconds = decode_timer.elapsed_seconds();
     let all_tokens = runtime.tokens().to_vec();
 
     Ok(GenerationResult {
@@ -6521,20 +6495,20 @@ fn run_bf16_top1_generation_for_request(
     validate_sequence_capacity(requested_seq_len, runtime.max_seq_len(), context)?;
     runtime.reset_sequence();
 
-    let prefill_start = Instant::now();
+    let prefill_timer = ProfileTimer::start();
     let initial_top1 = runtime.prefill_top1(prompt_tokens)?;
     runtime.synchronize()?;
-    let prefill_seconds = prefill_start.elapsed().as_secs_f64();
+    let prefill_seconds = prefill_timer.elapsed_seconds();
     let memory_stats = runtime.memory_stats();
 
-    let decode_start = Instant::now();
+    let decode_timer = ProfileTimer::start();
     let steps = runtime.generate_greedy_until_from_top1(
         options.max_new_tokens,
         options.stop_token_id,
         initial_top1,
     )?;
     runtime.synchronize()?;
-    let decode_seconds = decode_start.elapsed().as_secs_f64();
+    let decode_seconds = decode_timer.elapsed_seconds();
     let all_tokens = runtime.tokens().to_vec();
 
     Ok(Some(GenerationResult {
@@ -6763,7 +6737,7 @@ where
         options.max_new_tokens,
         "sampled chat request",
     )?;
-    let prefill_start = Instant::now();
+    let prefill_timer = ProfileTimer::start();
     prefill_runtime_for_request(
         runtime,
         &prompt_tokens,
@@ -6771,11 +6745,11 @@ where
         "sampled chat request",
     )?;
     runtime.synchronize()?;
-    let prefill_seconds = prefill_start.elapsed().as_secs_f64();
+    let prefill_seconds = prefill_timer.elapsed_seconds();
 
     let backend = runtime.backend();
     let memory_stats = runtime.memory_stats();
-    let decode_start = Instant::now();
+    let decode_timer = ProfileTimer::start();
     let steps = generate_sampled_top_k_until(
         runtime,
         options.max_new_tokens,
@@ -6784,7 +6758,7 @@ where
         sampling,
     )?;
     runtime.synchronize()?;
-    let decode_seconds = decode_start.elapsed().as_secs_f64();
+    let decode_seconds = decode_timer.elapsed_seconds();
     let all_tokens = runtime.tokens().to_vec();
     let generated_tokens = all_tokens[prompt_tokens.len()..].to_vec();
     let generated_text = tokenizer.decode_lossy(&generated_tokens)?;
@@ -7033,11 +7007,6 @@ fn generation_finish_reason(
     stop_token_id: Option<u32>,
 ) -> GenerationFinishReason {
     generation_finish_reason_from_last_token(steps.last().map(|step| step.token_id), stop_token_id)
-}
-
-fn tokens_per_second(token_count: usize, seconds: f64) -> Option<f64> {
-    (token_count > 0 && seconds > 0.0 && seconds.is_finite())
-        .then_some(token_count as f64 / seconds)
 }
 
 fn generation_finish_reason_from_last_token(

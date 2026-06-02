@@ -38,6 +38,7 @@ use nn_rust_inference::{
     safetensors::{ModelTensor, ModelWeights, TensorInfo, model_tensor_alias},
     tokenizer::{QwenByteLevelBpeTokenizer, TekkenTokenizer},
 };
+use nn_rust_profiling::ProfileTimer;
 use nn_rust_quantization::RowwiseScaledI8Matrix;
 
 type AppResult<T> = std::result::Result<T, Box<dyn Error>>;
@@ -2936,23 +2937,11 @@ fn accumulate_gemm_stats(
 }
 
 fn tokens_per_second(token_count: usize, seconds: f64) -> f64 {
-    if seconds > 0.0 {
-        token_count as f64 / seconds
-    } else {
-        f64::INFINITY
-    }
+    nn_rust_profiling::tokens_per_second_or_zero(token_count, seconds)
 }
 
 fn median_f64(values: &[f64]) -> f64 {
-    assert!(!values.is_empty(), "median requires at least one value");
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.total_cmp(b));
-    let mid = sorted.len() / 2;
-    if sorted.len() % 2 == 0 {
-        (sorted[mid - 1] + sorted[mid]) * 0.5
-    } else {
-        sorted[mid]
-    }
+    nn_rust_profiling::median_f64(values).expect("median requires finite nonempty values")
 }
 
 fn run_single_query_attention_stress_case(
@@ -7552,9 +7541,9 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
 
     let tokenizer = QwenByteLevelBpeTokenizer::open(&model_dir)?;
     let (stream, module) = cuda_handles()?;
-    let runtime_start = Instant::now();
+    let runtime_timer = ProfileTimer::start();
     let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
-    let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
+    let runtime_init_seconds = runtime_timer.elapsed_seconds();
     let memory = runtime.memory_stats();
     let stop_token_ids = qwen_with_stop_token_overrides(
         qwen_text_stop_token_ids(runtime.config(), &tokenizer),
@@ -7580,7 +7569,7 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
         }
         let max_seq_len = qwen_generation_max_seq_len(prompt_tokens.len(), max_new_tokens)?;
         let decode_state_bytes = runtime.decode_state_bytes(max_seq_len)?;
-        let generation_start = Instant::now();
+        let generation_timer = ProfileTimer::start();
         let result = qwen35_generate_cli_tokens(
             &mut runtime,
             &prompt_tokens,
@@ -7589,7 +7578,7 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
             &stop_token_ids,
             cli.sampling,
         )?;
-        let generation_seconds = generation_start.elapsed().as_secs_f64();
+        let generation_seconds = generation_timer.elapsed_seconds();
         let generated_tokens_per_second =
             tokens_per_second(result.generated_tokens.len(), generation_seconds);
         let generated_text = tokenizer.decode_lossy(&result.generated_tokens)?;
@@ -7648,9 +7637,9 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
 
     let tokenizer = QwenByteLevelBpeTokenizer::open(&model_dir)?;
     let (stream, module) = cuda_handles()?;
-    let runtime_start = Instant::now();
+    let runtime_timer = ProfileTimer::start();
     let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
-    let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
+    let runtime_init_seconds = runtime_timer.elapsed_seconds();
     let memory = runtime.memory_stats();
     let stop_token_ids = qwen_with_stop_token_overrides(
         qwen_text_stop_token_ids(runtime.config(), &tokenizer),
@@ -7686,7 +7675,7 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
         }
         let max_seq_len = qwen_generation_max_seq_len(prompt_tokens.len(), max_new_tokens)?;
         let decode_state_bytes = runtime.decode_state_bytes(max_seq_len)?;
-        let generation_start = Instant::now();
+        let generation_timer = ProfileTimer::start();
         let result = qwen35_generate_cli_tokens(
             &mut runtime,
             &prompt_tokens,
@@ -7695,7 +7684,7 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
             &stop_token_ids,
             cli.sampling,
         )?;
-        let generation_seconds = generation_start.elapsed().as_secs_f64();
+        let generation_seconds = generation_timer.elapsed_seconds();
         let generated_tokens_per_second =
             tokens_per_second(result.generated_tokens.len(), generation_seconds);
         let generated_text = tokenizer.decode_lossy(&result.generated_tokens)?;
@@ -7867,9 +7856,9 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
             &cli.stop_token_ids,
         );
         let (stream, module) = cuda_handles()?;
-        let runtime_start = Instant::now();
+        let runtime_timer = ProfileTimer::start();
         let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
-        let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
+        let runtime_init_seconds = runtime_timer.elapsed_seconds();
         let memory = runtime.memory_stats();
 
         println!(
@@ -7886,7 +7875,7 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
         for (prompt_index, prompt) in cli.prompts.iter().enumerate() {
             let max_seq_len = qwen_generation_max_seq_len(prompt.len(), max_new_tokens)?;
             let decode_state_bytes = runtime.decode_state_bytes(max_seq_len)?;
-            let generation_start = Instant::now();
+            let generation_timer = ProfileTimer::start();
             let result = qwen35_generate_cli_tokens(
                 &mut runtime,
                 prompt,
@@ -7895,7 +7884,7 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
                 &stop_token_ids,
                 cli.sampling,
             )?;
-            let generation_seconds = generation_start.elapsed().as_secs_f64();
+            let generation_seconds = generation_timer.elapsed_seconds();
             let generated_tokens_per_second =
                 tokens_per_second(result.generated_tokens.len(), generation_seconds);
 
