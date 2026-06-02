@@ -2300,6 +2300,7 @@ fn qwen35_generate_greedy_tokens_with_runtime(
     let mut last_prompt_top = None;
     let mut last_hidden_host = Vec::new();
     for (position, &token_id) in prompt_tokens.iter().enumerate() {
+        let copy_hidden = position + 1 == prompt_tokens.len();
         let step = phase(
             &format!("prefill token at position {position}"),
             qwen35_forward_token_top1_resident(
@@ -2318,12 +2319,13 @@ fn qwen35_generate_greedy_tokens_with_runtime(
                 max_seq_len,
                 position,
                 token_id,
+                copy_hidden,
             ),
         )?;
         linear_layer_count = step.linear_layer_count;
         full_layer_count = step.full_layer_count;
-        if position + 1 == prompt_tokens.len() {
-            last_hidden_host = step.hidden_host;
+        if let Some(hidden_host) = step.hidden_host {
+            last_hidden_host = hidden_host;
             last_prompt_top = Some((step.top_token, step.top_logit));
         }
     }
@@ -2379,11 +2381,14 @@ fn qwen35_generate_greedy_tokens_with_runtime(
                 max_seq_len,
                 decode_position,
                 next_token,
+                true,
             ),
         )?;
         linear_layer_count = decode.linear_layer_count;
         full_layer_count = decode.full_layer_count;
-        last_hidden_host = decode.hidden_host;
+        if let Some(hidden_host) = decode.hidden_host {
+            last_hidden_host = hidden_host;
+        }
         next_token = decode.top_token;
         next_logit = decode.top_logit;
     }
@@ -2481,11 +2486,14 @@ fn qwen35_generate_sampled_tokens_with_runtime(
                     position,
                     token_id,
                     top_k,
+                    true,
                 ),
             )?;
             linear_layer_count = step.linear_layer_count;
             full_layer_count = step.full_layer_count;
-            last_hidden_host = step.hidden_host;
+            if let Some(hidden_host) = step.hidden_host {
+                last_hidden_host = hidden_host;
+            }
             last_prompt_top_logits = Some(step.top_logits);
         } else {
             let step = phase(
@@ -2567,11 +2575,14 @@ fn qwen35_generate_sampled_tokens_with_runtime(
                 decode_position,
                 next_token,
                 top_k,
+                true,
             ),
         )?;
         linear_layer_count = decode.linear_layer_count;
         full_layer_count = decode.full_layer_count;
-        last_hidden_host = decode.hidden_host;
+        if let Some(hidden_host) = decode.hidden_host {
+            last_hidden_host = hidden_host;
+        }
         let sampled = qwen35_sample_from_top_logits(decode.top_logits, sampling, &mut rng)?;
         next_token = sampled.0;
         next_logit = sampled.1;
@@ -3151,7 +3162,6 @@ fn qwen35_forward_token_hidden_resident(
                 )));
             }
         }
-        stream.synchronize()?;
         current_is_a = !current_is_a;
     }
 
@@ -3160,14 +3170,9 @@ fn qwen35_forward_token_hidden_resident(
     } else {
         Qwen35HiddenSlot::B
     };
-    let hidden_host = match hidden_slot {
-        Qwen35HiddenSlot::A => hidden_a.to_host_vec(stream)?,
-        Qwen35HiddenSlot::B => hidden_b.to_host_vec(stream)?,
-    };
 
     Ok(Qwen35ForwardTokenHidden {
         hidden_slot,
-        hidden_host,
         linear_layer_count,
         full_layer_count,
     })
@@ -3189,6 +3194,7 @@ fn qwen35_forward_token_top1_resident(
     max_seq_len: usize,
     position: usize,
     token_id: u32,
+    copy_hidden: bool,
 ) -> Result<Qwen35ForwardTokenTop1> {
     let hidden = qwen35_forward_token_hidden_resident(
         stream,
@@ -3220,11 +3226,15 @@ fn qwen35_forward_token_top1_resident(
         &mut output_scratch.partial_logits,
         &mut output_scratch.packed_top,
     )?;
-    stream.synchronize()?;
+    let hidden_host = if copy_hidden {
+        Some(hidden_dev.to_host_vec(stream)?)
+    } else {
+        None
+    };
     Ok(Qwen35ForwardTokenTop1 {
         top_token,
         top_logit,
-        hidden_host: hidden.hidden_host,
+        hidden_host,
         linear_layer_count: hidden.linear_layer_count,
         full_layer_count: hidden.full_layer_count,
     })
@@ -3247,6 +3257,7 @@ fn qwen35_forward_token_topk_resident(
     position: usize,
     token_id: u32,
     top_k: usize,
+    copy_hidden: bool,
 ) -> Result<Qwen35ForwardTokenTopK> {
     let hidden = qwen35_forward_token_hidden_resident(
         stream,
@@ -3277,9 +3288,14 @@ fn qwen35_forward_token_topk_resident(
         &mut output_scratch.logits,
         top_k,
     )?;
+    let hidden_host = if copy_hidden {
+        Some(hidden_dev.to_host_vec(stream)?)
+    } else {
+        None
+    };
     Ok(Qwen35ForwardTokenTopK {
         top_logits,
-        hidden_host: hidden.hidden_host,
+        hidden_host,
         linear_layer_count: hidden.linear_layer_count,
         full_layer_count: hidden.full_layer_count,
     })
@@ -4325,14 +4341,14 @@ struct Qwen35PrefixLayerDeviceRun {
 struct Qwen35ForwardTokenTop1 {
     top_token: u32,
     top_logit: f32,
-    hidden_host: Vec<f32>,
+    hidden_host: Option<Vec<f32>>,
     linear_layer_count: usize,
     full_layer_count: usize,
 }
 
 struct Qwen35ForwardTokenTopK {
     top_logits: Vec<(u32, f32)>,
-    hidden_host: Vec<f32>,
+    hidden_host: Option<Vec<f32>>,
     linear_layer_count: usize,
     full_layer_count: usize,
 }
@@ -4345,7 +4361,6 @@ enum Qwen35HiddenSlot {
 
 struct Qwen35ForwardTokenHidden {
     hidden_slot: Qwen35HiddenSlot,
-    hidden_host: Vec<f32>,
     linear_layer_count: usize,
     full_layer_count: usize,
 }
