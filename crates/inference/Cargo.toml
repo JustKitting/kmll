@@ -8,3 +8,4 @@ cuda-device = { git = "https://github.com/NVlabs/cuda-oxide.git", tag = "v0.1.0"
 cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", tag = "v0.1.0" }
 cuda-host = { git = "https://github.com/NVlabs/cuda-oxide.git", tag = "v0.1.0" }
 cuda-bindings = { git = "https://github.com/NVlabs/cuda-oxide.git", tag = "v0.1.0" }
+serde_json = "1.0.150"

@@ -35,7 +35,7 @@ use nn_rust_inference::{
     },
     ops, runtime,
     safetensors::{ModelTensor, ModelWeights, TensorInfo, model_tensor_alias},
-    tokenizer::TekkenTokenizer,
+    tokenizer::{QwenByteLevelBpeTokenizer, TekkenTokenizer},
 };
 use nn_rust_quantization::RowwiseScaledI8Matrix;
 
@@ -142,6 +142,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         "qwen-single-token-top1-smoke" | "qwen3-5-single-token-top1-smoke" => {
             run_qwen_single_token_top1_smoke(&args)
         }
+        "qwen-text-generate" | "qwen-text-suite" => run_qwen_text_suite(&args),
         "ministral-eval" => run_ministral_eval(&args),
         "ministral-eval-exported" => run_ministral_eval_exported(&args),
         "ministral-chat" | "ministral-chat-suite" => run_ministral_chat_suite(&args),
@@ -250,7 +251,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
              `ministral-tokens-generate`, `ministral-tokens-exported-generate`, \
              `qwen-weight-smoke`, `qwen-layer-load-smoke`, `qwen-full-layer-smoke`, \
              `qwen-linear-layer-smoke`, `qwen-prefix-layers-smoke`, \
-             `qwen-single-token-top1-smoke`, `qwen-tokens-generate`, \
+             `qwen-single-token-top1-smoke`, `qwen-text-generate`, `qwen-tokens-generate`, \
              `ministral-tokens-logits`, `ministral-tokens-exported-logits`, \
              `ministral-tokens-trace`, `ministral-tokens-exported-trace`, \
              `ministral-tokens-eval`, `ministral-tokens-eval-exported`, \
@@ -7529,6 +7530,104 @@ fn run_qwen_single_token_top1_smoke(args: &[String]) -> AppResult<()> {
     Ok(())
 }
 
+fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let model_dir = parse_optional_existing_model_dir(args, &mut index, DEFAULT_QWEN3_6_27B_DIR);
+    let max_new_tokens = parse_optional_usize(args, &mut index, 1, "max_new_tokens")?;
+    let top_k = parse_optional_usize(args, &mut index, 1, "top_k")?;
+    let cli = parse_chat_cli(args, index)?;
+    if cli.report_path.is_some() {
+        return Err(invalid_input(
+            "qwen text reports need a Qwen report schema; omit --report for now",
+        ));
+    }
+    if cli.sampling.is_some() {
+        return Err(invalid_input(
+            "Qwen3.5 text generation currently supports only greedy top1 sampling",
+        ));
+    }
+    if top_k != 1 {
+        return Err(invalid_input(
+            "Qwen3.5 text generation currently supports exactly top_k=1",
+        ));
+    }
+    if cli.prompts.len() != 1 {
+        return Err(invalid_input(
+            "Qwen3.5 text generation currently supports exactly one prompt",
+        ));
+    }
+
+    let config = TextConfig::from_model_dir(&model_dir)?;
+    if config.model_kind != TextModelKind::Qwen35Text {
+        return Err(invalid_input(format!(
+            "model {} is not a Qwen3.5 text config",
+            model_dir.display()
+        )));
+    }
+
+    let tokenizer = QwenByteLevelBpeTokenizer::open(&model_dir)?;
+    let prompt_text = &cli.prompts[0];
+    let prompt_tokens = tokenizer.encode_lossy(prompt_text, false)?;
+    if prompt_tokens.is_empty() {
+        return Err(invalid_input("Qwen text prompt encoded to zero tokens"));
+    }
+    let stop_token_ids = qwen_text_stop_token_ids(&config, &tokenizer);
+    let (stream, module) = cuda_handles()?;
+    let result = qwen35_generate_greedy_tokens(
+        &stream,
+        &module,
+        &model_dir,
+        &prompt_tokens,
+        max_new_tokens,
+        &stop_token_ids,
+        8,
+    )?;
+    let generated_text = tokenizer.decode_lossy(&result.generated_tokens)?;
+    let all_text = tokenizer.decode_lossy(&result.all_tokens)?;
+
+    println!(
+        "Qwen text suite: backend=bf16 decode_strategy=greedy prompts_len=1 stop_token_ids={:?}",
+        stop_token_ids
+    );
+    println!("  prompt={prompt_text:?}");
+    print_token_window("prompt_tokens", &result.prompt_tokens);
+    println!("  generated_tokens={:?}", result.generated_tokens);
+    println!("  generated_text={generated_text:?}");
+    println!("  all_text={all_text:?}");
+    println!("  finish_reason={}", result.finish_reason);
+    println!(
+        "  linear_layers={} full_layers={} last_hidden_max_abs={:.8}",
+        result.linear_layer_count, result.full_layer_count, result.last_hidden_max_abs
+    );
+    for step in &result.steps {
+        println!(
+            "  step position={} input_token={} token={} logit={:.8}",
+            step.position, step.input_token, step.token_id, step.logit
+        );
+    }
+    println!("  hidden_prefix={:?}", result.last_hidden_prefix);
+    Ok(())
+}
+
+fn qwen_text_stop_token_ids(
+    config: &TextConfig,
+    tokenizer: &QwenByteLevelBpeTokenizer,
+) -> Vec<u32> {
+    let mut ids = Vec::new();
+    push_unique_token_id(&mut ids, config.eos_token_id);
+    push_unique_token_id(&mut ids, tokenizer.eos_token_id());
+    push_unique_token_id(&mut ids, tokenizer.im_end_token_id());
+    ids
+}
+
+fn push_unique_token_id(ids: &mut Vec<u32>, token_id: Option<u32>) {
+    if let Some(token_id) = token_id
+        && !ids.contains(&token_id)
+    {
+        ids.push(token_id);
+    }
+}
+
 fn text_layer_kind_label(kind: TextLayerKind) -> &'static str {
     match kind {
         TextLayerKind::FullAttention => "full_attention",
@@ -7568,6 +7667,7 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
 
         let prompt = &cli.prompts[0];
         let stop_token_id = config.eos_token_id;
+        let stop_token_ids = stop_token_id.into_iter().collect::<Vec<_>>();
         let (stream, module) = cuda_handles()?;
         let result = qwen35_generate_greedy_tokens(
             &stream,
@@ -7575,7 +7675,7 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
             &model_dir,
             prompt,
             max_new_tokens,
-            stop_token_id,
+            &stop_token_ids,
             8,
         )?;
 
@@ -9102,6 +9202,17 @@ fn parse_optional_non_numeric_model_dir(
     } else {
         PathBuf::from(default)
     }
+}
+
+fn parse_optional_existing_model_dir(args: &[String], index: &mut usize, default: &str) -> PathBuf {
+    if *index < args.len() && !args[*index].starts_with("--") {
+        let path = PathBuf::from(&args[*index]);
+        if path.is_dir() || path.join("config.json").exists() {
+            *index += 1;
+            return path;
+        }
+    }
+    PathBuf::from(default)
 }
 
 fn parse_optional_export_dir(args: &[String], index: &mut usize) -> PathBuf {

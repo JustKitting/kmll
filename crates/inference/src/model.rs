@@ -2075,7 +2075,7 @@ pub fn qwen35_generate_greedy_tokens(
     model_dir: impl AsRef<Path>,
     prompt_tokens: &[u32],
     max_new_tokens: usize,
-    stop_token_id: Option<u32>,
+    stop_token_ids: &[u32],
     prefix_len: usize,
 ) -> Result<Qwen35TokenGeneration> {
     fn phase<T, E: std::fmt::Display>(label: &str, result: std::result::Result<T, E>) -> Result<T> {
@@ -2196,8 +2196,8 @@ pub fn qwen35_generate_greedy_tokens(
             token_id: next_token,
             logit: next_logit,
         });
-        if Some(next_token) == stop_token_id {
-            finish_reason = "eos".to_string();
+        if stop_token_ids.contains(&next_token) {
+            finish_reason = format!("stop-token({next_token})");
             break;
         }
         if generated_index + 1 == max_new_tokens {
