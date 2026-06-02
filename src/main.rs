@@ -28,8 +28,8 @@ use nn_rust_inference::{
     layout::{ColumnMajor, Layout2D, MatrixLayout, RowMajor},
     model::{
         Bf16Top1Plan, GreedyGenerationStep, MinistralAllLinearInt8Runtime, MinistralTextRuntime,
-        Qwen35AttentionWeightLayout, RuntimeMemoryStats, TextConfig, TextModelKind,
-        qwen35_weight_layout_report,
+        Qwen35AttentionWeightLayout, RuntimeMemoryStats, TextConfig, TextLayerKind, TextModelKind,
+        qwen35_load_layer_smoke, qwen35_weight_layout_report,
     },
     ops, runtime,
     safetensors::{ModelTensor, ModelWeights, TensorInfo, model_tensor_alias},
@@ -130,6 +130,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
             run_ministral_output_projection_export_probe(&args)
         }
         "qwen-weight-smoke" | "qwen3-5-weight-smoke" => run_qwen_weight_smoke(&args),
+        "qwen-layer-load-smoke" | "qwen3-5-layer-load-smoke" => run_qwen_layer_load_smoke(&args),
         "ministral-eval" => run_ministral_eval(&args),
         "ministral-eval-exported" => run_ministral_eval_exported(&args),
         "ministral-chat" | "ministral-chat-suite" => run_ministral_chat_suite(&args),
@@ -236,7 +237,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
              `ministral-text-forced-target-exported-compare`, `ministral-text-exported-compare`, \
              `ministral-text-compare`, \
              `ministral-tokens-generate`, `ministral-tokens-exported-generate`, \
-             `qwen-weight-smoke`, `qwen-tokens-generate`, \
+             `qwen-weight-smoke`, `qwen-layer-load-smoke`, `qwen-tokens-generate`, \
              `ministral-tokens-logits`, `ministral-tokens-exported-logits`, \
              `ministral-tokens-trace`, `ministral-tokens-exported-trace`, \
              `ministral-tokens-eval`, `ministral-tokens-eval-exported`, \
@@ -7291,6 +7292,36 @@ fn qwen35_tensor_layout_label(tensor: &nn_rust_inference::model::Qwen35TensorLay
         tensor.shape,
         tensor.byte_len
     )
+}
+
+fn run_qwen_layer_load_smoke(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let model_dir = parse_optional_non_numeric_model_dir(args, &mut index, DEFAULT_QWEN3_06B_DIR);
+    let layer = parse_optional_usize(args, &mut index, 0, "layer")?;
+    if index != args.len() {
+        return Err(invalid_input(
+            "qwen-layer-load-smoke accepts at most [model_dir] [layer]",
+        ));
+    }
+
+    let (stream, _module) = cuda_handles()?;
+    let smoke = qwen35_load_layer_smoke(&stream, &model_dir, layer)?;
+    println!(
+        "Qwen3.5 layer load smoke passed: model_dir={} layer={} kind={} host_weight_bytes={} device_weight_bytes={}",
+        model_dir.display(),
+        smoke.layer,
+        text_layer_kind_label(smoke.kind),
+        smoke.host_weight_bytes,
+        smoke.device_weight_bytes
+    );
+    Ok(())
+}
+
+fn text_layer_kind_label(kind: TextLayerKind) -> &'static str {
+    match kind {
+        TextLayerKind::FullAttention => "full_attention",
+        TextLayerKind::LinearAttention => "linear_attention",
+    }
 }
 
 fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {

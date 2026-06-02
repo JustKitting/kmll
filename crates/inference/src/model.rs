@@ -870,6 +870,14 @@ pub struct Qwen35TensorLayout {
     pub byte_len: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Qwen35LayerLoadSmoke {
+    pub layer: usize,
+    pub kind: TextLayerKind,
+    pub host_weight_bytes: usize,
+    pub device_weight_bytes: usize,
+}
+
 pub fn qwen35_weight_layout_report(
     model_dir: impl AsRef<Path>,
 ) -> Result<Qwen35WeightLayoutReport> {
@@ -1084,6 +1092,327 @@ fn qwen35_tensor_layout(
     })
 }
 
+pub fn qwen35_load_layer_smoke(
+    stream: &Arc<CudaStream>,
+    model_dir: impl AsRef<Path>,
+    layer: usize,
+) -> Result<Qwen35LayerLoadSmoke> {
+    let model_dir = model_dir.as_ref();
+    let config = TextConfig::from_model_dir(model_dir)?;
+    if config.model_kind != TextModelKind::Qwen35Text {
+        return Err(invalid_data(format!(
+            "model {} is not a Qwen3.5 text config",
+            model_dir.display()
+        )));
+    }
+    let kind = config.layer_kinds.kind(layer)?;
+    let weights = ModelWeights::open_model_dir(model_dir)?;
+    let host = read_qwen35_layer_host_weights(&weights, &config, layer)?;
+    let host_weight_bytes = qwen35_layer_host_weight_bytes(&host);
+    let device = upload_qwen35_layer_weights(stream, &host)?;
+    let device_weight_bytes = qwen35_layer_device_weight_bytes(&device);
+    stream.synchronize()?;
+
+    Ok(Qwen35LayerLoadSmoke {
+        layer,
+        kind,
+        host_weight_bytes,
+        device_weight_bytes,
+    })
+}
+
+fn read_qwen35_layer_host_weights(
+    weights: &ModelWeights,
+    config: &TextConfig,
+    layer: usize,
+) -> Result<Qwen35LayerHostWeights> {
+    let prefix = format!("model.language_model.layers.{layer}");
+    Ok(Qwen35LayerHostWeights {
+        input_layernorm: read_bf16_shape(
+            weights,
+            &format!("{prefix}.input_layernorm.weight"),
+            &[config.dim],
+        )?,
+        attention: match config.layer_kinds.kind(layer)? {
+            TextLayerKind::FullAttention => Qwen35AttentionHostWeights::Full(
+                read_qwen35_full_attention_host_weights(weights, config, &prefix)?,
+            ),
+            TextLayerKind::LinearAttention => Qwen35AttentionHostWeights::Linear(
+                read_qwen35_linear_attention_host_weights(weights, config, &prefix)?,
+            ),
+        },
+        post_attention_layernorm: read_bf16_shape(
+            weights,
+            &format!("{prefix}.post_attention_layernorm.weight"),
+            &[config.dim],
+        )?,
+        mlp: read_qwen35_mlp_host_weights(weights, config, &prefix)?,
+    })
+}
+
+fn read_qwen35_full_attention_host_weights(
+    weights: &ModelWeights,
+    config: &TextConfig,
+    prefix: &str,
+) -> Result<Qwen35FullAttentionHostWeights> {
+    let q_dim = config.n_heads * config.head_dim;
+    let kv_dim = config.n_kv_heads * config.head_dim;
+    Ok(Qwen35FullAttentionHostWeights {
+        q_proj: read_bf16_shape(
+            weights,
+            &format!("{prefix}.self_attn.q_proj.weight"),
+            &[q_dim * 2, config.dim],
+        )?,
+        k_proj: read_bf16_shape(
+            weights,
+            &format!("{prefix}.self_attn.k_proj.weight"),
+            &[kv_dim, config.dim],
+        )?,
+        v_proj: read_bf16_shape(
+            weights,
+            &format!("{prefix}.self_attn.v_proj.weight"),
+            &[kv_dim, config.dim],
+        )?,
+        o_proj: read_bf16_shape(
+            weights,
+            &format!("{prefix}.self_attn.o_proj.weight"),
+            &[config.dim, q_dim],
+        )?,
+        q_norm: read_bf16_shape(
+            weights,
+            &format!("{prefix}.self_attn.q_norm.weight"),
+            &[config.head_dim],
+        )?,
+        k_norm: read_bf16_shape(
+            weights,
+            &format!("{prefix}.self_attn.k_norm.weight"),
+            &[config.head_dim],
+        )?,
+    })
+}
+
+fn read_qwen35_linear_attention_host_weights(
+    weights: &ModelWeights,
+    config: &TextConfig,
+    prefix: &str,
+) -> Result<Qwen35LinearAttentionHostWeights> {
+    let Some(params) = config.qwen3_5 else {
+        return Err(invalid_data(
+            "Qwen3.5 linear attention parameters are missing",
+        ));
+    };
+    let qkv_dim = params.qkv_dim();
+    let value_dim = params.value_dim();
+    let value_heads = params.linear_num_value_heads;
+    Ok(Qwen35LinearAttentionHostWeights {
+        in_proj_qkv: read_bf16_shape(
+            weights,
+            &format!("{prefix}.linear_attn.in_proj_qkv.weight"),
+            &[qkv_dim, config.dim],
+        )?,
+        in_proj_z: read_bf16_shape(
+            weights,
+            &format!("{prefix}.linear_attn.in_proj_z.weight"),
+            &[value_dim, config.dim],
+        )?,
+        in_proj_a: read_bf16_shape(
+            weights,
+            &format!("{prefix}.linear_attn.in_proj_a.weight"),
+            &[value_heads, config.dim],
+        )?,
+        in_proj_b: read_bf16_shape(
+            weights,
+            &format!("{prefix}.linear_attn.in_proj_b.weight"),
+            &[value_heads, config.dim],
+        )?,
+        conv1d: read_bf16_shape(
+            weights,
+            &format!("{prefix}.linear_attn.conv1d.weight"),
+            &[qkv_dim, 1, params.linear_conv_kernel_dim],
+        )?,
+        a_log: read_bf16_shape(
+            weights,
+            &format!("{prefix}.linear_attn.A_log"),
+            &[value_heads],
+        )?,
+        dt_bias: read_bf16_shape(
+            weights,
+            &format!("{prefix}.linear_attn.dt_bias"),
+            &[value_heads],
+        )?,
+        norm: read_bf16_shape(
+            weights,
+            &format!("{prefix}.linear_attn.norm.weight"),
+            &[params.linear_value_head_dim],
+        )?,
+        out_proj: read_bf16_shape(
+            weights,
+            &format!("{prefix}.linear_attn.out_proj.weight"),
+            &[config.dim, value_dim],
+        )?,
+    })
+}
+
+fn read_qwen35_mlp_host_weights(
+    weights: &ModelWeights,
+    config: &TextConfig,
+    prefix: &str,
+) -> Result<Qwen35MlpHostWeights> {
+    Ok(Qwen35MlpHostWeights {
+        gate_proj: read_bf16_shape(
+            weights,
+            &format!("{prefix}.mlp.gate_proj.weight"),
+            &[config.hidden_dim, config.dim],
+        )?,
+        up_proj: read_bf16_shape(
+            weights,
+            &format!("{prefix}.mlp.up_proj.weight"),
+            &[config.hidden_dim, config.dim],
+        )?,
+        down_proj: read_bf16_shape(
+            weights,
+            &format!("{prefix}.mlp.down_proj.weight"),
+            &[config.dim, config.hidden_dim],
+        )?,
+    })
+}
+
+fn upload_qwen35_layer_weights(
+    stream: &Arc<CudaStream>,
+    weights: &Qwen35LayerHostWeights,
+) -> Result<Qwen35LayerDeviceWeights> {
+    Ok(Qwen35LayerDeviceWeights {
+        input_layernorm: DeviceBuffer::from_host(stream, &weights.input_layernorm)?,
+        attention: match &weights.attention {
+            Qwen35AttentionHostWeights::Full(attn) => Qwen35AttentionDeviceWeights::Full(
+                upload_qwen35_full_attention_weights(stream, attn)?,
+            ),
+            Qwen35AttentionHostWeights::Linear(attn) => Qwen35AttentionDeviceWeights::Linear(
+                upload_qwen35_linear_attention_weights(stream, attn)?,
+            ),
+        },
+        post_attention_layernorm: DeviceBuffer::from_host(
+            stream,
+            &weights.post_attention_layernorm,
+        )?,
+        mlp: upload_qwen35_mlp_weights(stream, &weights.mlp)?,
+    })
+}
+
+fn upload_qwen35_full_attention_weights(
+    stream: &Arc<CudaStream>,
+    weights: &Qwen35FullAttentionHostWeights,
+) -> Result<Qwen35FullAttentionDeviceWeights> {
+    Ok(Qwen35FullAttentionDeviceWeights {
+        q_proj: DeviceBuffer::from_host(stream, &weights.q_proj)?,
+        k_proj: DeviceBuffer::from_host(stream, &weights.k_proj)?,
+        v_proj: DeviceBuffer::from_host(stream, &weights.v_proj)?,
+        o_proj: DeviceBuffer::from_host(stream, &weights.o_proj)?,
+        q_norm: DeviceBuffer::from_host(stream, &weights.q_norm)?,
+        k_norm: DeviceBuffer::from_host(stream, &weights.k_norm)?,
+    })
+}
+
+fn upload_qwen35_linear_attention_weights(
+    stream: &Arc<CudaStream>,
+    weights: &Qwen35LinearAttentionHostWeights,
+) -> Result<Qwen35LinearAttentionDeviceWeights> {
+    Ok(Qwen35LinearAttentionDeviceWeights {
+        in_proj_qkv: DeviceBuffer::from_host(stream, &weights.in_proj_qkv)?,
+        in_proj_z: DeviceBuffer::from_host(stream, &weights.in_proj_z)?,
+        in_proj_a: DeviceBuffer::from_host(stream, &weights.in_proj_a)?,
+        in_proj_b: DeviceBuffer::from_host(stream, &weights.in_proj_b)?,
+        conv1d: DeviceBuffer::from_host(stream, &weights.conv1d)?,
+        a_log: DeviceBuffer::from_host(stream, &weights.a_log)?,
+        dt_bias: DeviceBuffer::from_host(stream, &weights.dt_bias)?,
+        norm: DeviceBuffer::from_host(stream, &weights.norm)?,
+        out_proj: DeviceBuffer::from_host(stream, &weights.out_proj)?,
+    })
+}
+
+fn upload_qwen35_mlp_weights(
+    stream: &Arc<CudaStream>,
+    weights: &Qwen35MlpHostWeights,
+) -> Result<Qwen35MlpDeviceWeights> {
+    Ok(Qwen35MlpDeviceWeights {
+        gate_proj: DeviceBuffer::from_host(stream, &weights.gate_proj)?,
+        up_proj: DeviceBuffer::from_host(stream, &weights.up_proj)?,
+        down_proj: DeviceBuffer::from_host(stream, &weights.down_proj)?,
+    })
+}
+
+fn qwen35_layer_host_weight_bytes(weights: &Qwen35LayerHostWeights) -> usize {
+    (weights.input_layernorm.len() + weights.post_attention_layernorm.len()) * size_of::<Bf16>()
+        + qwen35_attention_host_weight_bytes(&weights.attention)
+        + qwen35_mlp_host_weight_bytes(&weights.mlp)
+}
+
+fn qwen35_attention_host_weight_bytes(weights: &Qwen35AttentionHostWeights) -> usize {
+    match weights {
+        Qwen35AttentionHostWeights::Full(weights) => {
+            (weights.q_proj.len()
+                + weights.k_proj.len()
+                + weights.v_proj.len()
+                + weights.o_proj.len()
+                + weights.q_norm.len()
+                + weights.k_norm.len())
+                * size_of::<Bf16>()
+        }
+        Qwen35AttentionHostWeights::Linear(weights) => {
+            (weights.in_proj_qkv.len()
+                + weights.in_proj_z.len()
+                + weights.in_proj_a.len()
+                + weights.in_proj_b.len()
+                + weights.conv1d.len()
+                + weights.a_log.len()
+                + weights.dt_bias.len()
+                + weights.norm.len()
+                + weights.out_proj.len())
+                * size_of::<Bf16>()
+        }
+    }
+}
+
+fn qwen35_mlp_host_weight_bytes(weights: &Qwen35MlpHostWeights) -> usize {
+    (weights.gate_proj.len() + weights.up_proj.len() + weights.down_proj.len()) * size_of::<Bf16>()
+}
+
+fn qwen35_layer_device_weight_bytes(weights: &Qwen35LayerDeviceWeights) -> usize {
+    (weights.input_layernorm.len() + weights.post_attention_layernorm.len()) * size_of::<Bf16>()
+        + qwen35_attention_device_weight_bytes(&weights.attention)
+        + qwen35_mlp_device_weight_bytes(&weights.mlp)
+}
+
+fn qwen35_attention_device_weight_bytes(weights: &Qwen35AttentionDeviceWeights) -> usize {
+    match weights {
+        Qwen35AttentionDeviceWeights::Full(weights) => {
+            (weights.q_proj.len()
+                + weights.k_proj.len()
+                + weights.v_proj.len()
+                + weights.o_proj.len()
+                + weights.q_norm.len()
+                + weights.k_norm.len())
+                * size_of::<Bf16>()
+        }
+        Qwen35AttentionDeviceWeights::Linear(weights) => {
+            (weights.in_proj_qkv.len()
+                + weights.in_proj_z.len()
+                + weights.in_proj_a.len()
+                + weights.in_proj_b.len()
+                + weights.conv1d.len()
+                + weights.a_log.len()
+                + weights.dt_bias.len()
+                + weights.norm.len()
+                + weights.out_proj.len())
+                * size_of::<Bf16>()
+        }
+    }
+}
+
+fn qwen35_mlp_device_weight_bytes(weights: &Qwen35MlpDeviceWeights) -> usize {
+    (weights.gate_proj.len() + weights.up_proj.len() + weights.down_proj.len()) * size_of::<Bf16>()
+}
+
 struct LayerHostWeights {
     attention_norm: Vec<Bf16>,
     wq: Vec<Bf16>,
@@ -1098,6 +1427,45 @@ struct LayerHostWeights {
     w2: Vec<Bf16>,
 }
 
+struct Qwen35LayerHostWeights {
+    input_layernorm: Vec<Bf16>,
+    attention: Qwen35AttentionHostWeights,
+    post_attention_layernorm: Vec<Bf16>,
+    mlp: Qwen35MlpHostWeights,
+}
+
+enum Qwen35AttentionHostWeights {
+    Full(Qwen35FullAttentionHostWeights),
+    Linear(Qwen35LinearAttentionHostWeights),
+}
+
+struct Qwen35FullAttentionHostWeights {
+    q_proj: Vec<Bf16>,
+    k_proj: Vec<Bf16>,
+    v_proj: Vec<Bf16>,
+    o_proj: Vec<Bf16>,
+    q_norm: Vec<Bf16>,
+    k_norm: Vec<Bf16>,
+}
+
+struct Qwen35LinearAttentionHostWeights {
+    in_proj_qkv: Vec<Bf16>,
+    in_proj_z: Vec<Bf16>,
+    in_proj_a: Vec<Bf16>,
+    in_proj_b: Vec<Bf16>,
+    conv1d: Vec<Bf16>,
+    a_log: Vec<Bf16>,
+    dt_bias: Vec<Bf16>,
+    norm: Vec<Bf16>,
+    out_proj: Vec<Bf16>,
+}
+
+struct Qwen35MlpHostWeights {
+    gate_proj: Vec<Bf16>,
+    up_proj: Vec<Bf16>,
+    down_proj: Vec<Bf16>,
+}
+
 struct LayerDeviceWeights {
     attention_norm: DeviceBuffer<Bf16>,
     wq: DeviceBuffer<Bf16>,
@@ -1110,6 +1478,45 @@ struct LayerDeviceWeights {
     w1: DeviceBuffer<Bf16>,
     w3: DeviceBuffer<Bf16>,
     w2: DeviceBuffer<Bf16>,
+}
+
+struct Qwen35LayerDeviceWeights {
+    input_layernorm: DeviceBuffer<Bf16>,
+    attention: Qwen35AttentionDeviceWeights,
+    post_attention_layernorm: DeviceBuffer<Bf16>,
+    mlp: Qwen35MlpDeviceWeights,
+}
+
+enum Qwen35AttentionDeviceWeights {
+    Full(Qwen35FullAttentionDeviceWeights),
+    Linear(Qwen35LinearAttentionDeviceWeights),
+}
+
+struct Qwen35FullAttentionDeviceWeights {
+    q_proj: DeviceBuffer<Bf16>,
+    k_proj: DeviceBuffer<Bf16>,
+    v_proj: DeviceBuffer<Bf16>,
+    o_proj: DeviceBuffer<Bf16>,
+    q_norm: DeviceBuffer<Bf16>,
+    k_norm: DeviceBuffer<Bf16>,
+}
+
+struct Qwen35LinearAttentionDeviceWeights {
+    in_proj_qkv: DeviceBuffer<Bf16>,
+    in_proj_z: DeviceBuffer<Bf16>,
+    in_proj_a: DeviceBuffer<Bf16>,
+    in_proj_b: DeviceBuffer<Bf16>,
+    conv1d: DeviceBuffer<Bf16>,
+    a_log: DeviceBuffer<Bf16>,
+    dt_bias: DeviceBuffer<Bf16>,
+    norm: DeviceBuffer<Bf16>,
+    out_proj: DeviceBuffer<Bf16>,
+}
+
+struct Qwen35MlpDeviceWeights {
+    gate_proj: DeviceBuffer<Bf16>,
+    up_proj: DeviceBuffer<Bf16>,
+    down_proj: DeviceBuffer<Bf16>,
 }
 
 struct RowwiseScaledFfnLayerDeviceWeights {
