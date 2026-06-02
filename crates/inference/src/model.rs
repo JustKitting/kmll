@@ -960,9 +960,9 @@ impl Default for Qwen35SamplingOptions {
 pub struct Qwen35GreedyRuntime {
     stream: Arc<CudaStream>,
     module: Arc<CudaModule>,
-    weights: ModelWeights,
     config: TextConfig,
     params: Qwen35TextParams,
+    dev_tok_embeddings: DeviceBuffer<Bf16>,
     dev_rope_freqs: DeviceBuffer<f32>,
     dev_norm_weight: DeviceBuffer<Bf16>,
     dev_output_weight: DeviceBuffer<Bf16>,
@@ -1001,7 +1001,15 @@ impl Qwen35GreedyRuntime {
         };
 
         let weights = ModelWeights::open_model_dir(model_dir)?;
+        let token_embedding = phase(
+            "read token embeddings",
+            read_embedding_weight(&weights, &config),
+        )?;
         let rope_freqs = rope_frequencies(&config);
+        let dev_tok_embeddings = phase(
+            "upload token embeddings",
+            DeviceBuffer::from_host(&stream, &token_embedding),
+        )?;
         let dev_rope_freqs = phase(
             "upload rope frequencies",
             DeviceBuffer::from_host(&stream, &rope_freqs),
@@ -1020,6 +1028,7 @@ impl Qwen35GreedyRuntime {
             "upload resident layer weights",
             qwen35_upload_resident_layer_weights(&stream, &weights, &config),
         )?;
+        drop(token_embedding);
         let output_scratch = phase(
             "allocate top1 scratch",
             Qwen35OutputScratch::new(&stream, &config),
@@ -1032,9 +1041,9 @@ impl Qwen35GreedyRuntime {
         Ok(Self {
             stream,
             module,
-            weights,
             config,
             params,
+            dev_tok_embeddings,
             dev_rope_freqs,
             dev_norm_weight,
             dev_output_weight,
@@ -1054,9 +1063,9 @@ impl Qwen35GreedyRuntime {
         qwen35_generate_greedy_tokens_with_runtime(
             &self.stream,
             &self.module,
-            &self.weights,
             &self.config,
             self.params,
+            &self.dev_tok_embeddings,
             &self.dev_rope_freqs,
             &self.dev_norm_weight,
             &self.dev_output_weight,
@@ -1082,9 +1091,9 @@ impl Qwen35GreedyRuntime {
         qwen35_generate_sampled_tokens_with_runtime(
             &self.stream,
             &self.module,
-            &self.weights,
             &self.config,
             self.params,
+            &self.dev_tok_embeddings,
             &self.dev_rope_freqs,
             &self.dev_norm_weight,
             &self.dev_output_weight,
@@ -2248,9 +2257,9 @@ pub fn qwen35_generate_greedy_tokens(
 fn qwen35_generate_greedy_tokens_with_runtime(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
-    weights: &ModelWeights,
     config: &TextConfig,
     params: Qwen35TextParams,
+    dev_tok_embeddings: &DeviceBuffer<Bf16>,
     dev_rope_freqs: &DeviceBuffer<f32>,
     dev_norm_weight: &DeviceBuffer<Bf16>,
     dev_output_weight: &DeviceBuffer<Bf16>,
@@ -2306,9 +2315,9 @@ fn qwen35_generate_greedy_tokens_with_runtime(
             qwen35_forward_token_top1_resident(
                 stream,
                 module,
-                weights,
                 config,
                 params,
+                dev_tok_embeddings,
                 layer_weights,
                 dev_rope_freqs,
                 dev_norm_weight,
@@ -2368,9 +2377,9 @@ fn qwen35_generate_greedy_tokens_with_runtime(
             qwen35_forward_token_top1_resident(
                 stream,
                 module,
-                weights,
                 config,
                 params,
+                dev_tok_embeddings,
                 layer_weights,
                 dev_rope_freqs,
                 dev_norm_weight,
@@ -2419,9 +2428,9 @@ fn qwen35_generate_greedy_tokens_with_runtime(
 fn qwen35_generate_sampled_tokens_with_runtime(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
-    weights: &ModelWeights,
     config: &TextConfig,
     params: Qwen35TextParams,
+    dev_tok_embeddings: &DeviceBuffer<Bf16>,
     dev_rope_freqs: &DeviceBuffer<f32>,
     dev_norm_weight: &DeviceBuffer<Bf16>,
     dev_output_weight: &DeviceBuffer<Bf16>,
@@ -2472,9 +2481,9 @@ fn qwen35_generate_sampled_tokens_with_runtime(
                 qwen35_forward_token_topk_resident(
                     stream,
                     module,
-                    weights,
                     config,
                     params,
+                    dev_tok_embeddings,
                     layer_weights,
                     dev_rope_freqs,
                     dev_norm_weight,
@@ -2501,9 +2510,9 @@ fn qwen35_generate_sampled_tokens_with_runtime(
                 qwen35_forward_token_hidden_resident(
                     stream,
                     module,
-                    weights,
                     config,
                     params,
+                    dev_tok_embeddings,
                     layer_weights,
                     dev_rope_freqs,
                     &mut states,
@@ -2561,9 +2570,9 @@ fn qwen35_generate_sampled_tokens_with_runtime(
             qwen35_forward_token_topk_resident(
                 stream,
                 module,
-                weights,
                 config,
                 params,
+                dev_tok_embeddings,
                 layer_weights,
                 dev_rope_freqs,
                 dev_norm_weight,
@@ -3017,9 +3026,9 @@ fn qwen35_upload_resident_layer_weights(
 fn qwen35_forward_token_hidden_resident(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
-    weights: &ModelWeights,
     config: &TextConfig,
     params: Qwen35TextParams,
+    dev_tok_embeddings: &DeviceBuffer<Bf16>,
     layer_weights: &[Qwen35LayerDeviceWeights],
     dev_rope_freqs: &DeviceBuffer<f32>,
     states: &mut [Qwen35LayerDecodeState],
@@ -3056,17 +3065,14 @@ fn qwen35_forward_token_hidden_resident(
     }
     validate_token(config, token_id)?;
 
-    let token_row = read_embedding_row(weights, config, token_id)?;
-    let dev_token_row = DeviceBuffer::from_host(stream, &token_row)?;
     ops::embedding(
         stream,
         module,
-        &dev_token_row,
-        0,
+        dev_tok_embeddings,
+        token_id,
         config.dim,
         &mut forward_scratch.hidden_a,
     )?;
-    stream.synchronize()?;
 
     let Qwen35ForwardScratch {
         hidden_a,
@@ -3181,9 +3187,9 @@ fn qwen35_forward_token_hidden_resident(
 fn qwen35_forward_token_top1_resident(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
-    weights: &ModelWeights,
     config: &TextConfig,
     params: Qwen35TextParams,
+    dev_tok_embeddings: &DeviceBuffer<Bf16>,
     layer_weights: &[Qwen35LayerDeviceWeights],
     dev_rope_freqs: &DeviceBuffer<f32>,
     dev_norm_weight: &DeviceBuffer<Bf16>,
@@ -3199,9 +3205,9 @@ fn qwen35_forward_token_top1_resident(
     let hidden = qwen35_forward_token_hidden_resident(
         stream,
         module,
-        weights,
         config,
         params,
+        dev_tok_embeddings,
         layer_weights,
         dev_rope_freqs,
         states,
@@ -3243,9 +3249,9 @@ fn qwen35_forward_token_top1_resident(
 fn qwen35_forward_token_topk_resident(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
-    weights: &ModelWeights,
     config: &TextConfig,
     params: Qwen35TextParams,
+    dev_tok_embeddings: &DeviceBuffer<Bf16>,
     layer_weights: &[Qwen35LayerDeviceWeights],
     dev_rope_freqs: &DeviceBuffer<f32>,
     dev_norm_weight: &DeviceBuffer<Bf16>,
@@ -3262,9 +3268,9 @@ fn qwen35_forward_token_topk_resident(
     let hidden = qwen35_forward_token_hidden_resident(
         stream,
         module,
-        weights,
         config,
         params,
+        dev_tok_embeddings,
         layer_weights,
         dev_rope_freqs,
         states,
@@ -3961,7 +3967,6 @@ fn qwen35_run_mlp_residual_with_scratch(
         &scratch.ffn_down,
         output,
     )?;
-    stream.synchronize()?;
     Ok(())
 }
 
