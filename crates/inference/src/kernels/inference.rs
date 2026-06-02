@@ -114,6 +114,61 @@ fn rmsnorm_impl<W: AccumulateToF32<Cuda>>(
 }
 
 #[inline(always)]
+fn qwen_rmsnorm_impl<W: AccumulateToF32<Cuda>>(
+    input: &[f32],
+    weight: &[W],
+    eps: f32,
+    mut out: DisjointSlice<f32>,
+) {
+    static mut PARTIAL_SUMS: SharedArray<f32, RMSNORM_REDUCE_THREADS> = SharedArray::UNINIT;
+
+    let n = out.len();
+    if n == 0 {
+        return;
+    }
+
+    let tid = thread::threadIdx_x() as usize;
+    let block_threads = thread::blockDim_x() as usize;
+    if block_threads > RMSNORM_REDUCE_THREADS {
+        return;
+    }
+
+    let mut sum_sq = 0.0;
+    let mut i = tid;
+    while i < n {
+        let x = input[i];
+        sum_sq += x * x;
+        i += block_threads;
+    }
+
+    unsafe {
+        PARTIAL_SUMS[tid] = sum_sq;
+    }
+    thread::sync_threads();
+
+    let mut stride = block_threads / 2;
+    while stride > 0 {
+        if tid < stride {
+            unsafe {
+                PARTIAL_SUMS[tid] += PARTIAL_SUMS[tid + stride];
+            }
+        }
+        thread::sync_threads();
+        stride /= 2;
+    }
+
+    let inv_scale = unsafe { math::rsqrt::<Cuda, f32>(PARTIAL_SUMS[0] / n as f32 + eps) };
+    let mut i = tid;
+    while i < n {
+        let value = input[i] * inv_scale * (1.0 + weight[i].to_f32_accumulator());
+        unsafe {
+            *out.get_unchecked_mut(i) = value;
+        }
+        i += block_threads;
+    }
+}
+
+#[inline(always)]
 fn rmsnorm_batched_impl<W: AccumulateToF32<Cuda>>(
     input: &[f32],
     weight: &[W],
@@ -169,6 +224,69 @@ fn rmsnorm_batched_impl<W: AccumulateToF32<Cuda>>(
     let mut i = tid;
     while i < dim {
         let value = input[row_offset + i] * inv_scale * weight[i].to_f32_accumulator();
+        unsafe {
+            *out.get_unchecked_mut(row_offset + i) = value;
+        }
+        i += block_threads;
+    }
+}
+
+#[inline(always)]
+fn qwen_rmsnorm_batched_impl<W: AccumulateToF32<Cuda>>(
+    input: &[f32],
+    weight: &[W],
+    batch: u32,
+    dim: u32,
+    eps: f32,
+    mut out: DisjointSlice<f32>,
+) {
+    static mut PARTIAL_SUMS: SharedArray<f32, RMSNORM_REDUCE_THREADS> = SharedArray::UNINIT;
+
+    let row = thread::blockIdx_x() as usize;
+    if row >= batch as usize {
+        return;
+    }
+
+    let dim = dim as usize;
+    if dim == 0 {
+        return;
+    }
+
+    let tid = thread::threadIdx_x() as usize;
+    let block_threads = thread::blockDim_x() as usize;
+    if block_threads > RMSNORM_REDUCE_THREADS {
+        return;
+    }
+
+    let row_offset = row * dim;
+    let mut sum_sq = 0.0;
+    let mut i = tid;
+    while i < dim {
+        let x = input[row_offset + i];
+        sum_sq += x * x;
+        i += block_threads;
+    }
+
+    unsafe {
+        PARTIAL_SUMS[tid] = sum_sq;
+    }
+    thread::sync_threads();
+
+    let mut stride = block_threads / 2;
+    while stride > 0 {
+        if tid < stride {
+            unsafe {
+                PARTIAL_SUMS[tid] += PARTIAL_SUMS[tid + stride];
+            }
+        }
+        thread::sync_threads();
+        stride /= 2;
+    }
+
+    let inv_scale = unsafe { math::rsqrt::<Cuda, f32>(PARTIAL_SUMS[0] / dim as f32 + eps) };
+    let mut i = tid;
+    while i < dim {
+        let value = input[row_offset + i] * inv_scale * (1.0 + weight[i].to_f32_accumulator());
         unsafe {
             *out.get_unchecked_mut(row_offset + i) = value;
         }
@@ -993,6 +1111,41 @@ fn silu_mul_impl(gate: &[f32], up: &[f32], mut out: DisjointSlice<f32>) {
 
     if let Some(out_elem) = out.get_mut(idx) {
         *out_elem = math::silu::<Cuda, f32>(gate[i]) * up[i];
+    }
+}
+
+#[inline(always)]
+fn sigmoid_mul_impl(gate: &[f32], up: &[f32], mut out: DisjointSlice<f32>) {
+    let idx = thread::index_1d();
+    let i = idx.get();
+
+    if let Some(out_elem) = out.get_mut(idx) {
+        let sigmoid = 1.0 / (1.0 + math::exp::<Cuda, f32>(-gate[i]));
+        *out_elem = sigmoid * up[i];
+    }
+}
+
+#[inline(always)]
+fn qwen_split_query_gate_impl(
+    q_gate: &[f32],
+    n_heads: u32,
+    head_dim: u32,
+    mut query: DisjointSlice<f32>,
+    mut gate: DisjointSlice<f32>,
+) {
+    let idx = thread::index_1d();
+    let i = idx.get();
+    let q_len = n_heads as usize * head_dim as usize;
+
+    if i < q_len {
+        let head_dim = head_dim as usize;
+        let head = i / head_dim;
+        let dim = i - head * head_dim;
+        let src = head * head_dim * 2 + dim;
+        unsafe {
+            *query.get_unchecked_mut(i) = q_gate[src];
+            *gate.get_unchecked_mut(i) = q_gate[src + head_dim];
+        }
     }
 }
 
@@ -2006,6 +2159,11 @@ pub fn rmsnorm_bf16_kernel(input: &[f32], weight: &[Bf16], eps: f32, out: Disjoi
 }
 
 #[kernel]
+pub fn qwen_rmsnorm_bf16_kernel(input: &[f32], weight: &[Bf16], eps: f32, out: DisjointSlice<f32>) {
+    qwen_rmsnorm_impl(input, weight, eps, out);
+}
+
+#[kernel]
 pub fn rmsnorm_batched_bf16_kernel(
     input: &[f32],
     weight: &[Bf16],
@@ -2015,6 +2173,18 @@ pub fn rmsnorm_batched_bf16_kernel(
     out: DisjointSlice<f32>,
 ) {
     rmsnorm_batched_impl(input, weight, batch, dim, eps, out);
+}
+
+#[kernel]
+pub fn qwen_rmsnorm_batched_bf16_kernel(
+    input: &[f32],
+    weight: &[Bf16],
+    batch: u32,
+    dim: u32,
+    eps: f32,
+    out: DisjointSlice<f32>,
+) {
+    qwen_rmsnorm_batched_impl(input, weight, batch, dim, eps, out);
 }
 
 #[kernel]
@@ -2180,6 +2350,22 @@ pub fn matvec_i8_scaled_kernel(
 #[kernel]
 pub fn silu_mul_kernel(gate: &[f32], up: &[f32], out: DisjointSlice<f32>) {
     silu_mul_impl(gate, up, out);
+}
+
+#[kernel]
+pub fn sigmoid_mul_kernel(gate: &[f32], up: &[f32], out: DisjointSlice<f32>) {
+    sigmoid_mul_impl(gate, up, out);
+}
+
+#[kernel]
+pub fn qwen_split_query_gate_kernel(
+    q_gate: &[f32],
+    n_heads: u32,
+    head_dim: u32,
+    query: DisjointSlice<f32>,
+    gate: DisjointSlice<f32>,
+) {
+    qwen_split_query_gate_impl(q_gate, n_heads, head_dim, query, gate);
 }
 
 #[kernel]

@@ -878,6 +878,15 @@ pub struct Qwen35LayerLoadSmoke {
     pub device_weight_bytes: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct Qwen35FullLayerSmoke {
+    pub layer: usize,
+    pub token_id: u32,
+    pub position: usize,
+    pub output_prefix: Vec<f32>,
+    pub output_max_abs: f32,
+}
+
 pub fn qwen35_weight_layout_report(
     model_dir: impl AsRef<Path>,
 ) -> Result<Qwen35WeightLayoutReport> {
@@ -1118,6 +1127,400 @@ pub fn qwen35_load_layer_smoke(
         kind,
         host_weight_bytes,
         device_weight_bytes,
+    })
+}
+
+pub fn qwen35_full_layer_smoke(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    model_dir: impl AsRef<Path>,
+    layer: usize,
+    token_id: u32,
+    position: usize,
+    prefix_len: usize,
+) -> Result<Qwen35FullLayerSmoke> {
+    fn phase<T, E: std::fmt::Display>(label: &str, result: std::result::Result<T, E>) -> Result<T> {
+        result.map_err(|error| {
+            invalid_data(format!("Qwen3.5 full layer smoke {label} failed: {error}"))
+        })
+    }
+
+    let model_dir = model_dir.as_ref();
+    let config = TextConfig::from_model_dir(model_dir)?;
+    if config.model_kind != TextModelKind::Qwen35Text {
+        return Err(invalid_data(format!(
+            "model {} is not a Qwen3.5 text config",
+            model_dir.display()
+        )));
+    }
+    if config.layer_kinds.kind(layer)? != TextLayerKind::FullAttention {
+        return Err(invalid_data(format!(
+            "Qwen3.5 layer {layer} is not a full-attention layer"
+        )));
+    }
+    if position != 0 {
+        return Err(invalid_data(
+            "Qwen3.5 full layer smoke currently supports only position 0",
+        ));
+    }
+    validate_token(&config, token_id)?;
+
+    let max_seq_len = position
+        .checked_add(1)
+        .ok_or_else(|| invalid_data("Qwen3.5 full layer smoke position overflow"))?;
+    let weights = ModelWeights::open_model_dir(model_dir)?;
+    let token_row = read_embedding_row(&weights, &config, token_id)?;
+    let layer_host = read_qwen35_layer_host_weights(&weights, &config, layer)?;
+    let layer_dev = phase(
+        "upload layer weights",
+        upload_qwen35_layer_weights(stream, &layer_host),
+    )?;
+    let Qwen35AttentionDeviceWeights::Full(attn) = &layer_dev.attention else {
+        return Err(invalid_data(format!(
+            "Qwen3.5 layer {layer} loaded as non-full attention"
+        )));
+    };
+    let rope_freqs = rope_frequencies(&config);
+    let dev_rope_freqs = phase(
+        "upload rope frequencies",
+        DeviceBuffer::from_host(stream, &rope_freqs),
+    )?;
+
+    let q_len = config.n_heads * config.head_dim;
+    let kv_len = config.n_kv_heads * config.head_dim;
+    let dev_token_row = phase(
+        "upload embedding row",
+        DeviceBuffer::from_host(stream, &token_row),
+    )?;
+    let mut hidden = phase(
+        "allocate hidden",
+        DeviceBuffer::<f32>::zeroed(stream, config.dim),
+    )?;
+    let mut attention_normed = phase(
+        "allocate attention normed",
+        DeviceBuffer::<f32>::zeroed(stream, config.dim),
+    )?;
+    let mut q_gate = phase(
+        "allocate q gate",
+        DeviceBuffer::<f32>::zeroed(stream, q_len * 2),
+    )?;
+    let mut query = phase("allocate query", DeviceBuffer::<f32>::zeroed(stream, q_len))?;
+    let mut gate = phase("allocate gate", DeviceBuffer::<f32>::zeroed(stream, q_len))?;
+    let mut query_normed = phase(
+        "allocate query normed",
+        DeviceBuffer::<f32>::zeroed(stream, q_len),
+    )?;
+    let mut key = phase("allocate key", DeviceBuffer::<f32>::zeroed(stream, kv_len))?;
+    let mut key_normed = phase(
+        "allocate key normed",
+        DeviceBuffer::<f32>::zeroed(stream, kv_len),
+    )?;
+    let mut value = phase(
+        "allocate value",
+        DeviceBuffer::<f32>::zeroed(stream, kv_len),
+    )?;
+    let mut query_rot = phase(
+        "allocate query rope",
+        DeviceBuffer::<f32>::zeroed(stream, q_len),
+    )?;
+    let mut key_rot = phase(
+        "allocate key rope",
+        DeviceBuffer::<f32>::zeroed(stream, kv_len),
+    )?;
+    let mut key_cache = phase(
+        "allocate key cache",
+        DeviceBuffer::<f32>::zeroed(stream, max_seq_len * kv_len),
+    )?;
+    let mut value_cache = phase(
+        "allocate value cache",
+        DeviceBuffer::<f32>::zeroed(stream, max_seq_len * kv_len),
+    )?;
+    let mut scores = phase(
+        "allocate attention scores",
+        DeviceBuffer::<f32>::zeroed(stream, config.n_heads * max_seq_len),
+    )?;
+    let mut attention_heads = phase(
+        "allocate attention heads",
+        DeviceBuffer::<f32>::zeroed(stream, q_len),
+    )?;
+    let mut gated_attention_heads = phase(
+        "allocate gated attention heads",
+        DeviceBuffer::<f32>::zeroed(stream, q_len),
+    )?;
+    let mut attention_delta = phase(
+        "allocate attention delta",
+        DeviceBuffer::<f32>::zeroed(stream, config.dim),
+    )?;
+    let mut attention_residual = phase(
+        "allocate attention residual",
+        DeviceBuffer::<f32>::zeroed(stream, config.dim),
+    )?;
+    let mut ffn_normed = phase(
+        "allocate ffn normed",
+        DeviceBuffer::<f32>::zeroed(stream, config.dim),
+    )?;
+    let mut ffn_activated = phase(
+        "allocate ffn activated",
+        DeviceBuffer::<f32>::zeroed(stream, config.hidden_dim),
+    )?;
+    let mut ffn_down = phase(
+        "allocate ffn down",
+        DeviceBuffer::<f32>::zeroed(stream, config.dim),
+    )?;
+    let mut output = phase(
+        "allocate output",
+        DeviceBuffer::<f32>::zeroed(stream, config.dim),
+    )?;
+
+    phase(
+        "embedding",
+        ops::embedding(stream, module, &dev_token_row, 0, config.dim, &mut hidden),
+    )?;
+    phase(
+        "input qwen rmsnorm",
+        ops::qwen_rmsnorm_bf16(
+            stream,
+            module,
+            &hidden,
+            &layer_dev.input_layernorm,
+            config.norm_eps,
+            &mut attention_normed,
+        ),
+    )?;
+    phase(
+        "q projection",
+        ops::linear(stream, module, &attention_normed, &attn.q_proj, &mut q_gate),
+    )?;
+    phase(
+        "split query gate",
+        ops::qwen_split_query_gate(
+            stream,
+            module,
+            &q_gate,
+            config.n_heads,
+            config.head_dim,
+            &mut query,
+            &mut gate,
+        ),
+    )?;
+    phase(
+        "k projection",
+        ops::linear(stream, module, &attention_normed, &attn.k_proj, &mut key),
+    )?;
+    phase(
+        "v projection",
+        ops::linear(stream, module, &attention_normed, &attn.v_proj, &mut value),
+    )?;
+    phase(
+        "query qwen rmsnorm",
+        ops::qwen_rmsnorm_batched_bf16(
+            stream,
+            module,
+            &query,
+            &attn.q_norm,
+            config.n_heads,
+            config.head_dim,
+            config.norm_eps,
+            &mut query_normed,
+        ),
+    )?;
+    phase(
+        "key qwen rmsnorm",
+        ops::qwen_rmsnorm_batched_bf16(
+            stream,
+            module,
+            &key,
+            &attn.k_norm,
+            config.n_kv_heads,
+            config.head_dim,
+            config.norm_eps,
+            &mut key_normed,
+        ),
+    )?;
+    phase(
+        "query rope",
+        ops::apply_rope(
+            stream,
+            module,
+            &query_normed,
+            &dev_rope_freqs,
+            position,
+            config.head_dim,
+            &mut query_rot,
+        ),
+    )?;
+    phase(
+        "key rope",
+        ops::apply_rope(
+            stream,
+            module,
+            &key_normed,
+            &dev_rope_freqs,
+            position,
+            config.head_dim,
+            &mut key_rot,
+        ),
+    )?;
+    phase(
+        "write key cache",
+        ops::write_kv_cache(
+            stream,
+            module,
+            &key_rot,
+            position,
+            max_seq_len,
+            config.n_kv_heads,
+            config.head_dim,
+            &mut key_cache,
+        ),
+    )?;
+    phase(
+        "write value cache",
+        ops::write_kv_cache(
+            stream,
+            module,
+            &value,
+            position,
+            max_seq_len,
+            config.n_kv_heads,
+            config.head_dim,
+            &mut value_cache,
+        ),
+    )?;
+    if max_seq_len <= ops::SINGLE_QUERY_ATTENTION_MAX_SEQ {
+        phase(
+            "single query attention",
+            ops::single_query_attention(
+                stream,
+                module,
+                &query_rot,
+                &key_cache,
+                &value_cache,
+                max_seq_len,
+                max_seq_len,
+                config.n_heads,
+                config.n_kv_heads,
+                config.head_dim,
+                &mut attention_heads,
+            ),
+        )?;
+    } else {
+        phase(
+            "attention scores",
+            ops::attention_scores(
+                stream,
+                module,
+                &query_rot,
+                &key_cache,
+                max_seq_len,
+                max_seq_len,
+                config.n_heads,
+                config.n_kv_heads,
+                config.head_dim,
+                &mut scores,
+            ),
+        )?;
+        phase(
+            "softmax value",
+            ops::softmax_value(
+                stream,
+                module,
+                &scores,
+                &value_cache,
+                max_seq_len,
+                max_seq_len,
+                config.n_heads,
+                config.n_kv_heads,
+                config.head_dim,
+                &mut attention_heads,
+            ),
+        )?;
+    }
+    phase(
+        "sigmoid gate",
+        ops::sigmoid_mul(
+            stream,
+            module,
+            &gate,
+            &attention_heads,
+            &mut gated_attention_heads,
+        ),
+    )?;
+    phase(
+        "o projection",
+        ops::linear(
+            stream,
+            module,
+            &gated_attention_heads,
+            &attn.o_proj,
+            &mut attention_delta,
+        ),
+    )?;
+    phase(
+        "attention residual",
+        ops::add(
+            stream,
+            module,
+            &hidden,
+            &attention_delta,
+            &mut attention_residual,
+        ),
+    )?;
+    phase(
+        "post attention qwen rmsnorm",
+        ops::qwen_rmsnorm_bf16(
+            stream,
+            module,
+            &attention_residual,
+            &layer_dev.post_attention_layernorm,
+            config.norm_eps,
+            &mut ffn_normed,
+        ),
+    )?;
+    phase(
+        "mlp gate up",
+        ops::silu_gate_up_bf16(
+            stream,
+            module,
+            &ffn_normed,
+            &layer_dev.mlp.gate_proj,
+            &layer_dev.mlp.up_proj,
+            &mut ffn_activated,
+        ),
+    )?;
+    phase(
+        "mlp down",
+        ops::linear(
+            stream,
+            module,
+            &ffn_activated,
+            &layer_dev.mlp.down_proj,
+            &mut ffn_down,
+        ),
+    )?;
+    phase(
+        "mlp residual",
+        ops::add(stream, module, &attention_residual, &ffn_down, &mut output),
+    )?;
+    phase("synchronize", stream.synchronize())?;
+
+    let output_host = phase("copy output to host", output.to_host_vec(stream))?;
+    let output_prefix = output_host
+        .iter()
+        .take(prefix_len.min(output_host.len()))
+        .copied()
+        .collect::<Vec<_>>();
+    let output_max_abs = output_host
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f32, f32::max);
+
+    Ok(Qwen35FullLayerSmoke {
+        layer,
+        token_id,
+        position,
+        output_prefix,
+        output_max_abs,
     })
 }
 

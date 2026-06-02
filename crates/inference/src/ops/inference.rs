@@ -631,6 +631,43 @@ where
     W::launch_rmsnorm(stream, module, operation, &input, &weight, &mut output)
 }
 
+pub fn qwen_rmsnorm_bf16(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    input: &DeviceBuffer<f32>,
+    weight: &DeviceBuffer<Bf16>,
+    eps: f32,
+    output: &mut DeviceBuffer<f32>,
+) -> Result<(), DriverError> {
+    assert_eq!(
+        input.len(),
+        weight.len(),
+        "Qwen RMSNorm weight length mismatch"
+    );
+    assert_eq!(
+        input.len(),
+        output.len(),
+        "Qwen RMSNorm output length mismatch"
+    );
+
+    cuda_launch! {
+        kernel: qwen_rmsnorm_bf16_kernel,
+        stream: stream,
+        module: module,
+        config: LaunchConfig {
+            grid_dim: (1, 1, 1),
+            block_dim: (DefaultRmsNormPlan::block_threads(), 1, 1),
+            shared_mem_bytes: 0,
+        },
+        args: [
+            slice(*input),
+            slice(*weight),
+            eps,
+            slice_mut(*output)
+        ]
+    }
+}
+
 pub fn rmsnorm_batched_bf16(
     stream: &Arc<CudaStream>,
     module: &Arc<CudaModule>,
@@ -660,6 +697,57 @@ pub fn rmsnorm_batched_bf16(
 
     cuda_launch! {
         kernel: rmsnorm_batched_bf16_kernel,
+        stream: stream,
+        module: module,
+        config: LaunchConfig {
+            grid_dim: (batch as u32, 1, 1),
+            block_dim: (DefaultRmsNormPlan::block_threads(), 1, 1),
+            shared_mem_bytes: 0,
+        },
+        args: [
+            slice(*input),
+            slice(*weight),
+            batch as u32,
+            dim as u32,
+            eps,
+            slice_mut(*output)
+        ]
+    }
+}
+
+pub fn qwen_rmsnorm_batched_bf16(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    input: &DeviceBuffer<f32>,
+    weight: &DeviceBuffer<Bf16>,
+    batch: usize,
+    dim: usize,
+    eps: f32,
+    output: &mut DeviceBuffer<f32>,
+) -> Result<(), DriverError> {
+    let active_len = batch
+        .checked_mul(dim)
+        .expect("batched Qwen RMSNorm input shape overflow");
+    assert!(
+        input.len() >= active_len,
+        "batched Qwen RMSNorm input too short: {} < {}",
+        input.len(),
+        active_len
+    );
+    assert_eq!(
+        weight.len(),
+        dim,
+        "batched Qwen RMSNorm weight length mismatch"
+    );
+    assert!(
+        output.len() >= active_len,
+        "batched Qwen RMSNorm output too short: {} < {}",
+        output.len(),
+        active_len
+    );
+
+    cuda_launch! {
+        kernel: qwen_rmsnorm_batched_bf16_kernel,
         stream: stream,
         module: module,
         config: LaunchConfig {
@@ -1030,6 +1118,60 @@ pub fn silu_mul(
         module: module,
         config: LaunchConfig::for_num_elems(output.len() as u32),
         args: [slice(*gate.buffer()), slice(*up.buffer()), slice_mut(*output.buffer_mut())]
+    }
+}
+
+pub fn sigmoid_mul(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    gate: &DeviceBuffer<f32>,
+    up: &DeviceBuffer<f32>,
+    output: &mut DeviceBuffer<f32>,
+) -> Result<(), DriverError> {
+    assert_eq!(gate.len(), up.len(), "sigmoid_mul operand length mismatch");
+    assert_eq!(
+        gate.len(),
+        output.len(),
+        "sigmoid_mul output length mismatch"
+    );
+
+    cuda_launch! {
+        kernel: sigmoid_mul_kernel,
+        stream: stream,
+        module: module,
+        config: LaunchConfig::for_num_elems(output.len() as u32),
+        args: [slice(*gate), slice(*up), slice_mut(*output)]
+    }
+}
+
+pub fn qwen_split_query_gate(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    q_gate: &DeviceBuffer<f32>,
+    n_heads: usize,
+    head_dim: usize,
+    query: &mut DeviceBuffer<f32>,
+    gate: &mut DeviceBuffer<f32>,
+) -> Result<(), DriverError> {
+    let q_len = n_heads
+        .checked_mul(head_dim)
+        .expect("Qwen query/gate shape overflow");
+    assert_eq!(q_gate.len(), q_len * 2, "Qwen q_gate length mismatch");
+    assert_eq!(query.len(), q_len, "Qwen query length mismatch");
+    assert_eq!(gate.len(), q_len, "Qwen gate length mismatch");
+
+    cuda_launch! {
+        kernel: qwen_split_query_gate_kernel,
+        stream: stream,
+        module: module,
+        config: LaunchConfig::for_num_elems(q_len as u32),
+        args: [
+            slice(*q_gate),
+            n_heads as u32,
+            head_dim as u32,
+            slice_mut(*query),
+            slice_mut(*gate)
+        ]
     }
 }
 
