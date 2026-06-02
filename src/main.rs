@@ -29,8 +29,8 @@ use nn_rust_inference::{
     layout::{ColumnMajor, Layout2D, MatrixLayout, RowMajor},
     model::{
         Bf16Top1Plan, GreedyGenerationStep, MinistralAllLinearInt8Runtime, MinistralTextRuntime,
-        Qwen35AttentionWeightLayout, RuntimeMemoryStats, TextConfig, TextLayerKind, TextModelKind,
-        qwen35_full_layer_smoke, qwen35_generate_greedy_tokens, qwen35_linear_layer_smoke,
+        Qwen35AttentionWeightLayout, Qwen35GreedyRuntime, RuntimeMemoryStats, TextConfig,
+        TextLayerKind, TextModelKind, qwen35_full_layer_smoke, qwen35_linear_layer_smoke,
         qwen35_load_layer_smoke, qwen35_prefix_layers_smoke, qwen35_single_token_top1_smoke,
         qwen35_weight_layout_report,
     },
@@ -7554,61 +7554,57 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
             "Qwen3.5 text generation currently supports exactly top_k=1",
         ));
     }
-    if cli.prompts.len() != 1 {
-        return Err(invalid_input(
-            "Qwen3.5 text generation currently supports exactly one prompt",
-        ));
-    }
-
-    let config = TextConfig::from_model_dir(&model_dir)?;
-    if config.model_kind != TextModelKind::Qwen35Text {
-        return Err(invalid_input(format!(
-            "model {} is not a Qwen3.5 text config",
-            model_dir.display()
-        )));
-    }
 
     let tokenizer = QwenByteLevelBpeTokenizer::open(&model_dir)?;
-    let prompt_text = &cli.prompts[0];
-    let prompt_tokens = tokenizer.encode_lossy(prompt_text, false)?;
-    if prompt_tokens.is_empty() {
-        return Err(invalid_input("Qwen text prompt encoded to zero tokens"));
-    }
-    let stop_token_ids = qwen_text_stop_token_ids(&config, &tokenizer);
     let (stream, module) = cuda_handles()?;
-    let result = qwen35_generate_greedy_tokens(
-        &stream,
-        &module,
-        &model_dir,
-        &prompt_tokens,
-        max_new_tokens,
-        &stop_token_ids,
-        8,
-    )?;
-    let generated_text = tokenizer.decode_lossy(&result.generated_tokens)?;
-    let all_text = tokenizer.decode_lossy(&result.all_tokens)?;
+    let runtime_start = Instant::now();
+    let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
+    let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
+    let stop_token_ids = qwen_text_stop_token_ids(runtime.config(), &tokenizer);
 
     println!(
-        "Qwen text suite: backend=bf16 decode_strategy=greedy prompts_len=1 stop_token_ids={:?}",
-        stop_token_ids
+        "Qwen text suite: backend=bf16 decode_strategy=greedy prompts_len={} stop_token_ids={:?} runtime_init_seconds={:.6}",
+        cli.prompts.len(),
+        stop_token_ids,
+        runtime_init_seconds
     );
-    println!("  prompt={prompt_text:?}");
-    print_token_window("prompt_tokens", &result.prompt_tokens);
-    println!("  generated_tokens={:?}", result.generated_tokens);
-    println!("  generated_text={generated_text:?}");
-    println!("  all_text={all_text:?}");
-    println!("  finish_reason={}", result.finish_reason);
-    println!(
-        "  linear_layers={} full_layers={} last_hidden_max_abs={:.8}",
-        result.linear_layer_count, result.full_layer_count, result.last_hidden_max_abs
-    );
-    for step in &result.steps {
+    for (prompt_index, prompt_text) in cli.prompts.iter().enumerate() {
+        let prompt_tokens = tokenizer.encode_lossy(prompt_text, false)?;
+        if prompt_tokens.is_empty() {
+            return Err(invalid_input(format!(
+                "Qwen text prompt {prompt_index} encoded to zero tokens"
+            )));
+        }
+        let generation_start = Instant::now();
+        let result = runtime.generate_tokens(&prompt_tokens, max_new_tokens, &stop_token_ids, 8)?;
+        let generation_seconds = generation_start.elapsed().as_secs_f64();
+        let generated_tokens_per_second =
+            tokens_per_second(result.generated_tokens.len(), generation_seconds);
+        let generated_text = tokenizer.decode_lossy(&result.generated_tokens)?;
+        let all_text = tokenizer.decode_lossy(&result.all_tokens)?;
+
+        println!("  prompt_index={prompt_index} prompt={prompt_text:?}");
+        print_token_window("prompt_tokens", &result.prompt_tokens);
+        println!("  generated_tokens={:?}", result.generated_tokens);
+        println!("  generated_text={generated_text:?}");
+        println!("  all_text={all_text:?}");
+        println!("  finish_reason={}", result.finish_reason);
         println!(
-            "  step position={} input_token={} token={} logit={:.8}",
-            step.position, step.input_token, step.token_id, step.logit
+            "  linear_layers={} full_layers={} last_hidden_max_abs={:.8}",
+            result.linear_layer_count, result.full_layer_count, result.last_hidden_max_abs
         );
+        println!(
+            "  generation_seconds={:.6} generated_tokens_per_second={:.3}",
+            generation_seconds, generated_tokens_per_second
+        );
+        for step in &result.steps {
+            println!(
+                "  step position={} input_token={} token={} logit={:.8}",
+                step.position, step.input_token, step.token_id, step.logit
+            );
+        }
+        println!("  hidden_prefix={:?}", result.last_hidden_prefix);
     }
-    println!("  hidden_prefix={:?}", result.last_hidden_prefix);
     Ok(())
 }
 
@@ -7638,71 +7634,67 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
             "Qwen3.5 chat generation currently supports exactly top_k=1",
         ));
     }
-    if cli.prompts.len() != 1 {
-        return Err(invalid_input(
-            "Qwen3.5 chat generation currently supports exactly one prompt",
-        ));
-    }
-
-    let config = TextConfig::from_model_dir(&model_dir)?;
-    if config.model_kind != TextModelKind::Qwen35Text {
-        return Err(invalid_input(format!(
-            "model {} is not a Qwen3.5 text config",
-            model_dir.display()
-        )));
-    }
 
     let tokenizer = QwenByteLevelBpeTokenizer::open(&model_dir)?;
-    let user_prompt = &cli.prompts[0];
-    let formatted_prompt = chat::format_qwen_single_turn_chat(
-        qwen_system_prompt(&cli.system_prompt),
-        user_prompt,
-        true,
-    );
-    let prompt_tokens = tokenizer.encode_lossy(&formatted_prompt, false)?;
-    if prompt_tokens.is_empty() {
-        return Err(invalid_input("Qwen chat prompt encoded to zero tokens"));
-    }
-    let stop_token_ids = qwen_text_stop_token_ids(&config, &tokenizer);
     let (stream, module) = cuda_handles()?;
-    let result = qwen35_generate_greedy_tokens(
-        &stream,
-        &module,
-        &model_dir,
-        &prompt_tokens,
-        max_new_tokens,
-        &stop_token_ids,
-        8,
-    )?;
-    let generated_text = tokenizer.decode_lossy(&result.generated_tokens)?;
-    let all_text = tokenizer.decode_lossy(&result.all_tokens)?;
+    let runtime_start = Instant::now();
+    let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
+    let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
+    let stop_token_ids = qwen_text_stop_token_ids(runtime.config(), &tokenizer);
 
     println!(
-        "Qwen chat suite: backend=bf16 decode_strategy=greedy prompts_len=1 stop_token_ids={:?}",
-        stop_token_ids
+        "Qwen chat suite: backend=bf16 decode_strategy=greedy prompts_len={} stop_token_ids={:?} runtime_init_seconds={:.6}",
+        cli.prompts.len(),
+        stop_token_ids,
+        runtime_init_seconds
     );
     println!(
         "  use_default_system={}",
         matches!(cli.system_prompt, SystemPrompt::DefaultFromModel)
     );
-    println!("  user_prompt={user_prompt:?}");
-    println!("  formatted_prompt={formatted_prompt:?}");
-    print_token_window("prompt_tokens", &result.prompt_tokens);
-    println!("  generated_tokens={:?}", result.generated_tokens);
-    println!("  generated_text={generated_text:?}");
-    println!("  all_text={all_text:?}");
-    println!("  finish_reason={}", result.finish_reason);
-    println!(
-        "  linear_layers={} full_layers={} last_hidden_max_abs={:.8}",
-        result.linear_layer_count, result.full_layer_count, result.last_hidden_max_abs
-    );
-    for step in &result.steps {
-        println!(
-            "  step position={} input_token={} token={} logit={:.8}",
-            step.position, step.input_token, step.token_id, step.logit
+    for (prompt_index, user_prompt) in cli.prompts.iter().enumerate() {
+        let formatted_prompt = chat::format_qwen_single_turn_chat(
+            qwen_system_prompt(&cli.system_prompt),
+            user_prompt,
+            true,
         );
+        let prompt_tokens = tokenizer.encode_lossy(&formatted_prompt, false)?;
+        if prompt_tokens.is_empty() {
+            return Err(invalid_input(format!(
+                "Qwen chat prompt {prompt_index} encoded to zero tokens"
+            )));
+        }
+        let generation_start = Instant::now();
+        let result = runtime.generate_tokens(&prompt_tokens, max_new_tokens, &stop_token_ids, 8)?;
+        let generation_seconds = generation_start.elapsed().as_secs_f64();
+        let generated_tokens_per_second =
+            tokens_per_second(result.generated_tokens.len(), generation_seconds);
+        let generated_text = tokenizer.decode_lossy(&result.generated_tokens)?;
+        let all_text = tokenizer.decode_lossy(&result.all_tokens)?;
+
+        println!("  prompt_index={prompt_index} user_prompt={user_prompt:?}");
+        println!("  formatted_prompt={formatted_prompt:?}");
+        print_token_window("prompt_tokens", &result.prompt_tokens);
+        println!("  generated_tokens={:?}", result.generated_tokens);
+        println!("  generated_text={generated_text:?}");
+        println!("  all_text={all_text:?}");
+        println!("  finish_reason={}", result.finish_reason);
+        println!(
+            "  linear_layers={} full_layers={} last_hidden_max_abs={:.8}",
+            result.linear_layer_count, result.full_layer_count, result.last_hidden_max_abs
+        );
+        println!(
+            "  generation_seconds={:.6} generated_tokens_per_second={:.3}",
+            generation_seconds, generated_tokens_per_second
+        );
+        for step in &result.steps {
+            println!(
+                "  step position={} input_token={} token={} logit={:.8}",
+                step.position, step.input_token, step.token_id, step.logit
+            );
+        }
+        println!("  hidden_prefix={:?}", result.last_hidden_prefix);
     }
-    println!("  hidden_prefix={:?}", result.last_hidden_prefix);
     Ok(())
 }
 
@@ -7763,45 +7755,48 @@ fn run_qwen_tokens_suite(args: &[String]) -> AppResult<()> {
                 "Qwen3.5 token generation currently supports exactly top_k=1",
             ));
         }
-        if cli.prompts.len() != 1 {
-            return Err(invalid_input(
-                "Qwen3.5 token generation currently supports exactly one prompt",
-            ));
-        }
 
-        let prompt = &cli.prompts[0];
         let stop_token_id = config.eos_token_id;
         let stop_token_ids = stop_token_id.into_iter().collect::<Vec<_>>();
         let (stream, module) = cuda_handles()?;
-        let result = qwen35_generate_greedy_tokens(
-            &stream,
-            &module,
-            &model_dir,
-            prompt,
-            max_new_tokens,
-            &stop_token_ids,
-            8,
-        )?;
+        let runtime_start = Instant::now();
+        let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
+        let runtime_init_seconds = runtime_start.elapsed().as_secs_f64();
 
         println!(
-            "Qwen token suite: backend=bf16 decode_strategy=greedy prompts_len=1 eos_token_id={:?}",
-            stop_token_id
+            "Qwen token suite: backend=bf16 decode_strategy=greedy prompts_len={} eos_token_id={:?} runtime_init_seconds={:.6}",
+            cli.prompts.len(),
+            stop_token_id,
+            runtime_init_seconds
         );
-        println!(
-            "  linear_layers={} full_layers={} last_hidden_max_abs={:.8}",
-            result.linear_layer_count, result.full_layer_count, result.last_hidden_max_abs
-        );
-        print_token_window("prompt_tokens", &result.prompt_tokens);
-        println!("  generated_tokens={:?}", result.generated_tokens);
-        println!("  all_tokens={:?}", result.all_tokens);
-        println!("  finish_reason={}", result.finish_reason);
-        for step in &result.steps {
+        for (prompt_index, prompt) in cli.prompts.iter().enumerate() {
+            let generation_start = Instant::now();
+            let result = runtime.generate_tokens(prompt, max_new_tokens, &stop_token_ids, 8)?;
+            let generation_seconds = generation_start.elapsed().as_secs_f64();
+            let generated_tokens_per_second =
+                tokens_per_second(result.generated_tokens.len(), generation_seconds);
+
+            println!("  prompt_index={prompt_index}");
             println!(
-                "  step position={} input_token={} token={} logit={:.8}",
-                step.position, step.input_token, step.token_id, step.logit
+                "  linear_layers={} full_layers={} last_hidden_max_abs={:.8}",
+                result.linear_layer_count, result.full_layer_count, result.last_hidden_max_abs
             );
+            print_token_window("prompt_tokens", &result.prompt_tokens);
+            println!("  generated_tokens={:?}", result.generated_tokens);
+            println!("  all_tokens={:?}", result.all_tokens);
+            println!("  finish_reason={}", result.finish_reason);
+            println!(
+                "  generation_seconds={:.6} generated_tokens_per_second={:.3}",
+                generation_seconds, generated_tokens_per_second
+            );
+            for step in &result.steps {
+                println!(
+                    "  step position={} input_token={} token={} logit={:.8}",
+                    step.position, step.input_token, step.token_id, step.logit
+                );
+            }
+            println!("  hidden_prefix={:?}", result.last_hidden_prefix);
         }
-        println!("  hidden_prefix={:?}", result.last_hidden_prefix);
         return Ok(());
     }
 

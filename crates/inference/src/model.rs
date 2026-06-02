@@ -942,6 +942,124 @@ pub struct Qwen35TokenGeneration {
     pub last_hidden_max_abs: f32,
 }
 
+pub struct Qwen35GreedyRuntime {
+    stream: Arc<CudaStream>,
+    module: Arc<CudaModule>,
+    weights: ModelWeights,
+    config: TextConfig,
+    params: Qwen35TextParams,
+    dev_rope_freqs: DeviceBuffer<f32>,
+    dev_norm_weight: DeviceBuffer<Bf16>,
+    dev_output_weight: DeviceBuffer<Bf16>,
+    layer_weights: Vec<Qwen35LayerDeviceWeights>,
+    top1_scratch: Qwen35Top1Scratch,
+    forward_scratch: Qwen35ForwardScratch,
+}
+
+impl Qwen35GreedyRuntime {
+    pub fn new(
+        stream: Arc<CudaStream>,
+        module: Arc<CudaModule>,
+        model_dir: impl AsRef<Path>,
+    ) -> Result<Self> {
+        fn phase<T, E: std::fmt::Display>(
+            label: &str,
+            result: std::result::Result<T, E>,
+        ) -> Result<T> {
+            result.map_err(|error| {
+                invalid_data(format!("Qwen3.5 runtime init {label} failed: {error}"))
+            })
+        }
+
+        let model_dir = model_dir.as_ref();
+        let config = TextConfig::from_model_dir(model_dir)?;
+        if config.model_kind != TextModelKind::Qwen35Text {
+            return Err(invalid_data(format!(
+                "model {} is not a Qwen3.5 text config",
+                model_dir.display()
+            )));
+        }
+        let Some(params) = config.qwen3_5 else {
+            return Err(invalid_data(
+                "Qwen3.5 runtime requires linear-attention params",
+            ));
+        };
+
+        let weights = ModelWeights::open_model_dir(model_dir)?;
+        let rope_freqs = rope_frequencies(&config);
+        let dev_rope_freqs = phase(
+            "upload rope frequencies",
+            DeviceBuffer::from_host(&stream, &rope_freqs),
+        )?;
+        let norm_weight = phase("read final norm", read_model_norm_weight(&weights, &config))?;
+        let output_weight = phase("read lm_head", read_output_weight(&weights, &config))?;
+        let dev_norm_weight = phase(
+            "upload final norm",
+            DeviceBuffer::from_host(&stream, &norm_weight),
+        )?;
+        let dev_output_weight = phase(
+            "upload lm_head",
+            DeviceBuffer::from_host(&stream, &output_weight),
+        )?;
+        let layer_weights = phase(
+            "upload resident layer weights",
+            qwen35_upload_resident_layer_weights(&stream, &weights, &config),
+        )?;
+        let top1_scratch = phase(
+            "allocate top1 scratch",
+            Qwen35Top1Scratch::new(&stream, &config),
+        )?;
+        let forward_scratch = phase(
+            "allocate forward scratch",
+            Qwen35ForwardScratch::new(&stream, &config, params),
+        )?;
+
+        Ok(Self {
+            stream,
+            module,
+            weights,
+            config,
+            params,
+            dev_rope_freqs,
+            dev_norm_weight,
+            dev_output_weight,
+            layer_weights,
+            top1_scratch,
+            forward_scratch,
+        })
+    }
+
+    pub fn generate_tokens(
+        &mut self,
+        prompt_tokens: &[u32],
+        max_new_tokens: usize,
+        stop_token_ids: &[u32],
+        prefix_len: usize,
+    ) -> Result<Qwen35TokenGeneration> {
+        qwen35_generate_greedy_tokens_with_runtime(
+            &self.stream,
+            &self.module,
+            &self.weights,
+            &self.config,
+            self.params,
+            &self.dev_rope_freqs,
+            &self.dev_norm_weight,
+            &self.dev_output_weight,
+            &self.layer_weights,
+            &mut self.top1_scratch,
+            &mut self.forward_scratch,
+            prompt_tokens,
+            max_new_tokens,
+            stop_token_ids,
+            prefix_len,
+        )
+    }
+
+    pub fn config(&self) -> &TextConfig {
+        &self.config
+    }
+}
+
 pub fn qwen35_weight_layout_report(
     model_dir: impl AsRef<Path>,
 ) -> Result<Qwen35WeightLayoutReport> {
@@ -2078,19 +2196,35 @@ pub fn qwen35_generate_greedy_tokens(
     stop_token_ids: &[u32],
     prefix_len: usize,
 ) -> Result<Qwen35TokenGeneration> {
+    let mut runtime = Qwen35GreedyRuntime::new(Arc::clone(stream), Arc::clone(module), model_dir)?;
+    runtime.generate_tokens(prompt_tokens, max_new_tokens, stop_token_ids, prefix_len)
+}
+
+fn qwen35_generate_greedy_tokens_with_runtime(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    weights: &ModelWeights,
+    config: &TextConfig,
+    params: Qwen35TextParams,
+    dev_rope_freqs: &DeviceBuffer<f32>,
+    dev_norm_weight: &DeviceBuffer<Bf16>,
+    dev_output_weight: &DeviceBuffer<Bf16>,
+    layer_weights: &[Qwen35LayerDeviceWeights],
+    top1_scratch: &mut Qwen35Top1Scratch,
+    forward_scratch: &mut Qwen35ForwardScratch,
+    prompt_tokens: &[u32],
+    max_new_tokens: usize,
+    stop_token_ids: &[u32],
+    prefix_len: usize,
+) -> Result<Qwen35TokenGeneration> {
     fn phase<T, E: std::fmt::Display>(label: &str, result: std::result::Result<T, E>) -> Result<T> {
         result.map_err(|error| {
             invalid_data(format!("Qwen3.5 token generation {label} failed: {error}"))
         })
     }
 
-    let model_dir = model_dir.as_ref();
-    let config = TextConfig::from_model_dir(model_dir)?;
     if config.model_kind != TextModelKind::Qwen35Text {
-        return Err(invalid_data(format!(
-            "model {} is not a Qwen3.5 text config",
-            model_dir.display()
-        )));
+        return Err(invalid_data("model is not a Qwen3.5 text config"));
     }
     if prompt_tokens.is_empty() {
         return Err(invalid_data(
@@ -2103,50 +2237,17 @@ pub fn qwen35_generate_greedy_tokens(
         ));
     }
     for &token_id in prompt_tokens {
-        validate_token(&config, token_id)?;
+        validate_token(config, token_id)?;
     }
-    let Some(params) = config.qwen3_5 else {
-        return Err(invalid_data(
-            "Qwen3.5 token generation requires linear-attention params",
-        ));
-    };
     let max_seq_len = prompt_tokens
         .len()
         .checked_add(max_new_tokens)
         .ok_or_else(|| invalid_data("Qwen3.5 generation sequence length overflow"))?;
-    validate_runtime_max_seq_len(&config, max_seq_len)?;
+    validate_runtime_max_seq_len(config, max_seq_len)?;
 
-    let weights = ModelWeights::open_model_dir(model_dir)?;
-    let rope_freqs = rope_frequencies(&config);
-    let dev_rope_freqs = phase(
-        "upload rope frequencies",
-        DeviceBuffer::from_host(stream, &rope_freqs),
-    )?;
-    let norm_weight = phase("read final norm", read_model_norm_weight(&weights, &config))?;
-    let output_weight = phase("read lm_head", read_output_weight(&weights, &config))?;
-    let dev_norm_weight = phase(
-        "upload final norm",
-        DeviceBuffer::from_host(stream, &norm_weight),
-    )?;
-    let dev_output_weight = phase(
-        "upload lm_head",
-        DeviceBuffer::from_host(stream, &output_weight),
-    )?;
-    let layer_weights = phase(
-        "upload resident layer weights",
-        qwen35_upload_resident_layer_weights(stream, &weights, &config),
-    )?;
     let mut states = phase(
         "allocate decoder state",
-        qwen35_allocate_decode_states(stream, &config, params, max_seq_len),
-    )?;
-    let mut top1_scratch = phase(
-        "allocate top1 scratch",
-        Qwen35Top1Scratch::new(stream, &config),
-    )?;
-    let mut forward_scratch = phase(
-        "allocate forward scratch",
-        Qwen35ForwardScratch::new(stream, &config, params),
+        qwen35_allocate_decode_states(stream, config, params, max_seq_len),
     )?;
 
     let mut linear_layer_count = 0usize;
@@ -2159,16 +2260,16 @@ pub fn qwen35_generate_greedy_tokens(
             qwen35_forward_token_top1_resident(
                 stream,
                 module,
-                &weights,
-                &config,
+                weights,
+                config,
                 params,
-                &layer_weights,
-                &dev_rope_freqs,
-                &dev_norm_weight,
-                &dev_output_weight,
+                layer_weights,
+                dev_rope_freqs,
+                dev_norm_weight,
+                dev_output_weight,
                 &mut states,
-                &mut top1_scratch,
-                &mut forward_scratch,
+                top1_scratch,
+                forward_scratch,
                 max_seq_len,
                 position,
                 token_id,
@@ -2220,16 +2321,16 @@ pub fn qwen35_generate_greedy_tokens(
             qwen35_forward_token_top1_resident(
                 stream,
                 module,
-                &weights,
-                &config,
+                weights,
+                config,
                 params,
-                &layer_weights,
-                &dev_rope_freqs,
-                &dev_norm_weight,
-                &dev_output_weight,
+                layer_weights,
+                dev_rope_freqs,
+                dev_norm_weight,
+                dev_output_weight,
                 &mut states,
-                &mut top1_scratch,
-                &mut forward_scratch,
+                top1_scratch,
+                forward_scratch,
                 max_seq_len,
                 decode_position,
                 next_token,
