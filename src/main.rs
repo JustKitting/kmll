@@ -15,6 +15,7 @@ mod cuda_worker;
 use cuda_core::{CudaContext, CudaModule, CudaStream, DeviceBuffer};
 use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
+    chat,
     dtypes::{Bf16, DType},
     inference::{
         self, ChatBackendComparisonResult, ChatForcedLogitsTraceOptions, ChatInferenceOptions,
@@ -143,6 +144,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
             run_qwen_single_token_top1_smoke(&args)
         }
         "qwen-text-generate" | "qwen-text-suite" => run_qwen_text_suite(&args),
+        "qwen-chat" | "qwen-chat-generate" | "qwen-chat-suite" => run_qwen_chat_suite(&args),
         "ministral-eval" => run_ministral_eval(&args),
         "ministral-eval-exported" => run_ministral_eval_exported(&args),
         "ministral-chat" | "ministral-chat-suite" => run_ministral_chat_suite(&args),
@@ -251,7 +253,8 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
              `ministral-tokens-generate`, `ministral-tokens-exported-generate`, \
              `qwen-weight-smoke`, `qwen-layer-load-smoke`, `qwen-full-layer-smoke`, \
              `qwen-linear-layer-smoke`, `qwen-prefix-layers-smoke`, \
-             `qwen-single-token-top1-smoke`, `qwen-text-generate`, `qwen-tokens-generate`, \
+             `qwen-single-token-top1-smoke`, `qwen-text-generate`, `qwen-chat-generate`, \
+             `qwen-tokens-generate`, \
              `ministral-tokens-logits`, `ministral-tokens-exported-logits`, \
              `ministral-tokens-trace`, `ministral-tokens-exported-trace`, \
              `ministral-tokens-eval`, `ministral-tokens-eval-exported`, \
@@ -7607,6 +7610,107 @@ fn run_qwen_text_suite(args: &[String]) -> AppResult<()> {
     }
     println!("  hidden_prefix={:?}", result.last_hidden_prefix);
     Ok(())
+}
+
+fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let model_dir = parse_optional_existing_model_dir(args, &mut index, DEFAULT_QWEN3_6_27B_DIR);
+    let max_new_tokens = parse_optional_usize(args, &mut index, 1, "max_new_tokens")?;
+    let top_k = parse_optional_usize(args, &mut index, 1, "top_k")?;
+    let cli = parse_chat_cli(args, index)?;
+    if cli.report_path.is_some() {
+        return Err(invalid_input(
+            "qwen chat reports need a Qwen report schema; omit --report for now",
+        ));
+    }
+    if !cli.forced_target_pairs.is_empty() {
+        return Err(invalid_input(
+            "Qwen3.5 chat generation does not support forced target pairs yet",
+        ));
+    }
+    if cli.sampling.is_some() {
+        return Err(invalid_input(
+            "Qwen3.5 chat generation currently supports only greedy top1 sampling",
+        ));
+    }
+    if top_k != 1 {
+        return Err(invalid_input(
+            "Qwen3.5 chat generation currently supports exactly top_k=1",
+        ));
+    }
+    if cli.prompts.len() != 1 {
+        return Err(invalid_input(
+            "Qwen3.5 chat generation currently supports exactly one prompt",
+        ));
+    }
+
+    let config = TextConfig::from_model_dir(&model_dir)?;
+    if config.model_kind != TextModelKind::Qwen35Text {
+        return Err(invalid_input(format!(
+            "model {} is not a Qwen3.5 text config",
+            model_dir.display()
+        )));
+    }
+
+    let tokenizer = QwenByteLevelBpeTokenizer::open(&model_dir)?;
+    let user_prompt = &cli.prompts[0];
+    let formatted_prompt = chat::format_qwen_single_turn_chat(
+        qwen_system_prompt(&cli.system_prompt),
+        user_prompt,
+        true,
+    );
+    let prompt_tokens = tokenizer.encode_lossy(&formatted_prompt, false)?;
+    if prompt_tokens.is_empty() {
+        return Err(invalid_input("Qwen chat prompt encoded to zero tokens"));
+    }
+    let stop_token_ids = qwen_text_stop_token_ids(&config, &tokenizer);
+    let (stream, module) = cuda_handles()?;
+    let result = qwen35_generate_greedy_tokens(
+        &stream,
+        &module,
+        &model_dir,
+        &prompt_tokens,
+        max_new_tokens,
+        &stop_token_ids,
+        8,
+    )?;
+    let generated_text = tokenizer.decode_lossy(&result.generated_tokens)?;
+    let all_text = tokenizer.decode_lossy(&result.all_tokens)?;
+
+    println!(
+        "Qwen chat suite: backend=bf16 decode_strategy=greedy prompts_len=1 stop_token_ids={:?}",
+        stop_token_ids
+    );
+    println!(
+        "  use_default_system={}",
+        matches!(cli.system_prompt, SystemPrompt::DefaultFromModel)
+    );
+    println!("  user_prompt={user_prompt:?}");
+    println!("  formatted_prompt={formatted_prompt:?}");
+    print_token_window("prompt_tokens", &result.prompt_tokens);
+    println!("  generated_tokens={:?}", result.generated_tokens);
+    println!("  generated_text={generated_text:?}");
+    println!("  all_text={all_text:?}");
+    println!("  finish_reason={}", result.finish_reason);
+    println!(
+        "  linear_layers={} full_layers={} last_hidden_max_abs={:.8}",
+        result.linear_layer_count, result.full_layer_count, result.last_hidden_max_abs
+    );
+    for step in &result.steps {
+        println!(
+            "  step position={} input_token={} token={} logit={:.8}",
+            step.position, step.input_token, step.token_id, step.logit
+        );
+    }
+    println!("  hidden_prefix={:?}", result.last_hidden_prefix);
+    Ok(())
+}
+
+fn qwen_system_prompt(system_prompt: &SystemPrompt) -> Option<&str> {
+    match system_prompt {
+        SystemPrompt::DefaultFromModel | SystemPrompt::None => None,
+        SystemPrompt::Custom(prompt) => Some(prompt.as_str()),
+    }
 }
 
 fn qwen_text_stop_token_ids(
