@@ -840,9 +840,13 @@ fn rope_matrix_row_value(
     position: u32,
     head_dim: usize,
 ) -> f32 {
-    let half = head_dim / 2;
+    let half = freqs.len();
+    let rotary_dim = half * 2;
     let head = i / head_dim;
     let dim = i - head * head_dim;
+    if dim >= rotary_dim {
+        return matrix[row_base + i];
+    }
     let pair_dim = if dim < half { dim } else { dim - half };
     let base = row_base + head * head_dim;
     let first = matrix[base + pair_dim];
@@ -866,9 +870,13 @@ fn rope_vector_value(
     position: u32,
     head_dim: usize,
 ) -> f32 {
-    let half = head_dim / 2;
+    let half = freqs.len();
+    let rotary_dim = half * 2;
     let head = i / head_dim;
     let dim = i - head * head_dim;
+    if dim >= rotary_dim {
+        return input[i];
+    }
     let pair_dim = if dim < half { dim } else { dim - half };
     let base = head * head_dim;
     let first = input[base + pair_dim];
@@ -1056,9 +1064,14 @@ fn apply_rope_impl(
 
     if let Some(out_elem) = out.get_mut(idx) {
         let head_dim = head_dim as usize;
-        let half = head_dim / 2;
+        let half = freqs.len();
+        let rotary_dim = half * 2;
         let head = i / head_dim;
         let dim = i - head * head_dim;
+        if dim >= rotary_dim {
+            *out_elem = input[i];
+            return;
+        }
         let pair_dim = if dim < half { dim } else { dim - half };
         let base = head * head_dim;
         let first = input[base + pair_dim];
@@ -1088,9 +1101,17 @@ fn apply_rope_write_kv_cache_impl(
 
     if i < input.len() {
         let head_dim = head_dim as usize;
-        let half = head_dim / 2;
+        let half = freqs.len();
+        let rotary_dim = half * 2;
         let head = i / head_dim;
         let dim = i - head * head_dim;
+        if dim >= rotary_dim {
+            let offset = position as usize * input.len() + i;
+            unsafe {
+                *cache.get_unchecked_mut(offset) = input[i];
+            }
+            return;
+        }
         let pair_dim = if dim < half { dim } else { dim - half };
         let base = head * head_dim;
         let first = input[base + pair_dim];

@@ -32,6 +32,15 @@ const ATTENTION_SOFTMAX_BLOCK_THREADS: u32 = 256;
 pub const SINGLE_QUERY_ATTENTION_MAX_SEQ: usize = 4096;
 const SINGLE_QUERY_ATTENTION_BLOCK_THREADS: u32 = 256;
 
+fn assert_rope_frequency_len(freqs_len: usize, head_dim: usize) {
+    assert!(freqs_len > 0, "RoPE frequency length must be nonzero");
+    assert!(
+        freqs_len <= head_dim / 2,
+        "RoPE frequency length mismatch: got {freqs_len}, expected at most {}",
+        head_dim / 2
+    );
+}
+
 pub trait CudaEmbeddingWeight: Sized {
     fn launch_embedding(
         stream: &Arc<CudaStream>,
@@ -1157,7 +1166,7 @@ pub fn prepare_prefill_attention_batch(
     assert_eq!(head_dim % 2, 0, "RoPE head_dim must be even");
     assert_eq!(q_len % head_dim, 0, "query row shape mismatch");
     assert_eq!(kv_len % head_dim, 0, "KV row shape mismatch");
-    assert_eq!(freqs.len(), head_dim / 2, "RoPE frequency length mismatch");
+    assert_rope_frequency_len(freqs.len(), head_dim);
     assert!(
         query_batch.len() >= prompt_len * q_len,
         "prefill query batch too short"
@@ -1245,7 +1254,7 @@ pub fn prepare_incremental_attention(
     assert_eq!(key.len(), kv_len, "key shape mismatch");
     assert_eq!(value.len(), kv_len, "value shape mismatch");
     assert_eq!(query_rot.len(), q_len, "query RoPE output shape mismatch");
-    assert_eq!(freqs.len(), head_dim / 2, "RoPE frequency length mismatch");
+    assert_rope_frequency_len(freqs.len(), head_dim);
     assert!(
         position < max_seq_len,
         "incremental attention position exceeds max_seq_len"
@@ -1329,7 +1338,7 @@ pub fn apply_rope(
     assert_eq!(input.len(), output.len(), "RoPE output length mismatch");
     assert_eq!(head_dim % 2, 0, "RoPE head_dim must be even");
     assert_eq!(input.len() % head_dim, 0, "RoPE input shape mismatch");
-    assert_eq!(freqs.len(), head_dim / 2, "RoPE frequency length mismatch");
+    assert_rope_frequency_len(freqs.len(), head_dim);
 
     cuda_launch! {
         kernel: apply_rope_kernel,
@@ -1360,7 +1369,7 @@ pub fn apply_rope_write_kv_cache(
     let problem = KvCacheWriteProblem::new(input, cache, position, geometry)
         .expect("RoPE KV cache operand shape mismatch");
     assert_eq!(head_dim % 2, 0, "RoPE head_dim must be even");
-    assert_eq!(freqs.len(), head_dim / 2, "RoPE frequency length mismatch");
+    assert_rope_frequency_len(freqs.len(), head_dim);
     let position = problem.position();
     let (input, mut cache) = problem.into_parts();
 

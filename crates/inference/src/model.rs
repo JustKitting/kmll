@@ -19,6 +19,7 @@ pub struct TextConfig {
     pub n_heads: usize,
     pub n_kv_heads: usize,
     pub head_dim: usize,
+    pub rotary_dim: usize,
     pub rope_theta: f32,
     pub rope_yarn: Option<YarnRopeConfig>,
     pub max_position_embeddings: usize,
@@ -44,6 +45,7 @@ impl TextConfig {
         n_heads: 32,
         n_kv_heads: 8,
         head_dim: 128,
+        rotary_dim: 128,
         rope_theta: 1_000_000.0,
         rope_yarn: Some(YarnRopeConfig {
             factor: 16.0,
@@ -72,11 +74,8 @@ impl TextConfig {
             .and_then(|rope| parse_optional_json_f32_field(rope, "partial_rotary_factor"))
             .or_else(|| parse_optional_json_f32_field(text_config, "partial_rotary_factor"))
             .unwrap_or(1.0);
-        if (partial_rotary_factor - 1.0).abs() > f32::EPSILON {
-            return Err(invalid_data(format!(
-                "partial rotary factor {partial_rotary_factor} is not supported by the current full-head RoPE kernels"
-            )));
-        }
+        let head_dim = parse_json_usize_field(text_config, "head_dim")?;
+        let rotary_dim = rotary_dim_from_partial_factor(head_dim, partial_rotary_factor)?;
         let rope_yarn = rope_parameters
             .and_then(|rope| {
                 let rope_type = parse_json_string_field(rope, "rope_type")
@@ -104,7 +103,8 @@ impl TextConfig {
             n_layers: parse_json_usize_field(text_config, "num_hidden_layers")?,
             n_heads: parse_json_usize_field(text_config, "num_attention_heads")?,
             n_kv_heads: parse_json_usize_field(text_config, "num_key_value_heads")?,
-            head_dim: parse_json_usize_field(text_config, "head_dim")?,
+            head_dim,
+            rotary_dim,
             rope_theta: rope_parameters
                 .and_then(|rope| parse_optional_json_f32_field(rope, "rope_theta"))
                 .unwrap_or_else(|| {
@@ -155,6 +155,12 @@ impl TextConfig {
                 self.head_dim
             )));
         }
+        if self.rotary_dim == 0 || self.rotary_dim % 2 != 0 || self.rotary_dim > self.head_dim {
+            return Err(invalid_data(format!(
+                "text config rotary_dim must be even, nonzero, and <= head_dim; got rotary_dim {} head_dim {}",
+                self.rotary_dim, self.head_dim
+            )));
+        }
         if self.n_heads % self.n_kv_heads != 0 {
             return Err(invalid_data(format!(
                 "text config num_attention_heads {} must be divisible by num_key_value_heads {}",
@@ -195,6 +201,26 @@ impl TextConfig {
 
         Ok(())
     }
+}
+
+fn rotary_dim_from_partial_factor(head_dim: usize, partial_rotary_factor: f32) -> Result<usize> {
+    if !partial_rotary_factor.is_finite()
+        || partial_rotary_factor <= 0.0
+        || partial_rotary_factor > 1.0
+    {
+        return Err(invalid_data(format!(
+            "partial_rotary_factor must be finite and in (0, 1], got {partial_rotary_factor}"
+        )));
+    }
+
+    let rotary_dim = (head_dim as f32 * partial_rotary_factor) as usize;
+    if rotary_dim == 0 || rotary_dim % 2 != 0 || rotary_dim > head_dim {
+        return Err(invalid_data(format!(
+            "partial_rotary_factor {partial_rotary_factor} gives invalid rotary_dim {rotary_dim} for head_dim {head_dim}; rotary_dim must be even, nonzero, and <= head_dim"
+        )));
+    }
+
+    Ok(rotary_dim)
 }
 
 impl YarnRopeConfig {
@@ -5076,12 +5102,12 @@ fn load_exported_rowwise_scaled_attention_ffn_layer_device_weights(
 }
 
 fn rope_frequencies(config: &TextConfig) -> Vec<f32> {
-    let half = config.head_dim / 2;
+    let half = config.rotary_dim / 2;
     let default_freqs: Vec<f32> = (0..half)
         .map(|i| {
             1.0 / config
                 .rope_theta
-                .powf((2 * i) as f32 / config.head_dim as f32)
+                .powf((2 * i) as f32 / config.rotary_dim as f32)
         })
         .collect();
 
@@ -5099,7 +5125,7 @@ fn yarn_rope_frequencies(
 ) -> Vec<f32> {
     let low = yarn_correction_dim(
         yarn.beta_fast,
-        config.head_dim,
+        config.rotary_dim,
         config.rope_theta,
         yarn.original_max_position_embeddings,
     )
@@ -5107,12 +5133,12 @@ fn yarn_rope_frequencies(
     .max(0.0);
     let high = yarn_correction_dim(
         yarn.beta_slow,
-        config.head_dim,
+        config.rotary_dim,
         config.rope_theta,
         yarn.original_max_position_embeddings,
     )
     .ceil()
-    .min((config.head_dim - 1) as f32);
+    .min((config.rotary_dim - 1) as f32);
 
     default_freqs
         .iter()
@@ -7390,11 +7416,16 @@ fn cpu_single_token_gqa(
 }
 
 fn cpu_apply_rope(input: &[f32], freqs: &[f32], position: usize, head_dim: usize) -> Vec<f32> {
-    let half = head_dim / 2;
+    let half = freqs.len();
+    let rotary_dim = half * 2;
     let mut out = vec![0.0; input.len()];
     for i in 0..input.len() {
         let head = i / head_dim;
         let dim = i - head * head_dim;
+        if dim >= rotary_dim {
+            out[i] = input[i];
+            continue;
+        }
         let pair_dim = if dim < half { dim } else { dim - half };
         let base = head * head_dim;
         let first = input[base + pair_dim];
@@ -7888,6 +7919,25 @@ fn invalid_data(message: impl Into<String>) -> Box<dyn std::error::Error> {
 mod tests {
     use super::*;
 
+    fn partial_rope_config_json(partial_rotary_factor: f32) -> String {
+        format!(
+            r#"{{
+                "hidden_size": 4096,
+                "intermediate_size": 11008,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 32,
+                "num_key_value_heads": 8,
+                "head_dim": 256,
+                "rope_theta": 10000.0,
+                "partial_rotary_factor": {partial_rotary_factor},
+                "max_position_embeddings": 32768,
+                "vocab_size": 151936,
+                "rms_norm_eps": 0.000001,
+                "eos_token_id": 151645
+            }}"#
+        )
+    }
+
     #[test]
     fn runtime_max_seq_len_respects_model_position_limit() {
         let config = TextConfig {
@@ -7901,5 +7951,49 @@ mod tests {
             error.to_string(),
             "runtime max_seq_len 9 exceeds model max_position_embeddings 8"
         );
+    }
+
+    #[test]
+    fn text_config_accepts_partial_rotary_factor() {
+        let config = TextConfig::from_config_json(&partial_rope_config_json(0.25)).unwrap();
+
+        assert_eq!(config.head_dim, 256);
+        assert_eq!(config.rotary_dim, 64);
+        assert_eq!(config.eos_token_id, Some(151645));
+    }
+
+    #[test]
+    fn rope_frequencies_use_rotary_dim_denominator() {
+        let config = TextConfig::from_config_json(&partial_rope_config_json(0.25)).unwrap();
+        let freqs = rope_frequencies(&config);
+
+        assert_eq!(freqs.len(), 32);
+        assert!((freqs[0] - 1.0).abs() < 1e-6);
+        let expected = 1.0 / 10_000.0_f32.powf(2.0 / 64.0);
+        assert!((freqs[1] - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cpu_rope_leaves_non_rotary_tail_unchanged() {
+        let input = vec![1.0, 2.0, 3.0, 4.0, 9.0, 10.0];
+        let freqs = vec![0.5, 1.0];
+        let output = cpu_apply_rope(&input, &freqs, 1, 6);
+
+        let cos0 = 0.5_f32.cos();
+        let sin0 = 0.5_f32.sin();
+        let cos1 = 1.0_f32.cos();
+        let sin1 = 1.0_f32.sin();
+        let expected = [
+            input[0] * cos0 - input[2] * sin0,
+            input[1] * cos1 - input[3] * sin1,
+            input[2] * cos0 + input[0] * sin0,
+            input[3] * cos1 + input[1] * sin1,
+            input[4],
+            input[5],
+        ];
+
+        for (actual, expected) in output.iter().zip(expected) {
+            assert!((*actual - expected).abs() < 1e-6);
+        }
     }
 }
