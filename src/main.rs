@@ -3,7 +3,7 @@ use std::{
     env,
     error::Error,
     fs,
-    io::{self, ErrorKind},
+    io::{self, BufRead, ErrorKind, IsTerminal, Write},
     path::{Path, PathBuf},
     process,
     sync::Arc,
@@ -146,6 +146,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         }
         "qwen-text-generate" | "qwen-text-suite" => run_qwen_text_suite(&args),
         "qwen-chat" | "qwen-chat-generate" | "qwen-chat-suite" => run_qwen_chat_suite(&args),
+        "qwen-chat-session" | "qwen-chat-repl" | "qwen-chat-stdin" => run_qwen_chat_session(&args),
         "ministral-eval" => run_ministral_eval(&args),
         "ministral-eval-exported" => run_ministral_eval_exported(&args),
         "ministral-chat" | "ministral-chat-suite" => run_ministral_chat_suite(&args),
@@ -255,7 +256,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
              `qwen-weight-smoke`, `qwen-layer-load-smoke`, `qwen-full-layer-smoke`, \
              `qwen-linear-layer-smoke`, `qwen-prefix-layers-smoke`, \
              `qwen-single-token-top1-smoke`, `qwen-text-generate`, `qwen-chat-generate`, \
-             `qwen-tokens-generate`, \
+             `qwen-chat-session`, `qwen-tokens-generate`, \
              `ministral-tokens-logits`, `ministral-tokens-exported-logits`, \
              `ministral-tokens-trace`, `ministral-tokens-exported-trace`, \
              `ministral-tokens-eval`, `ministral-tokens-eval-exported`, \
@@ -7738,6 +7739,151 @@ fn run_qwen_chat_suite(args: &[String]) -> AppResult<()> {
     Ok(())
 }
 
+fn run_qwen_chat_session(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let model_dir = parse_optional_existing_model_dir(args, &mut index, DEFAULT_QWEN3_6_27B_DIR);
+    let max_new_tokens = parse_optional_usize(args, &mut index, 48, "max_new_tokens")?;
+    let top_k = parse_optional_usize(args, &mut index, 1, "top_k")?;
+    let cli = parse_qwen_chat_session_cli(args, index)?;
+    if top_k == 0 {
+        return Err(invalid_input("Qwen3.5 chat session top_k must be nonzero"));
+    }
+
+    let tokenizer = QwenByteLevelBpeTokenizer::open(&model_dir)?;
+    let (stream, module) = cuda_handles()?;
+    let runtime_timer = ProfileTimer::start();
+    let mut runtime = Qwen35GreedyRuntime::new(stream, module, &model_dir)?;
+    let runtime_init_seconds = runtime_timer.elapsed_seconds();
+    let memory = runtime.memory_stats();
+    let stop_token_ids = qwen_with_stop_token_overrides(
+        qwen_text_stop_token_ids(runtime.config(), &tokenizer),
+        &cli.stop_token_ids,
+    );
+
+    println!(
+        "Qwen chat session: backend=bf16 decode_strategy={} top_k={} sampling={:?} stop_token_ids={:?} runtime_init_seconds={:.6}",
+        qwen35_decode_strategy_label(cli.sampling, top_k),
+        top_k,
+        cli.sampling,
+        stop_token_ids,
+        runtime_init_seconds
+    );
+    print_runtime_memory_bytes("  ", &memory);
+    println!("  enable_thinking={}", cli.enable_thinking);
+    println!("  commands=:quit,:exit");
+
+    let mut prompt_index = 0usize;
+    for prompt in &cli.initial_prompts {
+        run_qwen_chat_session_prompt(
+            &tokenizer,
+            &mut runtime,
+            prompt,
+            prompt_index,
+            max_new_tokens,
+            top_k,
+            &stop_token_ids,
+            cli.sampling,
+            &cli.system_prompt,
+            cli.enable_thinking,
+        )?;
+        prompt_index += 1;
+    }
+
+    let stdin = io::stdin();
+    let interactive = stdin.is_terminal();
+    let mut stdin = stdin.lock();
+    loop {
+        if interactive {
+            print!("qwen> ");
+            io::stdout().flush()?;
+        }
+
+        let mut line = String::new();
+        if stdin.read_line(&mut line)? == 0 {
+            break;
+        }
+
+        let prompt = line.trim_end_matches(['\r', '\n']);
+        if prompt.trim().is_empty() {
+            continue;
+        }
+        if matches!(prompt.trim(), ":quit" | ":exit") {
+            break;
+        }
+
+        run_qwen_chat_session_prompt(
+            &tokenizer,
+            &mut runtime,
+            prompt,
+            prompt_index,
+            max_new_tokens,
+            top_k,
+            &stop_token_ids,
+            cli.sampling,
+            &cli.system_prompt,
+            cli.enable_thinking,
+        )?;
+        prompt_index += 1;
+    }
+
+    Ok(())
+}
+
+fn run_qwen_chat_session_prompt(
+    tokenizer: &QwenByteLevelBpeTokenizer,
+    runtime: &mut Qwen35GreedyRuntime,
+    user_prompt: &str,
+    prompt_index: usize,
+    max_new_tokens: usize,
+    top_k: usize,
+    stop_token_ids: &[u32],
+    sampling: Option<SamplingOptions>,
+    system_prompt: &SystemPrompt,
+    enable_thinking: bool,
+) -> AppResult<()> {
+    let formatted_prompt = chat::format_qwen_single_turn_chat(
+        qwen_system_prompt(system_prompt),
+        user_prompt,
+        enable_thinking,
+    );
+    let prompt_tokens = tokenizer.encode_lossy(&formatted_prompt, false)?;
+    if prompt_tokens.is_empty() {
+        return Err(invalid_input(format!(
+            "Qwen chat session prompt {prompt_index} encoded to zero tokens"
+        )));
+    }
+    let max_seq_len = qwen_generation_max_seq_len(prompt_tokens.len(), max_new_tokens)?;
+    let decode_state_bytes = runtime.decode_state_bytes(max_seq_len)?;
+    let generation_timer = ProfileTimer::start();
+    let result = qwen35_generate_cli_tokens(
+        runtime,
+        &prompt_tokens,
+        max_new_tokens,
+        top_k,
+        stop_token_ids,
+        sampling,
+    )?;
+    let generation_seconds = generation_timer.elapsed_seconds();
+    let generated_tokens_per_second =
+        tokens_per_second(result.generated_tokens.len(), generation_seconds);
+    let generated_text = tokenizer.decode_lossy(&result.generated_tokens)?;
+
+    println!("  prompt_index={prompt_index} user_prompt={user_prompt:?}");
+    println!(
+        "  decode_state_bytes max_seq_len={} bytes={}",
+        max_seq_len, decode_state_bytes
+    );
+    println!("  generated_tokens={:?}", result.generated_tokens);
+    println!("  assistant={generated_text:?}");
+    println!("  finish_reason={}", result.finish_reason);
+    println!(
+        "  generation_seconds={:.6} generated_tokens_per_second={:.3}",
+        generation_seconds, generated_tokens_per_second
+    );
+
+    Ok(())
+}
+
 fn qwen_system_prompt(system_prompt: &SystemPrompt) -> Option<&str> {
     match system_prompt {
         SystemPrompt::DefaultFromModel | SystemPrompt::None => None,
@@ -9567,6 +9713,15 @@ struct ChatCli {
     sampling: Option<SamplingOptions>,
 }
 
+#[derive(Debug)]
+struct QwenChatSessionCli {
+    system_prompt: SystemPrompt,
+    enable_thinking: bool,
+    initial_prompts: Vec<String>,
+    stop_token_ids: Vec<u32>,
+    sampling: Option<SamplingOptions>,
+}
+
 #[derive(Debug, Default)]
 struct ChatCompareThresholds {
     require_token_match: bool,
@@ -9774,6 +9929,81 @@ fn parse_chat_cli(args: &[String], start: usize) -> AppResult<ChatCli> {
         report_path,
         driver,
         thresholds,
+        sampling,
+    })
+}
+
+fn parse_qwen_chat_session_cli(args: &[String], start: usize) -> AppResult<QwenChatSessionCli> {
+    let mut system_prompt = SystemPrompt::DefaultFromModel;
+    let mut enable_thinking = true;
+    let mut sampling = None;
+    let mut initial_prompts = Vec::new();
+    let mut stop_token_ids = Vec::new();
+    let mut current_prompt = Vec::new();
+    let mut index = start;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--no-system" => {
+                system_prompt = SystemPrompt::None;
+                index += 1;
+            }
+            "--thinking" => {
+                enable_thinking = true;
+                index += 1;
+            }
+            "--no-thinking" => {
+                enable_thinking = false;
+                index += 1;
+            }
+            "--system" => {
+                let value = parse_required_flag_value(args, &mut index, "--system")?;
+                system_prompt = SystemPrompt::Custom(value.to_string());
+            }
+            "--prompts-file" => {
+                let value = parse_required_flag_value(args, &mut index, "--prompts-file")?;
+                initial_prompts.extend(read_prompt_file_lines(value)?);
+            }
+            "--prompt" => {
+                push_prompt_words(&mut initial_prompts, &mut current_prompt);
+                let value = parse_required_flag_value(args, &mut index, "--prompt")?;
+                initial_prompts.push(value.to_string());
+            }
+            "--stop-token" => {
+                let value = parse_required_flag_value(args, &mut index, "--stop-token")?;
+                stop_token_ids.push(value.parse::<u32>().map_err(|error| {
+                    invalid_input(format!("stop token id {value:?} is not a u32: {error}"))
+                })?);
+            }
+            "--sample-temperature" => {
+                let value = parse_required_flag_value(args, &mut index, "--sample-temperature")?;
+                sampling
+                    .get_or_insert_with(SamplingOptions::default)
+                    .temperature = value.parse()?;
+            }
+            "--sample-seed" => {
+                let value = parse_required_flag_value(args, &mut index, "--sample-seed")?;
+                sampling.get_or_insert_with(SamplingOptions::default).seed = value.parse()?;
+            }
+            flag if flag.starts_with("--") => {
+                return Err(invalid_input(format!(
+                    "unknown Qwen chat session flag {flag:?}"
+                )));
+            }
+            value => {
+                current_prompt.push(value.to_string());
+                index += 1;
+            }
+        }
+    }
+
+    push_prompt_words(&mut initial_prompts, &mut current_prompt);
+
+    Ok(QwenChatSessionCli {
+        system_prompt,
+        enable_thinking,
+        initial_prompts,
+        stop_token_ids,
         sampling,
     })
 }
@@ -14146,6 +14376,19 @@ mod tests {
         let cli =
             parse_chat_cli(&args(&["--stop-token", "2", "--stop-token", "248046"]), 0).unwrap();
         assert_eq!(cli.stop_token_ids, vec![2, 248046]);
+    }
+
+    #[test]
+    fn qwen_chat_session_cli_does_not_default_prompt() {
+        let cli = parse_qwen_chat_session_cli(&args(&["--no-thinking"]), 0).unwrap();
+        assert!(cli.initial_prompts.is_empty());
+        assert!(!cli.enable_thinking);
+    }
+
+    #[test]
+    fn qwen_chat_session_cli_accepts_initial_prompts() {
+        let cli = parse_qwen_chat_session_cli(&args(&["hello", "--prompt", "goodbye"]), 0).unwrap();
+        assert_eq!(cli.initial_prompts, vec!["hello", "goodbye"]);
     }
 
     #[test]
