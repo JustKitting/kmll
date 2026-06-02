@@ -1,11 +1,13 @@
 pub mod backends;
 pub mod chat;
 pub mod dtypes;
+pub mod formats;
 pub mod inference;
 pub mod kernels;
 pub mod layout;
 pub mod math;
 pub mod model;
+pub mod onnx;
 pub mod ops;
 pub mod rowwise_scaled;
 pub mod runtime;
