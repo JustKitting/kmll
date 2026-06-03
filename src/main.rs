@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env,
     error::Error,
     fs,
@@ -12,7 +12,7 @@ use std::{
 
 mod cuda_worker;
 
-use cuda_core::{CudaContext, CudaModule, CudaStream, DeviceBuffer};
+use cuda_core::{CudaContext, CudaFunction, CudaModule, CudaStream, DeviceBuffer};
 use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
     autotune::{
@@ -456,7 +456,12 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
             repeat_count: measure_repeat_count,
             warmup_count: measure_warmup_count,
         };
-        let mut bench = GemmAutotuneBench::new(&stream, &module, m, n, k, options)?;
+        let generated_store = artifact_root
+            .as_ref()
+            .map(|root| KernelArtifactStore::new(root.clone()))
+            .unwrap_or_else(KernelArtifactStore::managed);
+        let mut bench =
+            GemmAutotuneBench::new(&stream, &module, m, n, k, options, generated_store)?;
         let mut first_measure_error = None;
         let result = beam_search_metadata_with_scorer(&problem, config, |candidate| {
             match bench.score_candidate(candidate) {
@@ -531,11 +536,20 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
             );
             if compile {
                 let output_dir = store.paths_for(best).directory;
-                compile_standalone_kernel_crate(
+                let compiled = compile_standalone_kernel_crate(
                     &emitted_crate.paths.crate_dir,
                     &output_dir,
+                    &emitted_crate.package_name,
                     compile_arch.as_deref(),
                 )?;
+                println!(
+                    "compiled_crate crate_dir={} output_dir={} ptx_path={} stdout_bytes={} stderr_bytes={}",
+                    compiled.crate_dir.display(),
+                    compiled.output_dir.display(),
+                    compiled.ptx_path.display(),
+                    compiled.stdout_bytes,
+                    compiled.stderr_bytes
+                );
             }
         }
     }
@@ -552,9 +566,13 @@ struct GemmAutotuneMeasureOptions {
 struct GemmAutotuneBench<'a> {
     stream: &'a Arc<CudaStream>,
     module: &'a Arc<CudaModule>,
+    generated_store: KernelArtifactStore,
+    generated_modules: HashMap<String, GeneratedGemmModule>,
     dev_a: DeviceBuffer<f32>,
     dev_b: DeviceBuffer<Bf16>,
     dev_c: DeviceBuffer<f32>,
+    expected: Vec<f32>,
+    c_layout: MatrixLayout<RowMajor>,
     m: usize,
     n: usize,
     k: usize,
@@ -569,6 +587,7 @@ impl<'a> GemmAutotuneBench<'a> {
         n: usize,
         k: usize,
         options: GemmAutotuneMeasureOptions,
+        generated_store: KernelArtifactStore,
     ) -> AppResult<Self> {
         let a_layout = MatrixLayout::<RowMajor>::packed(m, k);
         let b_layout = MatrixLayout::<ColumnMajor>::packed(k, n);
@@ -580,13 +599,20 @@ impl<'a> GemmAutotuneBench<'a> {
         let c = vec![0.0_f32; c_layout.capacity()];
         fill_matrix::<RowMajor>(&mut a, &a_layout, m, k, &mut seed);
         fill_bf16_matrix::<ColumnMajor>(&mut b, &b_layout, k, n, &mut seed);
+        let expected = cpu_gemm_bf16_reference(
+            &a, &a_layout, &b, &b_layout, &c, &c_layout, m, n, k, 1.0, 0.0,
+        );
 
         Ok(Self {
             stream,
             module,
+            generated_store,
+            generated_modules: HashMap::new(),
             dev_a: DeviceBuffer::from_host(stream, &a)?,
             dev_b: DeviceBuffer::from_host(stream, &b)?,
             dev_c: DeviceBuffer::from_host(stream, &c)?,
+            expected,
+            c_layout,
             m,
             n,
             k,
@@ -601,16 +627,8 @@ impl<'a> GemmAutotuneBench<'a> {
         if candidate.family != "gemm-f32-bf16-row-col-row" {
             return Ok(None);
         }
-        let KernelMaterialization::Existing { symbol } = &candidate.generated.materialization
-        else {
-            return Ok(None);
-        };
-        if *symbol != "gemm_f32_bf16_tiled_kernel" {
-            return Ok(None);
-        }
-
         for _ in 0..self.options.warmup_count {
-            self.launch_existing_bf16_gemm()?;
+            self.launch_candidate(candidate)?;
         }
         self.stream.synchronize()?;
 
@@ -619,7 +637,7 @@ impl<'a> GemmAutotuneBench<'a> {
             let start = self
                 .stream
                 .record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
-            self.launch_existing_bf16_gemm()?;
+            self.launch_candidate(candidate)?;
             let end = self
                 .stream
                 .record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
@@ -632,7 +650,33 @@ impl<'a> GemmAutotuneBench<'a> {
         let median = nn_rust_profiling::median_f64(&samples).ok_or_else(|| {
             invalid_data("kernel-autotune-gemm measurement produced no finite samples")
         })?;
+        let actual = self.dev_c.to_host_vec(self.stream)?;
+        compare_gemm_output(
+            &format!("kernel-autotune-gemm {}", candidate.launch.kernel),
+            &actual,
+            &self.expected,
+            &self.c_layout,
+            self.m,
+            self.n,
+            self.k,
+        )?;
         Ok(SearchScore::measured(median))
+    }
+
+    fn launch_candidate(&mut self, candidate: &KernelCandidateMetadata) -> AppResult<()> {
+        match &candidate.generated.materialization {
+            KernelMaterialization::Existing { symbol } => {
+                if *symbol != "gemm_f32_bf16_tiled_kernel" {
+                    return Err(invalid_input(format!(
+                        "kernel-autotune-gemm cannot measure existing GEMM symbol {symbol:?}"
+                    )));
+                }
+                self.launch_existing_bf16_gemm()
+            }
+            KernelMaterialization::DeferredGenerated { .. } => {
+                self.launch_generated_bf16_gemm(candidate)
+            }
+        }
     }
 
     fn launch_existing_bf16_gemm(&mut self) -> AppResult<()> {
@@ -650,13 +694,133 @@ impl<'a> GemmAutotuneBench<'a> {
         )?;
         Ok(())
     }
+
+    fn launch_generated_bf16_gemm(&mut self, candidate: &KernelCandidateMetadata) -> AppResult<()> {
+        let artifact_key = candidate.artifact_key().hex();
+        if !self.generated_modules.contains_key(&artifact_key) {
+            let emitted = self
+                .generated_store
+                .emit_standalone_crate(candidate, &GemmRustCudaGenerator)?;
+            let output_dir = self.generated_store.paths_for(candidate).directory;
+            let compiled = compile_standalone_kernel_crate(
+                &emitted.paths.crate_dir,
+                &output_dir,
+                &emitted.package_name,
+                None,
+            )?;
+            let ptx_path = compiled
+                .ptx_path
+                .to_str()
+                .ok_or_else(|| invalid_input("generated PTX path is not valid UTF-8"))?;
+            let module = self.stream.context().load_module_from_file(ptx_path)?;
+            let function = module.load_function(&emitted.symbol)?;
+            self.generated_modules
+                .insert(artifact_key.clone(), GeneratedGemmModule { function });
+        }
+        let Some(generated) = self.generated_modules.get(&artifact_key) else {
+            return Err(invalid_input(format!(
+                "generated GEMM module cache miss for artifact {artifact_key}"
+            )));
+        };
+        launch_generated_gemm_symbol(
+            self.stream,
+            generated,
+            candidate,
+            &self.dev_a,
+            &self.dev_b,
+            &mut self.dev_c,
+            self.m,
+            self.n,
+            self.k,
+        )
+    }
+}
+
+struct GeneratedGemmModule {
+    function: CudaFunction,
+}
+
+fn launch_generated_gemm_symbol(
+    stream: &Arc<CudaStream>,
+    generated: &GeneratedGemmModule,
+    candidate: &KernelCandidateMetadata,
+    a: &DeviceBuffer<f32>,
+    b: &DeviceBuffer<Bf16>,
+    c: &mut DeviceBuffer<f32>,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> AppResult<()> {
+    let a_layout = MatrixLayout::<RowMajor>::packed(m, k);
+    let b_layout = MatrixLayout::<ColumnMajor>::packed(k, n);
+    let c_layout = MatrixLayout::<RowMajor>::packed(m, n);
+    let a_stride = a_layout.stride();
+    let b_stride = b_layout.stride();
+    let c_stride = c_layout.stride();
+
+    let mut a_ptr = a.cu_deviceptr();
+    let mut a_len = a.len() as u64;
+    let mut b_ptr = b.cu_deviceptr();
+    let mut b_len = b.len() as u64;
+    let mut m_arg = m as u32;
+    let mut n_arg = n as u32;
+    let mut k_arg = k as u32;
+    let mut a_row_stride = a_stride.row as u32;
+    let mut a_col_stride = a_stride.col as u32;
+    let mut b_row_stride = b_stride.row as u32;
+    let mut b_col_stride = b_stride.col as u32;
+    let mut c_row_stride = c_stride.row as u32;
+    let mut c_col_stride = c_stride.col as u32;
+    let mut alpha = 1.0_f32;
+    let mut beta = 0.0_f32;
+    let mut c_ptr = c.cu_deviceptr();
+    let mut c_len = c.len() as u64;
+    let mut args = vec![
+        &mut a_ptr as *mut _ as *mut std::ffi::c_void,
+        &mut a_len as *mut _ as *mut std::ffi::c_void,
+        &mut b_ptr as *mut _ as *mut std::ffi::c_void,
+        &mut b_len as *mut _ as *mut std::ffi::c_void,
+        &mut m_arg as *mut _ as *mut std::ffi::c_void,
+        &mut n_arg as *mut _ as *mut std::ffi::c_void,
+        &mut k_arg as *mut _ as *mut std::ffi::c_void,
+        &mut a_row_stride as *mut _ as *mut std::ffi::c_void,
+        &mut a_col_stride as *mut _ as *mut std::ffi::c_void,
+        &mut b_row_stride as *mut _ as *mut std::ffi::c_void,
+        &mut b_col_stride as *mut _ as *mut std::ffi::c_void,
+        &mut c_row_stride as *mut _ as *mut std::ffi::c_void,
+        &mut c_col_stride as *mut _ as *mut std::ffi::c_void,
+        &mut alpha as *mut _ as *mut std::ffi::c_void,
+        &mut beta as *mut _ as *mut std::ffi::c_void,
+        &mut c_ptr as *mut _ as *mut std::ffi::c_void,
+        &mut c_len as *mut _ as *mut std::ffi::c_void,
+    ];
+    unsafe {
+        cuda_core::launch_kernel_on_stream(
+            &generated.function,
+            (
+                candidate.launch.grid_dim.x,
+                candidate.launch.grid_dim.y,
+                candidate.launch.grid_dim.z,
+            ),
+            (
+                candidate.launch.block_dim.x,
+                candidate.launch.block_dim.y,
+                candidate.launch.block_dim.z,
+            ),
+            candidate.launch.shared_mem_bytes,
+            stream.as_ref(),
+            &mut args,
+        )?;
+    }
+    Ok(())
 }
 
 fn compile_standalone_kernel_crate(
     crate_dir: &Path,
     output_dir: &Path,
+    ptx_stem: &str,
     arch: Option<&str>,
-) -> AppResult<()> {
+) -> AppResult<CompiledStandaloneKernelCrate> {
     fs::create_dir_all(output_dir)?;
     let crate_dir = crate_dir.canonicalize()?;
     let output_dir = output_dir.canonicalize()?;
@@ -684,14 +848,29 @@ fn compile_standalone_kernel_crate(
             String::from_utf8_lossy(&output.stderr)
         )));
     }
-    println!(
-        "compiled_crate crate_dir={} output_dir={} stdout_bytes={} stderr_bytes={}",
-        crate_dir.display(),
-        output_dir.display(),
-        output.stdout.len(),
-        output.stderr.len()
-    );
-    Ok(())
+    let ptx_path = output_dir.join(format!("{ptx_stem}.ptx"));
+    if !ptx_path.exists() {
+        return Err(invalid_input(format!(
+            "cargo oxide build succeeded in {} but expected generated PTX {} was not written",
+            crate_dir.display(),
+            ptx_path.display()
+        )));
+    }
+    Ok(CompiledStandaloneKernelCrate {
+        crate_dir,
+        output_dir,
+        ptx_path,
+        stdout_bytes: output.stdout.len(),
+        stderr_bytes: output.stderr.len(),
+    })
+}
+
+struct CompiledStandaloneKernelCrate {
+    crate_dir: PathBuf,
+    output_dir: PathBuf,
+    ptx_path: PathBuf,
+    stdout_bytes: usize,
+    stderr_bytes: usize,
 }
 
 fn print_kernel_candidate(rank: usize, candidate: &KernelCandidateMetadata) {
