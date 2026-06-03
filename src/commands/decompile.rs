@@ -83,6 +83,8 @@ fn push_fixture_arg(value: &str, fixtures: &mut Vec<SimpleKernelFixtureKind>) ->
             SimpleKernelFixtureKind::LoadStore,
             SimpleKernelFixtureKind::PredicateBranch,
             SimpleKernelFixtureKind::ThreadIndexRead,
+            SimpleKernelFixtureKind::Bf16ToF32,
+            SimpleKernelFixtureKind::F16Ops,
         ] {
             push_unique_fixture(fixtures, fixture);
         }

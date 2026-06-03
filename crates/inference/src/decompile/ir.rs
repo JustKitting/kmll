@@ -95,6 +95,16 @@ pub enum KernelIrOpKind {
         lhs: String,
         rhs: String,
     },
+    PackedHalfAdd {
+        dst: String,
+        inputs: Vec<String>,
+        lanes: u32,
+    },
+    PackedHalfMul {
+        dst: String,
+        inputs: Vec<String>,
+        lanes: u32,
+    },
     FusedMultiplyAdd {
         dst: String,
         a: String,
@@ -281,6 +291,22 @@ fn lower_kind(instruction: &SassInstruction) -> (KernelIrOpKind, SassMappingConf
             lhs,
             rhs,
         }),
+        "HADD2" => (
+            KernelIrOpKind::PackedHalfAdd {
+                dst: operands.first().cloned().unwrap_or_default(),
+                inputs: operands.iter().skip(1).cloned().collect(),
+                lanes: 2,
+            },
+            SassMappingConfidence::OpcodeHeuristic,
+        ),
+        "HMUL2" => (
+            KernelIrOpKind::PackedHalfMul {
+                dst: operands.first().cloned().unwrap_or_default(),
+                inputs: operands.iter().skip(1).cloned().collect(),
+                lanes: 2,
+            },
+            SassMappingConfidence::OpcodeHeuristic,
+        ),
         "FFMA" | "HFMA2" => map_four_operands(instruction, |dst, a, b, c| {
             KernelIrOpKind::FusedMultiplyAdd {
                 dst,

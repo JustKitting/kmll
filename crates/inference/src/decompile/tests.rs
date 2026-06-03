@@ -34,9 +34,11 @@ matvec_bf16_rows17:
         /*0060*/                   LD.E.U16 R23, desc[UR10][R24.64] ;            /* 0x0 */
         /*0070*/                   HFMA2 R3, -RZ, RZ, 0, 0 ;                     /* 0x0 */
         /*0080*/                   FMUL R23, R23, R32 ;                          /* 0x0 */
-        /*0090*/               @P0 BRA `(.L_x_1) ;                               /* 0x0 */
+        /*0090*/                   HADD2 R5, R6.H0_H0, R5.H0_H0 ;                /* 0x0 */
+        /*00a0*/                   HMUL2 R5, R5.H0_H0, 0.5, 0.5 ;                /* 0x0 */
+        /*00b0*/               @P0 BRA `(.L_x_1) ;                               /* 0x0 */
 .L_x_0:
-        /*00a0*/                   BSYNC B0 ;                                    /* 0x0 */
+        /*00c0*/                   BSYNC B0 ;                                    /* 0x0 */
 "#;
 
 #[test]
@@ -121,6 +123,14 @@ fn lower_rows17_slice_keeps_predicates_and_half_fma_visible() {
             ..
         }
     )));
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op.kind, KernelIrOpKind::PackedHalfAdd { lanes: 2, .. }))
+    );
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op.kind, KernelIrOpKind::PackedHalfMul { lanes: 2, .. }))
+    );
     assert!(ops.iter().any(|op| matches!(
         op.kind,
         KernelIrOpKind::Branch {
