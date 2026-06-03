@@ -1613,6 +1613,11 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.lifted_op_count > 0);
     assert!(report.live_range_count > 0);
     assert!(report.memory_access_count > 0);
+    assert!(report.value_ops.iter().any(|op| {
+        op.opcode == SassOpcode::new("LD")
+            && op.kind == SassValueOpKind::Load
+            && op.output_registers == [reg("R2")]
+    }));
     assert!(report.memory_accesses.iter().any(|access| {
         access.kind == SassMemoryAccessKind::Load
             && access.space == MemorySpace::Descriptor

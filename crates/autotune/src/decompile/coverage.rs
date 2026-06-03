@@ -13,7 +13,7 @@ use super::{
     MemorySpace, RegisterRef, SassAnalysisModule, SassLiftedModule, SassLiftedOpClass,
     SassLiftedOpDetail, SassLiftedOpKind, SassLiftedSemantics, SassLiftedValueRef,
     SassMemoryAccessKind, SassModifier, SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind,
-    SassOpcodeCatalogSource, SassPatternModule, SassRegionPath, analyze_sass_ir,
+    SassOpcodeCatalogSource, SassPatternModule, SassRegionPath, SassValueOpKind, analyze_sass_ir,
     known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
     render_sass_file_side_by_side,
 };
@@ -506,10 +506,10 @@ pub struct SassCoverageValueOp {
     pub address: u64,
     pub block_id: Option<usize>,
     pub predicate: Option<String>,
-    pub opcode: String,
-    pub kind: String,
-    pub input_registers: Vec<String>,
-    pub output_registers: Vec<String>,
+    pub opcode: SassOpcode,
+    pub kind: SassValueOpKind,
+    pub input_registers: Vec<RegisterRef>,
+    pub output_registers: Vec<RegisterRef>,
     pub input_value_ids: Vec<usize>,
     pub output_value_ids: Vec<usize>,
     pub source: String,
@@ -1266,14 +1266,10 @@ fn append_analysis(
                 address: op.address,
                 block_id: op.block_id,
                 predicate: op.predicate.clone(),
-                opcode: op.opcode.to_string(),
-                kind: op.kind.to_string(),
-                input_registers: op.input_registers.iter().map(ToString::to_string).collect(),
-                output_registers: op
-                    .output_registers
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect(),
+                opcode: op.opcode.clone(),
+                kind: op.kind,
+                input_registers: op.input_registers.clone(),
+                output_registers: op.output_registers.clone(),
                 input_value_ids: op.input_value_ids.clone(),
                 output_value_ids: op.output_value_ids.clone(),
                 source: op.source.clone(),
@@ -1963,12 +1959,12 @@ fn render_value_ops_tsv(report: &SassCoverageReport) -> String {
                 .map(|block| block.to_string())
                 .unwrap_or_default(),
             tsv(op.predicate.as_deref().unwrap_or("")),
-            tsv(&op.opcode),
-            tsv(&op.input_registers.join(",")),
-            tsv(&op.output_registers.join(",")),
+            tsv(&op.opcode.to_string()),
+            tsv(&display_list(&op.input_registers)),
+            tsv(&display_list(&op.output_registers)),
             tsv(&format_values(&op.input_value_ids)),
             tsv(&format_values(&op.output_value_ids)),
-            tsv(&op.kind),
+            tsv(&op.kind.to_string()),
             tsv(&op.source),
         )
         .expect("write to string");
