@@ -157,7 +157,10 @@ impl DecompilePtxProbeOptions {
         Self {
             artifact_root: runtime::default_artifact_dir().join("decompile-probes"),
             compile_arch: "sm_120".to_string(),
-            probes: vec![PtxDecompileProbeKind::TensorCoreHmma],
+            probes: vec![
+                PtxDecompileProbeKind::TensorCoreHmma,
+                PtxDecompileProbeKind::TensorCoreImma,
+            ],
         }
     }
 }

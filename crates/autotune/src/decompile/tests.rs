@@ -961,21 +961,39 @@ fn fixture_coverage_default_runs_all_fixtures_under_managed_artifact_root() {
 #[test]
 fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
     let options = DecompilePtxProbeOptions::sm120_default();
-    let probe = ptx_decompile_probes()
-        .into_iter()
+    let probes = ptx_decompile_probes();
+    let hmma_probe = probes
+        .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreHmma)
         .expect("HMMA PTX probe should exist");
+    let imma_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreImma)
+        .expect("IMMA PTX probe should exist");
 
     assert_eq!(options.compile_arch, "sm_120");
-    assert_eq!(options.probes, vec![PtxDecompileProbeKind::TensorCoreHmma]);
+    assert_eq!(
+        options.probes,
+        vec![
+            PtxDecompileProbeKind::TensorCoreHmma,
+            PtxDecompileProbeKind::TensorCoreImma
+        ]
+    );
     assert!(
         options
             .artifact_root
             .ends_with("target/cuda-oxide/inference/decompile-probes")
     );
-    assert_eq!(probe.symbol, "tensor_core_hmma_probe");
-    assert!(probe.source.contains("mma.sync.aligned"));
-    assert!(probe.source.contains("st.global.f32"));
+    assert_eq!(hmma_probe.symbol, "tensor_core_hmma_probe");
+    assert!(hmma_probe.source.contains("mma.sync.aligned"));
+    assert!(hmma_probe.source.contains("st.global.f32"));
+    assert_eq!(imma_probe.symbol, "tensor_core_imma_probe");
+    assert!(
+        imma_probe
+            .source
+            .contains("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32")
+    );
+    assert!(imma_probe.source.contains("st.global.s32"));
 }
 
 #[test]

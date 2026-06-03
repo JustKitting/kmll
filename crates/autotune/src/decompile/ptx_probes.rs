@@ -1,18 +1,21 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PtxDecompileProbeKind {
     TensorCoreHmma,
+    TensorCoreImma,
 }
 
 impl PtxDecompileProbeKind {
     pub fn name(self) -> &'static str {
         match self {
             Self::TensorCoreHmma => "tensor-core-hmma",
+            Self::TensorCoreImma => "tensor-core-imma",
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "tensor-core-hmma" | "tensor_core_hmma" | "hmma" => Some(Self::TensorCoreHmma),
+            "tensor-core-imma" | "tensor_core_imma" | "imma" => Some(Self::TensorCoreImma),
             _ => None,
         }
     }
@@ -27,16 +30,27 @@ pub struct PtxDecompileProbe {
 }
 
 pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
-    vec![PtxDecompileProbe {
-        kind: PtxDecompileProbeKind::TensorCoreHmma,
-        symbol: "tensor_core_hmma_probe",
-        behavior: "one PTX half-precision tensor-core MMA kept alive by a global f32 store",
-        source: TENSOR_CORE_HMMA_PTX,
-    }]
+    vec![
+        PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::TensorCoreHmma,
+            symbol: "tensor_core_hmma_probe",
+            behavior: "one PTX half-precision tensor-core MMA kept alive by a global f32 store",
+            source: TENSOR_CORE_HMMA_PTX,
+        },
+        PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::TensorCoreImma,
+            symbol: "tensor_core_imma_probe",
+            behavior: "one PTX integer tensor-core MMA kept alive by a global s32 store",
+            source: TENSOR_CORE_IMMA_PTX,
+        },
+    ]
 }
 
 pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
-    vec![PtxDecompileProbeKind::TensorCoreHmma]
+    vec![
+        PtxDecompileProbeKind::TensorCoreHmma,
+        PtxDecompileProbeKind::TensorCoreImma,
+    ]
 }
 
 const TENSOR_CORE_HMMA_PTX: &str = r#".version 8.0
@@ -72,6 +86,41 @@ const TENSOR_CORE_HMMA_PTX: &str = r#".version 8.0
         {%f0, %f1, %f2, %f3};
 
     st.global.f32 [%rd0], %f0;
+    ret;
+}
+"#;
+
+const TENSOR_CORE_IMMA_PTX: &str = r#".version 8.0
+.target sm_80
+.address_size 64
+
+.visible .entry tensor_core_imma_probe(
+    .param .u64 tensor_core_imma_probe_out
+)
+{
+    .reg .b32 %r<16>;
+    .reg .b64 %rd<2>;
+
+    ld.param.u64 %rd0, [tensor_core_imma_probe_out];
+
+    mov.b32 %r0, 0x01010101;
+    mov.b32 %r1, 0x01010101;
+    mov.b32 %r2, 0x01010101;
+    mov.b32 %r3, 0x01010101;
+    mov.b32 %r4, 0x01010101;
+    mov.b32 %r5, 0x01010101;
+    mov.b32 %r6, 0;
+    mov.b32 %r7, 0;
+    mov.b32 %r8, 0;
+    mov.b32 %r9, 0;
+
+    mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32
+        {%r6, %r7, %r8, %r9},
+        {%r0, %r1, %r2, %r3},
+        {%r4, %r5},
+        {%r6, %r7, %r8, %r9};
+
+    st.global.s32 [%rd0], %r6;
     ret;
 }
 "#;
