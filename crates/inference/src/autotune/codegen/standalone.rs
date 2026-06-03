@@ -1,10 +1,10 @@
 use super::*;
 
-pub(in crate::autotune) fn standalone_package_name(candidate: &KernelCandidateMetadata) -> String {
+pub(crate) fn standalone_package_name(candidate: &KernelCandidateMetadata) -> String {
     format!("nn_rust_kernel_{}", candidate.artifact_key().hex())
 }
 
-pub(in crate::autotune) fn standalone_cargo_toml(package_name: &str) -> String {
+pub(crate) fn standalone_cargo_toml(package_name: &str) -> String {
     let mut manifest = String::new();
     let cuda_oxide_root = standalone_cuda_oxide_checkout_root();
     writeln!(manifest, "[package]").expect("write to string");
@@ -20,7 +20,7 @@ pub(in crate::autotune) fn standalone_cargo_toml(package_name: &str) -> String {
     manifest
 }
 
-pub(in crate::autotune) fn write_cuda_oxide_dependency(
+pub(crate) fn write_cuda_oxide_dependency(
     manifest: &mut String,
     crate_name: &str,
     root: Option<&Path>,
@@ -42,7 +42,7 @@ pub(in crate::autotune) fn write_cuda_oxide_dependency(
     }
 }
 
-pub(in crate::autotune) fn standalone_cuda_oxide_checkout_root() -> Option<PathBuf> {
+pub(crate) fn standalone_cuda_oxide_checkout_root() -> Option<PathBuf> {
     let configured = env::var_os("NN_RUST_CUDA_OXIDE_ROOT")
         .map(PathBuf::from)
         .filter(|path| cuda_oxide_checkout_has_kernel_crates(path));
@@ -81,7 +81,7 @@ pub(in crate::autotune) fn standalone_cuda_oxide_checkout_root() -> Option<PathB
     candidates.pop()
 }
 
-pub(in crate::autotune) fn cuda_oxide_checkout_has_kernel_crates(path: &Path) -> bool {
+pub(crate) fn cuda_oxide_checkout_has_kernel_crates(path: &Path) -> bool {
     path.join("crates")
         .join("cuda-device")
         .join("Cargo.toml")
@@ -93,11 +93,11 @@ pub(in crate::autotune) fn cuda_oxide_checkout_has_kernel_crates(path: &Path) ->
             .is_file()
 }
 
-pub(in crate::autotune) fn toml_string(value: &str) -> String {
+pub(crate) fn toml_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-pub(in crate::autotune) fn standalone_main_source(kernel_source: &str) -> String {
+pub(crate) fn standalone_main_source(kernel_source: &str) -> String {
     let mut source = String::new();
     source.push_str(kernel_source);
     if !source.ends_with('\n') {

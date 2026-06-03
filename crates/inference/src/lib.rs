@@ -1,6 +1,7 @@
 pub mod autotune;
 pub mod backends;
 pub mod chat;
+pub mod decompile;
 pub mod dtypes;
 pub mod formats;
 pub mod inference;

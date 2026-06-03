@@ -40,7 +40,7 @@ use crate::{
 };
 
 mod artifacts;
-mod codegen;
+pub(crate) mod codegen;
 mod core;
 mod gemm;
 mod hashing;
@@ -50,6 +50,7 @@ mod metadata;
 mod problem;
 mod search;
 
+pub(crate) use self::codegen::{standalone_cargo_toml, standalone_main_source};
 pub use self::{artifacts::*, core::*, gemm::*, matvec::*, measurement::*, problem::*, search::*};
 
 #[cfg(test)]
