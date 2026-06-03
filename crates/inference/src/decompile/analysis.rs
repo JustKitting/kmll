@@ -3,7 +3,7 @@ use std::{
     fmt::Write as _,
 };
 
-use super::{KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind};
+use super::{KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemorySpace};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassAnalysisModule {
@@ -44,6 +44,13 @@ impl SassAnalysisModule {
         self.functions
             .iter()
             .map(|function| function.live_ranges.len())
+            .sum()
+    }
+
+    pub fn memory_access_count(&self) -> usize {
+        self.functions
+            .iter()
+            .map(|function| function.memory_accesses.len())
             .sum()
     }
 
@@ -119,6 +126,28 @@ impl SassAnalysisModule {
                 )
                 .expect("write to string");
             }
+            writeln!(out, "  memory_accesses").expect("write to string");
+            for access in &function.memory_accesses {
+                writeln!(
+                    out,
+                    "    {:#06x}: {} {} value={} addr={} regs=[{}] base={} offset={} width={} predicate={} <- {}",
+                    access.address,
+                    access.kind,
+                    access.space,
+                    access.value_register,
+                    access.address_expr,
+                    access.address_registers.join(","),
+                    access.address_base.as_deref().unwrap_or("-"),
+                    access.offset.as_deref().unwrap_or("-"),
+                    access
+                        .width_bits
+                        .map(|bits| bits.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    access.predicate.as_deref().unwrap_or("-"),
+                    access.source
+                )
+                .expect("write to string");
+            }
             writeln!(out, "}}").expect("write to string");
         }
         out
@@ -133,6 +162,7 @@ pub struct SassAnalysisFunction {
     pub dataflow: Vec<SassDataflowOp>,
     pub reaching_uses: Vec<SassReachingUse>,
     pub live_ranges: Vec<SassLiveRange>,
+    pub memory_accesses: Vec<SassMemoryAccess>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,6 +276,38 @@ impl SassLiveRange {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassMemoryAccess {
+    pub address: u64,
+    pub predicate: Option<String>,
+    pub kind: SassMemoryAccessKind,
+    pub space: MemorySpace,
+    pub width_bits: Option<u32>,
+    pub value_register: String,
+    pub address_expr: String,
+    pub address_registers: Vec<String>,
+    pub address_base: Option<String>,
+    pub offset: Option<String>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SassMemoryAccessKind {
+    Load,
+    Store,
+    LoadConst,
+}
+
+impl std::fmt::Display for SassMemoryAccessKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Load => f.write_str("load"),
+            Self::Store => f.write_str("store"),
+            Self::LoadConst => f.write_str("load-const"),
+        }
+    }
+}
+
 pub fn analyze_sass_ir(module: &KernelIrModule) -> SassAnalysisModule {
     SassAnalysisModule {
         target: module.target.clone(),
@@ -262,6 +324,7 @@ fn analyze_function(function: &KernelIrFunction) -> SassAnalysisFunction {
         .map(analyze_dataflow)
         .collect::<Vec<_>>();
     let (reaching_uses, live_ranges) = analyze_reaching_defs(&blocks, &edges, &dataflow);
+    let memory_accesses = analyze_memory_accesses(function);
     SassAnalysisFunction {
         name: function.name.clone(),
         blocks,
@@ -269,7 +332,130 @@ fn analyze_function(function: &KernelIrFunction) -> SassAnalysisFunction {
         dataflow,
         reaching_uses,
         live_ranges,
+        memory_accesses,
     }
+}
+
+fn analyze_memory_accesses(function: &KernelIrFunction) -> Vec<SassMemoryAccess> {
+    let mut accesses = function
+        .ops
+        .iter()
+        .filter_map(|op| match &op.kind {
+            KernelIrOpKind::Load {
+                dst,
+                address,
+                space,
+            } => Some(memory_access(
+                op,
+                SassMemoryAccessKind::Load,
+                *space,
+                dst,
+                address,
+            )),
+            KernelIrOpKind::LoadConst { dst, source } => Some(memory_access(
+                op,
+                SassMemoryAccessKind::LoadConst,
+                MemorySpace::Constant,
+                dst,
+                source,
+            )),
+            KernelIrOpKind::Store {
+                address,
+                value,
+                space,
+            } => Some(memory_access(
+                op,
+                SassMemoryAccessKind::Store,
+                *space,
+                value,
+                address,
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    accesses.sort_by_key(|access| access.address);
+    accesses
+}
+
+fn memory_access(
+    op: &KernelIrOp,
+    kind: SassMemoryAccessKind,
+    space: MemorySpace,
+    value_register: &str,
+    address_expr: &str,
+) -> SassMemoryAccess {
+    let (address_base, offset) = memory_base_and_offset(space, address_expr);
+    SassMemoryAccess {
+        address: op.address,
+        predicate: op.predicate.clone(),
+        kind,
+        space,
+        width_bits: memory_width_bits(&op.source_modifiers),
+        value_register: value_register.to_string(),
+        address_expr: address_expr.to_string(),
+        address_registers: extract_registers(address_expr),
+        address_base,
+        offset,
+        source: op.source.clone(),
+    }
+}
+
+fn memory_width_bits(modifiers: &[String]) -> Option<u32> {
+    modifiers.iter().find_map(|modifier| {
+        modifier
+            .strip_prefix('U')
+            .or_else(|| modifier.strip_prefix('S'))
+            .and_then(|bits| bits.parse::<u32>().ok())
+            .or_else(|| modifier.parse::<u32>().ok())
+    })
+}
+
+fn memory_base_and_offset(
+    space: MemorySpace,
+    address_expr: &str,
+) -> (Option<String>, Option<String>) {
+    match space {
+        MemorySpace::Descriptor => descriptor_base_and_offset(address_expr),
+        MemorySpace::Constant => constant_base_and_offset(address_expr),
+        _ => (None, offset_after_plus(address_expr)),
+    }
+}
+
+fn descriptor_base_and_offset(address_expr: &str) -> (Option<String>, Option<String>) {
+    let Some(rest) = address_expr.strip_prefix("desc") else {
+        return (None, offset_after_plus(address_expr));
+    };
+    let Some((descriptor, rest)) = bracketed(rest) else {
+        return (None, offset_after_plus(address_expr));
+    };
+    let offset = bracketed(rest)
+        .and_then(|(address, tail)| tail.trim().is_empty().then_some(address))
+        .and_then(offset_after_plus);
+    (Some(descriptor.to_string()), offset)
+}
+
+fn constant_base_and_offset(address_expr: &str) -> (Option<String>, Option<String>) {
+    let Some(rest) = address_expr.strip_prefix('c') else {
+        return (None, offset_after_plus(address_expr));
+    };
+    let Some((bank, rest)) = bracketed(rest) else {
+        return (None, offset_after_plus(address_expr));
+    };
+    let offset = bracketed(rest)
+        .and_then(|(offset, tail)| tail.trim().is_empty().then_some(offset.to_string()));
+    (Some(bank.to_string()), offset)
+}
+
+fn bracketed(text: &str) -> Option<(&str, &str)> {
+    let text = text.strip_prefix('[')?;
+    let end = text.find(']')?;
+    Some((&text[..end], &text[end + 1..]))
+}
+
+fn offset_after_plus(text: &str) -> Option<String> {
+    text.split_once('+')
+        .map(|(_, offset)| offset.trim().to_string())
+        .filter(|offset| !offset.is_empty())
 }
 
 fn build_blocks(function: &KernelIrFunction) -> Vec<SassBasicBlock> {

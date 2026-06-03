@@ -22,18 +22,20 @@ mod sass;
 pub use self::{
     analysis::{
         SassAnalysisFunction, SassAnalysisModule, SassBasicBlock, SassBlockTerminator, SassCfgEdge,
-        SassCfgEdgeKind, SassDataflowOp, SassLiveRange, SassReachingUse, analyze_sass_ir,
+        SassCfgEdgeKind, SassDataflowOp, SassLiveRange, SassMemoryAccess, SassMemoryAccessKind,
+        SassReachingUse, analyze_sass_ir,
     },
     coverage::{
         SassCoverageBasicBlock, SassCoverageCfgEdge, SassCoverageDataflowOp,
-        SassCoverageFileReport, SassCoverageLiveRange, SassCoverageOptions,
-        SassCoverageReachingUse, SassCoverageReport, SassCoverageSemanticPattern, SassOpcodeCount,
-        SassUnsupportedInstruction, run_sass_coverage_scan,
+        SassCoverageFileReport, SassCoverageLiveRange, SassCoverageMemoryAccess,
+        SassCoverageOptions, SassCoverageReachingUse, SassCoverageReport,
+        SassCoverageSemanticPattern, SassOpcodeCount, SassUnsupportedInstruction,
+        run_sass_coverage_scan,
     },
     fixtures::{SimpleKernelFixture, SimpleKernelFixtureKind, simple_kernel_fixtures},
     ir::{
-        KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, SassMappingConfidence,
-        lower_sass_module,
+        KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemorySpace,
+        SassMappingConfidence, lower_sass_module,
     },
     patterns::{
         SassPatternConfidence, SassPatternFunction, SassPatternModule, SassSemanticPattern,
@@ -80,6 +82,7 @@ pub struct DecompileFixtureReport {
     pub cfg_edge_count: usize,
     pub reaching_use_count: usize,
     pub live_range_count: usize,
+    pub memory_access_count: usize,
     pub semantic_pattern_count: usize,
     pub unsupported_instruction_count: usize,
 }
@@ -104,6 +107,7 @@ pub struct SassFileDecompileReport {
     pub cfg_edge_count: usize,
     pub reaching_use_count: usize,
     pub live_range_count: usize,
+    pub memory_access_count: usize,
     pub semantic_pattern_count: usize,
     pub unsupported_instruction_count: usize,
 }
@@ -182,6 +186,7 @@ pub fn run_sass_file_decompile(
         cfg_edge_count: analysis.edge_count(),
         reaching_use_count: analysis.reaching_use_count(),
         live_range_count: analysis.live_range_count(),
+        memory_access_count: analysis.memory_access_count(),
         semantic_pattern_count: patterns.pattern_count(),
         unsupported_instruction_count: lowered.unsupported_instruction_count(),
     })
@@ -273,6 +278,7 @@ fn run_decompile_fixture(
         cfg_edge_count: analysis.edge_count(),
         reaching_use_count: analysis.reaching_use_count(),
         live_range_count: analysis.live_range_count(),
+        memory_access_count: analysis.memory_access_count(),
         semantic_pattern_count: patterns.pattern_count(),
         unsupported_instruction_count: lowered.unsupported_instruction_count(),
     })

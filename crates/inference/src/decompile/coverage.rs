@@ -44,6 +44,7 @@ pub struct SassCoverageReport {
     pub dataflow_path: PathBuf,
     pub reaching_uses_path: PathBuf,
     pub live_ranges_path: PathBuf,
+    pub memory_accesses_path: PathBuf,
     pub unsupported_instructions_path: PathBuf,
     pub files: Vec<SassCoverageFileReport>,
     pub opcode_counts: Vec<SassOpcodeCount>,
@@ -55,6 +56,7 @@ pub struct SassCoverageReport {
     pub dataflow: Vec<SassCoverageDataflowOp>,
     pub reaching_uses: Vec<SassCoverageReachingUse>,
     pub live_ranges: Vec<SassCoverageLiveRange>,
+    pub memory_accesses: Vec<SassCoverageMemoryAccess>,
     pub unsupported_instructions: Vec<SassUnsupportedInstruction>,
     pub parsed_file_count: usize,
     pub parse_error_count: usize,
@@ -64,6 +66,7 @@ pub struct SassCoverageReport {
     pub dataflow_op_count: usize,
     pub reaching_use_count: usize,
     pub live_range_count: usize,
+    pub memory_access_count: usize,
     pub semantic_pattern_count: usize,
     pub unsupported_instruction_count: usize,
 }
@@ -80,6 +83,7 @@ pub struct SassCoverageFileReport {
     pub cfg_edge_count: usize,
     pub reaching_use_count: usize,
     pub live_range_count: usize,
+    pub memory_access_count: usize,
     pub semantic_pattern_count: usize,
     pub unsupported_instruction_count: usize,
     pub parse_error: Option<String>,
@@ -166,6 +170,23 @@ pub struct SassCoverageLiveRange {
     pub use_addresses: Vec<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassCoverageMemoryAccess {
+    pub sass_path: PathBuf,
+    pub function: String,
+    pub address: u64,
+    pub predicate: Option<String>,
+    pub kind: String,
+    pub space: String,
+    pub width_bits: Option<u32>,
+    pub value_register: String,
+    pub address_expr: String,
+    pub address_registers: Vec<String>,
+    pub address_base: Option<String>,
+    pub offset: Option<String>,
+    pub source: String,
+}
+
 pub fn run_sass_coverage_scan(
     options: &SassCoverageOptions,
 ) -> Result<SassCoverageReport, Box<dyn Error>> {
@@ -184,6 +205,7 @@ pub fn run_sass_coverage_scan(
     let mut dataflow = Vec::new();
     let mut reaching_uses = Vec::new();
     let mut live_ranges = Vec::new();
+    let mut memory_accesses = Vec::new();
     let mut unsupported_instructions = Vec::new();
     let files_output_root = options.output_dir.join("files");
 
@@ -222,6 +244,7 @@ pub fn run_sass_coverage_scan(
                     &mut dataflow,
                     &mut reaching_uses,
                     &mut live_ranges,
+                    &mut memory_accesses,
                 );
                 append_semantic_patterns(&sass_path, &patterns, &mut semantic_patterns);
                 append_unsupported(&sass_path, &lowered, &mut unsupported_instructions);
@@ -261,6 +284,7 @@ pub fn run_sass_coverage_scan(
                     cfg_edge_count: analysis.edge_count(),
                     reaching_use_count: analysis.reaching_use_count(),
                     live_range_count: analysis.live_range_count(),
+                    memory_access_count: analysis.memory_access_count(),
                     semantic_pattern_count: patterns.pattern_count(),
                     unsupported_instruction_count: lowered.unsupported_instruction_count(),
                     parse_error: None,
@@ -278,6 +302,7 @@ pub fn run_sass_coverage_scan(
                     cfg_edge_count: 0,
                     reaching_use_count: 0,
                     live_range_count: 0,
+                    memory_access_count: 0,
                     semantic_pattern_count: 0,
                     unsupported_instruction_count: 0,
                     parse_error: Some(error.to_string()),
@@ -300,6 +325,7 @@ pub fn run_sass_coverage_scan(
     let dataflow_op_count = dataflow.len();
     let reaching_use_count = reaching_uses.len();
     let live_range_count = live_ranges.len();
+    let memory_access_count = memory_accesses.len();
     let semantic_pattern_count = semantic_patterns.len();
     let unsupported_instruction_count = unsupported_instructions.len();
 
@@ -314,6 +340,7 @@ pub fn run_sass_coverage_scan(
     let dataflow_path = options.output_dir.join("dataflow.tsv");
     let reaching_uses_path = options.output_dir.join("reaching-uses.tsv");
     let live_ranges_path = options.output_dir.join("live-ranges.tsv");
+    let memory_accesses_path = options.output_dir.join("memory-accesses.tsv");
     let unsupported_instructions_path = options.output_dir.join("unsupported-instructions.tsv");
 
     let report = SassCoverageReport {
@@ -330,6 +357,7 @@ pub fn run_sass_coverage_scan(
         dataflow_path,
         reaching_uses_path,
         live_ranges_path,
+        memory_accesses_path,
         unsupported_instructions_path,
         files,
         opcode_counts,
@@ -341,6 +369,7 @@ pub fn run_sass_coverage_scan(
         dataflow,
         reaching_uses,
         live_ranges,
+        memory_accesses,
         unsupported_instructions,
         parsed_file_count,
         parse_error_count,
@@ -350,6 +379,7 @@ pub fn run_sass_coverage_scan(
         dataflow_op_count,
         reaching_use_count,
         live_range_count,
+        memory_access_count,
         semantic_pattern_count,
         unsupported_instruction_count,
     };
@@ -461,6 +491,7 @@ fn append_analysis(
     dataflow: &mut Vec<SassCoverageDataflowOp>,
     reaching_uses: &mut Vec<SassCoverageReachingUse>,
     live_ranges: &mut Vec<SassCoverageLiveRange>,
+    memory_accesses: &mut Vec<SassCoverageMemoryAccess>,
 ) {
     for function in &analysis.functions {
         for block in &function.blocks {
@@ -515,6 +546,23 @@ fn append_analysis(
                 start_address: range.start_address,
                 end_address: range.end_address,
                 use_addresses: range.use_addresses.clone(),
+            });
+        }
+        for access in &function.memory_accesses {
+            memory_accesses.push(SassCoverageMemoryAccess {
+                sass_path: sass_path.to_path_buf(),
+                function: function.name.clone(),
+                address: access.address,
+                predicate: access.predicate.clone(),
+                kind: access.kind.to_string(),
+                space: access.space.to_string(),
+                width_bits: access.width_bits,
+                value_register: access.value_register.clone(),
+                address_expr: access.address_expr.clone(),
+                address_registers: access.address_registers.clone(),
+                address_base: access.address_base.clone(),
+                offset: access.offset.clone(),
+                source: access.source.clone(),
             });
         }
     }
@@ -576,6 +624,10 @@ fn write_coverage_reports(report: &SassCoverageReport) -> Result<(), Box<dyn Err
         render_live_ranges_tsv(report).as_bytes(),
     )?;
     fs::write(
+        &report.memory_accesses_path,
+        render_memory_accesses_tsv(report).as_bytes(),
+    )?;
+    fs::write(
         &report.unsupported_instructions_path,
         render_unsupported_tsv(report).as_bytes(),
     )?;
@@ -600,6 +652,7 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
     writeln!(out, "dataflow_ops={}", report.dataflow_op_count).expect("write to string");
     writeln!(out, "reaching_uses={}", report.reaching_use_count).expect("write to string");
     writeln!(out, "live_ranges={}", report.live_range_count).expect("write to string");
+    writeln!(out, "memory_accesses={}", report.memory_access_count).expect("write to string");
     writeln!(out, "semantic_patterns={}", report.semantic_pattern_count).expect("write to string");
     writeln!(
         out,
@@ -644,7 +697,7 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "status\tsass_path\tparsed_instructions\tcfg_blocks\tcfg_edges\treaching_uses\tlive_ranges\tsemantic_patterns\tunsupported_instructions\tir_path\tanalysis_path\tpatterns_path\tside_by_side_path\terror"
+        "status\tsass_path\tparsed_instructions\tcfg_blocks\tcfg_edges\treaching_uses\tlive_ranges\tmemory_accesses\tsemantic_patterns\tunsupported_instructions\tir_path\tanalysis_path\tpatterns_path\tside_by_side_path\terror"
     )
     .expect("write to string");
     for file in &report.files {
@@ -655,7 +708,7 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
         };
         writeln!(
             out,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             status,
             tsv(&file.sass_path.display().to_string()),
             file.parsed_instruction_count,
@@ -663,6 +716,7 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
             file.cfg_edge_count,
             file.reaching_use_count,
             file.live_range_count,
+            file.memory_access_count,
             file.semantic_pattern_count,
             file.unsupported_instruction_count,
             tsv(&optional_path(&file.ir_path)),
@@ -814,6 +868,39 @@ fn render_live_ranges_tsv(report: &SassCoverageReport) -> String {
             range.start_address,
             range.end_address,
             tsv(&format_addresses(&range.use_addresses)),
+        )
+        .expect("write to string");
+    }
+    out
+}
+
+fn render_memory_accesses_tsv(report: &SassCoverageReport) -> String {
+    let mut out = String::new();
+    writeln!(
+        out,
+        "sass_path\tfunction\taddress\tpredicate\tkind\tspace\twidth_bits\tvalue_register\taddress_expr\taddress_registers\taddress_base\toffset\traw"
+    )
+    .expect("write to string");
+    for access in &report.memory_accesses {
+        writeln!(
+            out,
+            "{}\t{}\t{:#06x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            tsv(&access.sass_path.display().to_string()),
+            tsv(&access.function),
+            access.address,
+            tsv(access.predicate.as_deref().unwrap_or("")),
+            tsv(&access.kind),
+            tsv(&access.space),
+            access
+                .width_bits
+                .map(|bits| bits.to_string())
+                .unwrap_or_default(),
+            tsv(&access.value_register),
+            tsv(&access.address_expr),
+            tsv(&access.address_registers.join(",")),
+            tsv(access.address_base.as_deref().unwrap_or("")),
+            tsv(access.offset.as_deref().unwrap_or("")),
+            tsv(&access.source),
         )
         .expect("write to string");
     }

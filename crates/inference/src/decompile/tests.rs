@@ -168,6 +168,51 @@ fn lower_simple_sass_maps_observed_core_ops() {
 }
 
 #[test]
+fn analysis_recovers_structured_memory_accesses() {
+    let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
+    let ir = lower_sass_module(&module);
+    let analysis = analyze_sass_ir(&ir);
+    let function = &analysis.functions[0];
+
+    assert_eq!(function.memory_accesses.len(), 3);
+    let first_load = function
+        .memory_accesses
+        .iter()
+        .find(|access| access.address == 0x10)
+        .expect("first descriptor load should be recovered");
+    assert_eq!(first_load.kind, SassMemoryAccessKind::Load);
+    assert_eq!(first_load.space, MemorySpace::Descriptor);
+    assert_eq!(first_load.value_register, "R2");
+    assert_eq!(first_load.address_expr, "desc[UR4][R0.64]");
+    assert_eq!(first_load.address_registers, ["UR4", "R0"]);
+    assert_eq!(first_load.address_base.as_deref(), Some("UR4"));
+    assert_eq!(first_load.offset, None);
+
+    let offset_load = function
+        .memory_accesses
+        .iter()
+        .find(|access| access.address == 0x20)
+        .expect("offset descriptor load should be recovered");
+    assert_eq!(offset_load.address_base.as_deref(), Some("UR6"));
+    assert_eq!(offset_load.offset.as_deref(), Some("0x4"));
+
+    let store = function
+        .memory_accesses
+        .iter()
+        .find(|access| access.address == 0x40)
+        .expect("descriptor store should be recovered");
+    assert_eq!(store.kind, SassMemoryAccessKind::Store);
+    assert_eq!(store.space, MemorySpace::Descriptor);
+    assert_eq!(store.value_register, "R4");
+    assert_eq!(store.address_registers, ["UR8", "R0"]);
+
+    let text = analysis.to_text();
+    assert!(text.contains("memory_accesses"));
+    assert!(text.contains("0x0010: load descriptor value=R2 addr=desc[UR4][R0.64]"));
+    assert!(text.contains("base=UR4"));
+}
+
+#[test]
 fn lower_rows17_slice_keeps_predicates_and_half_fma_visible() {
     let module = parse_nvdisasm_sass(ROWS17_SLICE).expect("rows17 slice should parse");
     let ir = lower_sass_module(&module);
@@ -484,12 +529,19 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.dataflow_path.exists());
     assert!(report.reaching_uses_path.exists());
     assert!(report.live_ranges_path.exists());
+    assert!(report.memory_accesses_path.exists());
     assert!(report.unsupported_instructions_path.exists());
     assert!(report.cfg_block_count > 0);
     assert!(report.cfg_edge_count > 0);
     assert!(report.dataflow_op_count > 0);
     assert!(report.reaching_use_count > 0);
     assert!(report.live_range_count > 0);
+    assert!(report.memory_access_count > 0);
+    assert!(report.memory_accesses.iter().any(|access| {
+        access.kind == "load"
+            && access.space == "descriptor"
+            && access.address_base.as_deref() == Some("UR4")
+    }));
     assert!(
         report
             .files

@@ -187,6 +187,19 @@ pub enum MemorySpace {
     Unknown,
 }
 
+impl std::fmt::Display for MemorySpace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Global => f.write_str("global"),
+            Self::Shared => f.write_str("shared"),
+            Self::Local => f.write_str("local"),
+            Self::Constant => f.write_str("constant"),
+            Self::Descriptor => f.write_str("descriptor"),
+            Self::Unknown => f.write_str("unknown"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SassMappingConfidence {
     LocallyParsed,
