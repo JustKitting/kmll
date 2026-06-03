@@ -5,7 +5,7 @@ fn gemm_global_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
     let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
     let full_space = problem.search_space();
 
-    assert_eq!(full_space.spaces.len(), 13);
+    assert_eq!(full_space.spaces.len(), 14);
     let KernelActionSpace::LocalTile {
         axis: m_tile_axis,
         factors: m_tile_factors,
@@ -47,18 +47,27 @@ fn gemm_global_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
         full_space.spaces[4],
         KernelActionSpace::Unroll { .. }
     ));
+    let KernelActionSpace::GroupTop {
+        axis: reduce_group_axis,
+        factors: reduce_group_factors,
+    } = &full_space.spaces[5]
+    else {
+        panic!("GEMM global action space should expose reduce group-top metadata");
+    };
+    assert_eq!(*reduce_group_axis, 2);
+    assert_eq!(reduce_group_factors, &[13, 16, 28, 29]);
     assert!(matches!(
-        full_space.spaces[5],
+        full_space.spaces[6],
         KernelActionSpace::Upcast { .. }
     ));
     assert!(matches!(
-        full_space.spaces[6],
+        full_space.spaces[7],
         KernelActionSpace::Upcast { .. }
     ));
     let KernelActionSpace::Unroll {
         axis: a_load_axis,
         factors: a_load_factors,
-    } = &full_space.spaces[7]
+    } = &full_space.spaces[8]
     else {
         panic!("GEMM global action space should expose A shared-load unroll metadata");
     };
@@ -67,7 +76,7 @@ fn gemm_global_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
     let KernelActionSpace::Unroll {
         axis: b_load_axis,
         factors: b_load_factors,
-    } = &full_space.spaces[8]
+    } = &full_space.spaces[9]
     else {
         panic!("GEMM global action space should expose B shared-load unroll metadata");
     };
@@ -76,7 +85,7 @@ fn gemm_global_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
     let KernelActionSpace::Group {
         axis: a_load_thread_axis,
         factors: a_load_thread_factors,
-    } = &full_space.spaces[9]
+    } = &full_space.spaces[10]
     else {
         panic!("GEMM global action space should expose A shared-load group metadata");
     };
@@ -85,18 +94,18 @@ fn gemm_global_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
     let KernelActionSpace::Group {
         axis: b_load_thread_axis,
         factors: b_load_thread_factors,
-    } = &full_space.spaces[10]
+    } = &full_space.spaces[11]
     else {
         panic!("GEMM global action space should expose B shared-load group metadata");
     };
     assert_eq!(*b_load_thread_axis, 4);
     assert_eq!(b_load_thread_factors, &[32, 64, 128, 256]);
     assert!(matches!(
-        full_space.spaces[11],
+        full_space.spaces[12],
         KernelActionSpace::Swap { .. }
     ));
     assert!(matches!(
-        full_space.spaces[12],
+        full_space.spaces[13],
         KernelActionSpace::StrideOrder { .. }
     ));
 }

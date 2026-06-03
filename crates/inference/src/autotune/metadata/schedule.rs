@@ -121,6 +121,17 @@ pub(in crate::autotune) fn schedule_gemm_reduce_unroll(schedule: &KernelSchedule
         })
 }
 
+pub(in crate::autotune) fn schedule_gemm_reduce_group(schedule: &KernelSchedule) -> u32 {
+    schedule
+        .transforms
+        .iter()
+        .find_map(|transform| match transform {
+            ScheduleTransform::GroupTop { axis: 2, factor } => Some(*factor),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
+
 pub(in crate::autotune) fn schedule_gemm_m_per_thread(schedule: &KernelSchedule) -> Option<u32> {
     schedule
         .transforms
@@ -238,6 +249,7 @@ pub(in crate::autotune) fn schedule_gemm_plan(
     Some(GemmSchedulePlan {
         tile,
         reduce_unroll: schedule_gemm_reduce_unroll(schedule).unwrap_or(1),
+        reduce_group: schedule_gemm_reduce_group(schedule),
         m_per_thread: schedule_gemm_m_per_thread(schedule).unwrap_or(1),
         n_per_thread: schedule_gemm_n_per_thread(schedule).unwrap_or(1),
         a_load_unroll: schedule_gemm_a_load_unroll(schedule).unwrap_or(1),

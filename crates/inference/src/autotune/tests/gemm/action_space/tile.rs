@@ -7,7 +7,7 @@ fn gemm_tiled_candidate_action_space_exposes_schedule_metadata() {
     let schedule_spaces = problem.action_spaces(&tile_candidate);
     let schedule_actions = problem.schedule_actions(&tile_candidate);
 
-    assert_eq!(schedule_spaces.spaces.len(), 10);
+    assert_eq!(schedule_spaces.spaces.len(), 11);
     assert_eq!(schedule_spaces.actions(), schedule_actions);
     let KernelActionSpace::LocalTile {
         axis: m_tile_axis,
@@ -40,10 +40,19 @@ fn gemm_tiled_candidate_action_space_exposes_schedule_metadata() {
         schedule_spaces.spaces[3],
         KernelActionSpace::Unroll { .. }
     ));
+    let KernelActionSpace::GroupTop {
+        axis: reduce_group_axis,
+        factors: reduce_group_factors,
+    } = &schedule_spaces.spaces[4]
+    else {
+        panic!("GEMM tile should expose reduce group-top metadata");
+    };
+    assert_eq!(*reduce_group_axis, 2);
+    assert_eq!(reduce_group_factors, &[13]);
     let KernelActionSpace::Upcast {
         axis: m_axis,
         factors: m_factors,
-    } = &schedule_spaces.spaces[4]
+    } = &schedule_spaces.spaces[5]
     else {
         panic!("GEMM tile should expose M-axis upcast metadata");
     };
@@ -52,7 +61,7 @@ fn gemm_tiled_candidate_action_space_exposes_schedule_metadata() {
     let KernelActionSpace::Upcast {
         axis: n_axis,
         factors: n_factors,
-    } = &schedule_spaces.spaces[5]
+    } = &schedule_spaces.spaces[6]
     else {
         panic!("GEMM tile should expose N-axis upcast metadata");
     };
@@ -61,7 +70,7 @@ fn gemm_tiled_candidate_action_space_exposes_schedule_metadata() {
     let KernelActionSpace::Group {
         axis: a_load_thread_axis,
         factors: a_load_thread_factors,
-    } = &schedule_spaces.spaces[6]
+    } = &schedule_spaces.spaces[7]
     else {
         panic!("GEMM tile should expose A shared-load group metadata");
     };
@@ -70,21 +79,21 @@ fn gemm_tiled_candidate_action_space_exposes_schedule_metadata() {
     let KernelActionSpace::Group {
         axis: b_load_thread_axis,
         factors: b_load_thread_factors,
-    } = &schedule_spaces.spaces[7]
+    } = &schedule_spaces.spaces[8]
     else {
         panic!("GEMM tile should expose B shared-load group metadata");
     };
     assert_eq!(*b_load_thread_axis, 4);
     assert_eq!(b_load_thread_factors, &[32, 64, 128, 256]);
     assert!(matches!(
-        schedule_spaces.spaces[8],
+        schedule_spaces.spaces[9],
         KernelActionSpace::Swap { .. }
     ));
     assert!(matches!(
-        schedule_spaces.spaces[9],
+        schedule_spaces.spaces[10],
         KernelActionSpace::StrideOrder { .. }
     ));
-    assert_eq!(schedule_actions.len(), 54);
+    assert_eq!(schedule_actions.len(), 55);
     assert!(schedule_actions.contains(&KernelScheduleAction::local_tile(0, 24)));
     assert!(schedule_actions.contains(&KernelScheduleAction::local_tile(1, 16)));
     assert!(schedule_actions.contains(&KernelScheduleAction::local_tile(2, 32)));
@@ -92,6 +101,7 @@ fn gemm_tiled_candidate_action_space_exposes_schedule_metadata() {
     assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 7)));
     assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 16)));
     assert!(!schedule_actions.contains(&KernelScheduleAction::unroll(2, 1)));
+    assert!(schedule_actions.contains(&KernelScheduleAction::group_top(2, 13)));
     assert!(schedule_actions.contains(&KernelScheduleAction::upcast(0, 2)));
     assert!(schedule_actions.contains(&KernelScheduleAction::upcast(0, 4)));
     assert!(!schedule_actions.contains(&KernelScheduleAction::upcast(0, 3)));

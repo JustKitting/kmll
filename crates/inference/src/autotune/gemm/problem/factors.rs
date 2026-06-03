@@ -15,6 +15,31 @@ impl GemmSearchProblem {
         bounded_unroll_factors(tile.k as usize, Self::MAX_REDUCE_UNROLL_FACTOR, Some(1))
     }
 
+    pub(in crate::autotune) fn reduce_group_top_factors(&self) -> Vec<u32> {
+        let mut factors = Vec::new();
+        for tile in self.tile_shapes() {
+            factors.extend(Self::reduce_group_top_factors_for_plan(
+                GemmSchedulePlan::new(tile),
+            ));
+        }
+        factors.sort_unstable();
+        factors.dedup();
+        factors
+    }
+
+    pub(in crate::autotune) fn reduce_group_top_factors_for_plan(
+        plan: GemmSchedulePlan,
+    ) -> Vec<u32> {
+        let plan = plan.normalized();
+        let min_factor = plan.reduce_unroll.max(1);
+        KernelScheduleActionTemplate::INFERENCE_DEFAULT
+            .group_top_factors
+            .iter()
+            .copied()
+            .filter(|factor| *factor >= min_factor && *factor < plan.tile.k)
+            .collect()
+    }
+
     pub(in crate::autotune) fn m_per_thread_factors(&self) -> Vec<u32> {
         let mut factors = Vec::new();
         for tile in self.tile_shapes() {

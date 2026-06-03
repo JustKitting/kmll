@@ -32,6 +32,8 @@ impl GemmSearchProblem {
         let b_order_suffix = plan.b_load_order.symbol_suffix();
         let per_thread_symbol_suffix = plan.per_thread_symbol_suffix();
         let per_thread_operation_suffix = plan.per_thread_operation_suffix();
+        let reduce_group_symbol_suffix = plan.reduce_group_symbol_suffix();
+        let reduce_group_operation_suffix = plan.reduce_group_operation_suffix();
         let load_unroll_symbol_suffix = plan.load_unroll_symbol_suffix();
         let load_unroll_operation_suffix = plan.load_unroll_operation_suffix();
         let load_thread_group_symbol_suffix = plan.load_thread_group_symbol_suffix();
@@ -40,10 +42,11 @@ impl GemmSearchProblem {
         let thread_order_operation_suffix = plan.thread_order_operation_suffix();
         let symbol_hint = if plan.reduce_unroll == 1 {
             format!(
-                "gemm_f32_bf16_tile_{}x{}x{}{}{}{}{}{}{}",
+                "gemm_f32_bf16_tile_{}x{}x{}{}{}{}{}{}{}{}",
                 tile.m,
                 tile.n,
                 tile.k,
+                reduce_group_symbol_suffix,
                 per_thread_symbol_suffix,
                 load_unroll_symbol_suffix,
                 load_thread_group_symbol_suffix,
@@ -53,11 +56,12 @@ impl GemmSearchProblem {
             )
         } else {
             format!(
-                "gemm_f32_bf16_tile_{}x{}x{}_u{}{}{}{}{}{}{}",
+                "gemm_f32_bf16_tile_{}x{}x{}_u{}{}{}{}{}{}{}{}",
                 tile.m,
                 tile.n,
                 tile.k,
                 plan.reduce_unroll,
+                reduce_group_symbol_suffix,
                 per_thread_symbol_suffix,
                 load_unroll_symbol_suffix,
                 load_thread_group_symbol_suffix,
@@ -80,10 +84,11 @@ impl GemmSearchProblem {
         let operation = TypedOperationSpec::new(
             if plan.reduce_unroll == 1 {
                 format!(
-                    "gemm-f32-bf16-{}x{}x{}{}{}{}{}{}{}",
+                    "gemm-f32-bf16-{}x{}x{}{}{}{}{}{}{}{}",
                     tile.m,
                     tile.n,
                     tile.k,
+                    reduce_group_operation_suffix,
                     per_thread_operation_suffix,
                     load_unroll_operation_suffix,
                     load_thread_group_operation_suffix,
@@ -93,11 +98,12 @@ impl GemmSearchProblem {
                 )
             } else {
                 format!(
-                    "gemm-f32-bf16-{}x{}x{}-u{}{}{}{}{}{}{}",
+                    "gemm-f32-bf16-{}x{}x{}-u{}{}{}{}{}{}{}{}",
                     tile.m,
                     tile.n,
                     tile.k,
                     plan.reduce_unroll,
+                    reduce_group_operation_suffix,
                     per_thread_operation_suffix,
                     load_unroll_operation_suffix,
                     load_thread_group_operation_suffix,
@@ -140,6 +146,12 @@ impl GemmSearchProblem {
             schedule = schedule.with_transform(ScheduleTransform::Unroll {
                 axis: 2,
                 factor: plan.reduce_unroll,
+            });
+        }
+        if plan.has_custom_reduce_group() {
+            schedule = schedule.with_transform(ScheduleTransform::GroupTop {
+                axis: 2,
+                factor: plan.reduce_group_size(),
             });
         }
         if plan.m_per_thread > 1 {
@@ -230,6 +242,7 @@ impl GemmSearchProblem {
         let plan = plan.normalized();
         plan.tile == Self::EXISTING_TILE
             && plan.reduce_unroll == 1
+            && !plan.has_custom_reduce_group()
             && plan.m_per_thread == 1
             && plan.n_per_thread == 1
             && plan.a_load_unroll == 1

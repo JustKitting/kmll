@@ -2,6 +2,7 @@ use super::super::*;
 
 pub(super) fn search_space(problem: &GemmSearchProblem) -> KernelActionSpaceSet {
     let unroll_factors = problem.reduce_unroll_factors();
+    let reduce_group_top_factors = problem.reduce_group_top_factors();
     let m_per_thread_factors = problem.m_per_thread_factors();
     let n_per_thread_factors = problem.n_per_thread_factors();
     let a_load_unroll_factors = problem.a_load_unroll_factors();
@@ -22,6 +23,12 @@ pub(super) fn search_space(problem: &GemmSearchProblem) -> KernelActionSpaceSet 
         axis: 2,
         factors: unroll_factors,
     });
+    if !reduce_group_top_factors.is_empty() {
+        spaces.push(KernelActionSpace::GroupTop {
+            axis: 2,
+            factors: reduce_group_top_factors,
+        });
+    }
     spaces.push(KernelActionSpace::Upcast {
         axis: 0,
         factors: m_per_thread_factors,
@@ -75,6 +82,15 @@ pub(super) fn action_spaces(
             GemmSchedulePlan::new(GemmSearchProblem::EXISTING_TILE),
             true,
         );
+        let reduce_group_top_factors = GemmSearchProblem::reduce_group_top_factors_for_plan(
+            GemmSchedulePlan::new(GemmSearchProblem::EXISTING_TILE),
+        );
+        if !reduce_group_top_factors.is_empty() {
+            spaces.push(KernelActionSpace::GroupTop {
+                axis: 2,
+                factors: reduce_group_top_factors,
+            });
+        }
         spaces.push(KernelActionSpace::TileGemm {
             variants: GemmSearchProblem::seed_tile_action_variants(),
         });
@@ -92,6 +108,17 @@ pub(super) fn action_spaces(
             .collect::<Vec<_>>();
         if !factors.is_empty() {
             spaces.push(KernelActionSpace::Unroll { axis: 2, factors });
+        }
+    }
+    if !plan.has_custom_reduce_group() {
+        let factors = GemmSearchProblem::reduce_group_top_factors_for_plan(plan)
+            .into_iter()
+            .filter(|factor| {
+                GemmSearchProblem::plan_within_resource_limits(plan.with_reduce_group(*factor))
+            })
+            .collect::<Vec<_>>();
+        if !factors.is_empty() {
+            spaces.push(KernelActionSpace::GroupTop { axis: 2, factors });
         }
     }
     if plan.m_per_thread == 1 {

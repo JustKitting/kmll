@@ -1,11 +1,13 @@
 use super::*;
 
 mod loads;
+mod reduce;
 
 use self::loads::{
     render_gemm_a_load_single, render_gemm_a_load_unrolled, render_gemm_b_load_single,
     render_gemm_b_load_unrolled,
 };
+use self::reduce::render_gemm_reduce_loop;
 
 pub(in crate::autotune) fn render_f32_bf16_gemm_source(
     symbol: &str,
@@ -14,6 +16,8 @@ pub(in crate::autotune) fn render_f32_bf16_gemm_source(
     let plan = plan.normalized();
     let tile = plan.tile;
     let reduce_unroll = plan.reduce_unroll.max(1);
+    let reduce_group = plan.reduce_group_size();
+    let has_reduce_group = plan.has_custom_reduce_group();
     let m_per_thread = plan.m_per_thread.max(1);
     let n_per_thread = plan.n_per_thread.max(1);
     let a_load_unroll = plan.a_load_unroll.max(1);
@@ -44,6 +48,9 @@ pub(in crate::autotune) fn render_f32_bf16_gemm_source(
     writeln!(source, "const TILE_N: usize = {};", tile.n).expect("write to string");
     writeln!(source, "const TILE_K: usize = {};", tile.k).expect("write to string");
     writeln!(source, "const REDUCE_UNROLL: usize = {reduce_unroll};").expect("write to string");
+    if has_reduce_group {
+        writeln!(source, "const REDUCE_GROUP: usize = {reduce_group};").expect("write to string");
+    }
     writeln!(source, "const THREAD_TILE_M: usize = {m_per_thread};").expect("write to string");
     writeln!(source, "const THREAD_TILE_N: usize = {n_per_thread};").expect("write to string");
     writeln!(source, "const A_LOAD_UNROLL: usize = {a_load_unroll};").expect("write to string");
@@ -214,54 +221,7 @@ pub(in crate::autotune) fn render_f32_bf16_gemm_source(
     writeln!(source).expect("write to string");
     writeln!(source, "        thread::sync_threads();").expect("write to string");
     writeln!(source).expect("write to string");
-    writeln!(source, "        unsafe {{").expect("write to string");
-    writeln!(source, "            let mut kk = 0;").expect("write to string");
-    writeln!(source, "            while kk + REDUCE_UNROLL <= TILE_K {{").expect("write to string");
-    for offset in 0..reduce_unroll {
-        let k_expr = if offset == 0 {
-            "kk".to_string()
-        } else {
-            format!("kk + {offset}")
-        };
-        for row_output in 0..m_per_thread {
-            for col_output in 0..n_per_thread {
-                let acc = row_output * n_per_thread + col_output;
-                writeln!(
-                    source,
-                    "                if tile_row{row_output} < TILE_M && tile_col{col_output} < TILE_N {{"
-                )
-                .expect("write to string");
-                writeln!(
-                    source,
-                    "                    acc{acc} += TILE_A[tile_row{row_output} * TILE_K + {k_expr}] * TILE_B[({k_expr}) * TILE_N + tile_col{col_output}];"
-                )
-                .expect("write to string");
-                writeln!(source, "                }}").expect("write to string");
-            }
-        }
-    }
-    writeln!(source, "                kk += REDUCE_UNROLL;").expect("write to string");
-    writeln!(source, "            }}").expect("write to string");
-    writeln!(source, "            while kk < TILE_K {{").expect("write to string");
-    for row_output in 0..m_per_thread {
-        for col_output in 0..n_per_thread {
-            let acc = row_output * n_per_thread + col_output;
-            writeln!(
-                source,
-                "                if tile_row{row_output} < TILE_M && tile_col{col_output} < TILE_N {{"
-            )
-            .expect("write to string");
-            writeln!(
-                source,
-                "                    acc{acc} += TILE_A[tile_row{row_output} * TILE_K + kk] * TILE_B[kk * TILE_N + tile_col{col_output}];"
-            )
-            .expect("write to string");
-            writeln!(source, "                }}").expect("write to string");
-        }
-    }
-    writeln!(source, "                kk += 1;").expect("write to string");
-    writeln!(source, "            }}").expect("write to string");
-    writeln!(source, "        }}").expect("write to string");
+    render_gemm_reduce_loop(&mut source, plan);
     writeln!(source).expect("write to string");
     writeln!(source, "        thread::sync_threads();").expect("write to string");
     writeln!(source, "        k_base += TILE_K;").expect("write to string");

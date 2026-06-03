@@ -98,6 +98,26 @@ pub(super) fn apply_schedule_action(
             problem.candidate_for_checked_plan(candidate, action, plan.with_reduce_unroll(*factor))
         }
         KernelScheduleAction {
+            op: KernelScheduleActionOp::GroupTop,
+            axis: Some(2),
+            arg: KernelScheduleActionArg::Factor(factor),
+            materialization: KernelActionMaterialization::DeferredGenerated,
+        } => {
+            let plan = match schedule_gemm_plan(&candidate.schedule) {
+                Some(plan) => plan,
+                None if candidate.schedule.transforms.is_empty() => {
+                    GemmSchedulePlan::new(GemmSearchProblem::EXISTING_TILE)
+                }
+                None => return None,
+            };
+            if plan.has_custom_reduce_group()
+                || !GemmSearchProblem::reduce_group_top_factors_for_plan(plan).contains(factor)
+            {
+                return None;
+            }
+            problem.candidate_for_checked_plan(candidate, action, plan.with_reduce_group(*factor))
+        }
+        KernelScheduleAction {
             op: KernelScheduleActionOp::Unroll,
             axis: Some(3),
             arg: KernelScheduleActionArg::Factor(factor),

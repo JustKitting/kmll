@@ -11,7 +11,7 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     let spaces = problem.action_spaces(&upcast_candidate);
     let actions = spaces.actions();
 
-    assert_eq!(spaces.spaces.len(), 10);
+    assert_eq!(spaces.spaces.len(), 11);
     let KernelActionSpace::LocalTile {
         axis: m_tile_axis,
         factors: m_tile_factors,
@@ -46,10 +46,19 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
         panic!("upcast GEMM should still expose reduce unroll metadata");
     };
     assert_eq!(*reduce_axis, 2);
+    let KernelActionSpace::GroupTop {
+        axis: reduce_group_axis,
+        factors: reduce_group_factors,
+    } = &spaces.spaces[4]
+    else {
+        panic!("upcast GEMM should expose reduce group-top metadata");
+    };
+    assert_eq!(*reduce_group_axis, 2);
+    assert_eq!(reduce_group_factors, &[13]);
     let KernelActionSpace::Unroll {
         axis: a_load_axis,
         factors: a_load_factors,
-    } = &spaces.spaces[4]
+    } = &spaces.spaces[5]
     else {
         panic!("upcast GEMM should expose A shared-load unroll metadata");
     };
@@ -58,7 +67,7 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     let KernelActionSpace::Unroll {
         axis: b_load_axis,
         factors: b_load_factors,
-    } = &spaces.spaces[5]
+    } = &spaces.spaces[6]
     else {
         panic!("upcast GEMM should expose B shared-load unroll metadata");
     };
@@ -67,7 +76,7 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     let KernelActionSpace::Group {
         axis: a_load_thread_axis,
         factors: a_load_thread_factors,
-    } = &spaces.spaces[6]
+    } = &spaces.spaces[7]
     else {
         panic!("upcast GEMM should expose A shared-load group metadata");
     };
@@ -76,22 +85,23 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     let KernelActionSpace::Group {
         axis: b_load_thread_axis,
         factors: b_load_thread_factors,
-    } = &spaces.spaces[7]
+    } = &spaces.spaces[8]
     else {
         panic!("upcast GEMM should expose B shared-load group metadata");
     };
     assert_eq!(*b_load_thread_axis, 4);
     assert_eq!(b_load_thread_factors, &[32, 64]);
-    assert!(matches!(spaces.spaces[8], KernelActionSpace::Swap { .. }));
+    assert!(matches!(spaces.spaces[9], KernelActionSpace::Swap { .. }));
     assert!(matches!(
-        spaces.spaces[9],
+        spaces.spaces[10],
         KernelActionSpace::StrideOrder { .. }
     ));
 
-    assert_eq!(actions.len(), 50);
+    assert_eq!(actions.len(), 51);
     assert!(actions.contains(&KernelScheduleAction::local_tile(0, 24)));
     assert!(actions.contains(&KernelScheduleAction::local_tile(1, 16)));
     assert!(actions.contains(&KernelScheduleAction::local_tile(2, 32)));
+    assert!(actions.contains(&KernelScheduleAction::group_top(2, 13)));
     assert!(actions.contains(&KernelScheduleAction::unroll(3, 2)));
     assert!(!actions.contains(&KernelScheduleAction::unroll(3, 3)));
     assert!(actions.contains(&KernelScheduleAction::unroll(4, 4)));

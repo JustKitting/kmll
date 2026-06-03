@@ -125,7 +125,7 @@ fn operation_problem_routes_gemm_search_and_source_generation() {
             require_launchable: false,
         },
     );
-    assert_eq!(result.explored, 25);
+    assert_eq!(result.explored, 26);
     let seed = problem.seed();
     let generated = problem
         .apply_schedule_action(

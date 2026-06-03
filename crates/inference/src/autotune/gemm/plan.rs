@@ -91,6 +91,7 @@ impl GemmThreadOrder {
 pub struct GemmSchedulePlan {
     pub tile: GemmTileShape,
     pub reduce_unroll: u32,
+    pub reduce_group: u32,
     pub m_per_thread: u32,
     pub n_per_thread: u32,
     pub a_load_unroll: u32,
@@ -107,6 +108,7 @@ impl GemmSchedulePlan {
         Self {
             tile,
             reduce_unroll: 1,
+            reduce_group: 0,
             m_per_thread: 1,
             n_per_thread: 1,
             a_load_unroll: 1,
@@ -121,6 +123,11 @@ impl GemmSchedulePlan {
 
     pub const fn with_reduce_unroll(mut self, factor: u32) -> Self {
         self.reduce_unroll = if factor == 0 { 1 } else { factor };
+        self
+    }
+
+    pub const fn with_reduce_group(mut self, factor: u32) -> Self {
+        self.reduce_group = factor;
         self
     }
 
@@ -176,6 +183,7 @@ impl GemmSchedulePlan {
 
     pub const fn normalized(self) -> Self {
         self.with_reduce_unroll(self.reduce_unroll)
+            .with_reduce_group(self.reduce_group)
             .with_m_per_thread(self.m_per_thread)
             .with_n_per_thread(self.n_per_thread)
             .with_a_load_unroll(self.a_load_unroll)
@@ -212,6 +220,20 @@ impl GemmSchedulePlan {
     pub(in crate::autotune) fn accumulator_elements_per_thread(self) -> u32 {
         let plan = self.normalized();
         plan.m_per_thread.saturating_mul(plan.n_per_thread).max(1)
+    }
+
+    pub(in crate::autotune) fn reduce_group_size(self) -> u32 {
+        let plan = self.normalized();
+        if plan.reduce_group == 0 {
+            plan.tile.k
+        } else {
+            plan.reduce_group.clamp(1, plan.tile.k)
+        }
+    }
+
+    pub(in crate::autotune) fn has_custom_reduce_group(self) -> bool {
+        let plan = self.normalized();
+        plan.reduce_group != 0 && plan.reduce_group_size() != plan.tile.k
     }
 
     pub(in crate::autotune) fn load_elements_per_block(self) -> u32 {
@@ -319,6 +341,24 @@ impl GemmSchedulePlan {
         }
         if plan.b_load_unroll > 1 {
             write!(&mut suffix, "-bu{}", plan.b_load_unroll).expect("write to string");
+        }
+        suffix
+    }
+
+    pub(in crate::autotune) fn reduce_group_symbol_suffix(self) -> String {
+        let plan = self.normalized();
+        let mut suffix = String::new();
+        if plan.has_custom_reduce_group() {
+            write!(&mut suffix, "_kg{}", plan.reduce_group_size()).expect("write to string");
+        }
+        suffix
+    }
+
+    pub(in crate::autotune) fn reduce_group_operation_suffix(self) -> String {
+        let plan = self.normalized();
+        let mut suffix = String::new();
+        if plan.has_custom_reduce_group() {
+            write!(&mut suffix, "-kg{}", plan.reduce_group_size()).expect("write to string");
         }
         suffix
     }

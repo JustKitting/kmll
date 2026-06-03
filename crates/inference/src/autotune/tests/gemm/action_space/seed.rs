@@ -9,7 +9,7 @@ fn gemm_seed_action_space_exposes_local_tiles_and_existing_tile() {
     let deferred_tile_action =
         KernelScheduleAction::tile_gemm(13, 24, 13, KernelActionMaterialization::DeferredGenerated);
 
-    assert_eq!(tile_spaces.spaces.len(), 4);
+    assert_eq!(tile_spaces.spaces.len(), 5);
     assert_eq!(tile_spaces.actions(), tile_actions);
     let KernelActionSpace::LocalTile {
         axis: m_tile_axis,
@@ -38,7 +38,16 @@ fn gemm_seed_action_space_exposes_local_tiles_and_existing_tile() {
     };
     assert_eq!(*k_tile_axis, 2);
     assert_eq!(k_tile_factors, &[2, 3, 4, 8, 13, 24, 29, 32]);
-    let KernelActionSpace::TileGemm { variants } = &tile_spaces.spaces[3] else {
+    let KernelActionSpace::GroupTop {
+        axis: reduce_group_axis,
+        factors: reduce_group_factors,
+    } = &tile_spaces.spaces[3]
+    else {
+        panic!("GEMM seed should expose reduce group-top metadata");
+    };
+    assert_eq!(*reduce_group_axis, 2);
+    assert_eq!(reduce_group_factors, &[13]);
+    let KernelActionSpace::TileGemm { variants } = &tile_spaces.spaces[4] else {
         panic!("GEMM seed should expose existing tile materialization metadata");
     };
     assert_eq!(
@@ -48,10 +57,11 @@ fn gemm_seed_action_space_exposes_local_tiles_and_existing_tile() {
             KernelActionMaterialization::Existing
         )]
     );
-    assert_eq!(tile_actions.len(), 25);
+    assert_eq!(tile_actions.len(), 26);
     assert!(tile_actions.contains(&KernelScheduleAction::local_tile(0, 13)));
     assert!(tile_actions.contains(&KernelScheduleAction::local_tile(1, 24)));
     assert!(tile_actions.contains(&KernelScheduleAction::local_tile(2, 32)));
+    assert!(tile_actions.contains(&KernelScheduleAction::group_top(2, 13)));
     assert!(tile_actions.contains(&KernelScheduleAction::tile_gemm(
         16,
         16,
@@ -66,5 +76,17 @@ fn gemm_seed_action_space_exposes_local_tiles_and_existing_tile() {
     assert_eq!(
         schedule_gemm_tile(&direct_tile.schedule),
         Some(GemmTileShape::new(13, 24, 13))
+    );
+
+    let reduce_grouped = problem
+        .apply_schedule_action(&seed, &KernelScheduleAction::group_top(2, 13))
+        .expect("seed reduce group-top action should produce generated metadata");
+    let reduce_grouped_plan =
+        schedule_gemm_plan(&reduce_grouped.schedule).expect("grouped seed GEMM should plan");
+    assert_eq!(reduce_grouped_plan.tile, GemmTileShape::new(16, 16, 16));
+    assert_eq!(reduce_grouped_plan.reduce_group_size(), 13);
+    assert_eq!(
+        reduce_grouped.launch.kernel,
+        "gemm_f32_bf16_tile_16x16x16_kg13"
     );
 }
