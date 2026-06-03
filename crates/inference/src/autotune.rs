@@ -133,6 +133,15 @@ pub enum SearchScoreSource {
     Measured,
 }
 
+impl SearchScoreSource {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Heuristic => "heuristic",
+            Self::Measured => "measured",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SearchScore {
     pub value: f64,

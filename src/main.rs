@@ -15,6 +15,10 @@ mod cuda_worker;
 use cuda_core::{CudaContext, CudaModule, CudaStream, DeviceBuffer};
 use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
+    autotune::{
+        BeamSearchConfig, GemmRustCudaGenerator, GemmSearchProblem, KernelArtifactStore,
+        KernelCandidateMetadata, KernelMaterialization, ScheduleTransform, beam_search_metadata,
+    },
     chat,
     dtypes::{Bf16, DType},
     inference::{
@@ -84,6 +88,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
     match command.as_str() {
         "smoke" => run_smoke(),
         "gemm-stress" | "matmul-stress" => run_gemm_stress(&args),
+        "kernel-autotune-gemm" | "gemm-autotune" => run_kernel_autotune_gemm(&args),
         "ministral-gemm-stress" | "ministral-matmul-stress" => run_ministral_gemm_stress(&args),
         "decode-matvec-bench" | "matvec-bench" => run_decode_matvec_bench(&args),
         "logit-stress" | "logits-stress" => run_logit_stress(&args),
@@ -229,7 +234,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         "ministral-chat-exported-compare" => run_ministral_chat_exported_compare(&args),
         "ministral-chat-compare" => run_ministral_chat_compare(&args),
         other => Err(invalid_input(format!(
-            "unknown command {other:?}; expected `smoke`, `smoke-workers`, `gemm-stress`, `ministral-gemm-stress`, `decode-matvec-bench`, `logit-stress`, `attention-stress`, \
+            "unknown command {other:?}; expected `smoke`, `smoke-workers`, `gemm-stress`, `kernel-autotune-gemm`, `ministral-gemm-stress`, `decode-matvec-bench`, `logit-stress`, `attention-stress`, \
              `ministral-bf16-prefill-bench`, `ministral-bf16-decode-bench`, \
              `ministral-exported-decode-bench`, `ministral-exported-prefill-compare`, \
              `ministral-bf16-prefill-compare`, \
@@ -333,6 +338,166 @@ fn print_queue_operation_profile(profile: &nn_rust_profiling::QueueOperationProf
         profile.completion_wait.as_seconds_f64(),
         profile.total.as_seconds_f64()
     );
+}
+
+fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let m = parse_required_usize(args, &mut index, "m", "kernel-autotune-gemm")?;
+    let n = parse_required_usize(args, &mut index, "n", "kernel-autotune-gemm")?;
+    let k = parse_required_usize(args, &mut index, "k", "kernel-autotune-gemm")?;
+    if m == 0 || n == 0 || k == 0 {
+        return Err(invalid_input(
+            "kernel-autotune-gemm dimensions must be nonzero",
+        ));
+    }
+
+    let mut beam_width = 4;
+    let mut max_depth = 1;
+    let mut allow_generated = false;
+    let mut emit = false;
+    let mut artifact_root = None;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--allow-generated" => {
+                allow_generated = true;
+                index += 1;
+            }
+            "--emit" => {
+                emit = true;
+                index += 1;
+            }
+            "--beam-width" => {
+                let value = parse_required_flag_value(args, &mut index, "--beam-width")?;
+                beam_width = value.parse::<usize>().map_err(|error| {
+                    invalid_input(format!(
+                        "kernel-autotune-gemm --beam-width must be a positive integer, got {value:?}: {error}"
+                    ))
+                })?;
+            }
+            "--max-depth" => {
+                let value = parse_required_flag_value(args, &mut index, "--max-depth")?;
+                max_depth = value.parse::<usize>().map_err(|error| {
+                    invalid_input(format!(
+                        "kernel-autotune-gemm --max-depth must be a positive integer, got {value:?}: {error}"
+                    ))
+                })?;
+            }
+            "--artifact-root" => {
+                let value = parse_required_flag_value(args, &mut index, "--artifact-root")?;
+                artifact_root = Some(PathBuf::from(value));
+            }
+            other => {
+                return Err(invalid_input(format!(
+                    "kernel-autotune-gemm unknown argument {other:?}; usage: kernel-autotune-gemm M N K [--allow-generated] [--emit] [--beam-width N] [--max-depth N] [--artifact-root PATH]"
+                )));
+            }
+        }
+    }
+    if beam_width == 0 {
+        return Err(invalid_input(
+            "kernel-autotune-gemm --beam-width must be nonzero",
+        ));
+    }
+
+    let problem = GemmSearchProblem::f32_bf16_row_col_row(m, n, k);
+    let config = BeamSearchConfig {
+        beam_width,
+        max_depth,
+        require_launchable: !allow_generated,
+    };
+    let result = beam_search_metadata(&problem, config);
+    let best = result
+        .best
+        .as_ref()
+        .ok_or_else(|| invalid_input("kernel-autotune-gemm did not produce any candidates"))?;
+
+    println!(
+        "kernel_autotune_gemm m={m} n={n} k={k} beam_width={beam_width} max_depth={max_depth} allow_generated={allow_generated}"
+    );
+    println!(
+        "search explored={} rejected={} beam_len={}",
+        result.explored,
+        result.rejected,
+        result.beam.len()
+    );
+    for (rank, candidate) in result.beam.iter().enumerate() {
+        print_kernel_candidate(rank, candidate);
+    }
+
+    if emit {
+        let store = artifact_root
+            .map(KernelArtifactStore::new)
+            .unwrap_or_else(KernelArtifactStore::managed);
+        let emitted = store.emit(best, &GemmRustCudaGenerator)?;
+        println!(
+            "emitted rank=0 artifact_key={} symbol={} source_path={} manifest_path={} source_bytes={} manifest_bytes={}",
+            emitted.artifact_key.hex(),
+            emitted.symbol,
+            emitted.paths.source_path.display(),
+            emitted.paths.manifest_path.display(),
+            emitted.source_bytes,
+            emitted.manifest_bytes
+        );
+    }
+
+    Ok(())
+}
+
+fn print_kernel_candidate(rank: usize, candidate: &KernelCandidateMetadata) {
+    let materialization = match &candidate.generated.materialization {
+        KernelMaterialization::Existing { symbol } => format!("existing:{symbol}"),
+        KernelMaterialization::DeferredGenerated {
+            symbol_hint,
+            reason,
+        } => format!("deferred-generated:{symbol_hint}:{reason}"),
+    };
+    let score = candidate
+        .score
+        .map(|score| format!("{:.3}:{}", score.value, score.source.label()))
+        .unwrap_or_else(|| "none".to_string());
+    println!(
+        "candidate rank={rank} key={} family={} launchable={} score={} generator={} materialization={} kernel={} grid={}x{}x{} block={}x{}x{} schedule={}",
+        candidate.artifact_key().hex(),
+        candidate.family,
+        candidate.is_launchable(),
+        score,
+        candidate.generated.generator,
+        materialization,
+        candidate.launch.kernel,
+        candidate.launch.grid_dim.x,
+        candidate.launch.grid_dim.y,
+        candidate.launch.grid_dim.z,
+        candidate.launch.block_dim.x,
+        candidate.launch.block_dim.y,
+        candidate.launch.block_dim.z,
+        format_schedule(&candidate.schedule.transforms)
+    );
+}
+
+fn format_schedule(transforms: &[ScheduleTransform]) -> String {
+    if transforms.is_empty() {
+        return "[]".to_string();
+    }
+    let parts = transforms
+        .iter()
+        .map(|transform| match transform {
+            ScheduleTransform::Split { axis, factor } => {
+                format!("split(axis={axis},factor={factor})")
+            }
+            ScheduleTransform::Unroll { axis, factor } => {
+                format!("unroll(axis={axis},factor={factor})")
+            }
+            ScheduleTransform::LocalTile { axis, factor } => {
+                format!("local_tile(axis={axis},factor={factor})")
+            }
+            ScheduleTransform::ThreadGroup { axis, factor } => {
+                format!("thread_group(axis={axis},factor={factor})")
+            }
+            ScheduleTransform::TileGemm { m, n, k } => format!("tile_gemm(m={m},n={n},k={k})"),
+            ScheduleTransform::StrideOrder { axes } => format!("stride_order(axes={axes:?})"),
+        })
+        .collect::<Vec<_>>();
+    format!("[{}]", parts.join(","))
 }
 
 fn run_relu(stream: &Arc<CudaStream>, module: &Arc<CudaModule>) -> AppResult<()> {
@@ -9564,6 +9729,31 @@ fn parse_bf16_top1_plan(value: &str) -> AppResult<Bf16Top1Plan> {
             "unknown BF16 top1 plan {other:?}; expected rows1, rows2, rows4, or rows8"
         ))),
     }
+}
+
+fn parse_required_usize(
+    args: &[String],
+    index: &mut usize,
+    name: &str,
+    command: &str,
+) -> AppResult<usize> {
+    let value = args.get(*index).ok_or_else(|| {
+        invalid_input(format!(
+            "{command} requires positional argument {name}; usage: {command} M N K"
+        ))
+    })?;
+    if value.starts_with("--") {
+        return Err(invalid_input(format!(
+            "{command} requires positional argument {name}, got flag {value:?}"
+        )));
+    }
+    let parsed = value.parse::<usize>().map_err(|error| {
+        invalid_input(format!(
+            "{command} positional argument {name} must be a positive integer, got {value:?}: {error}"
+        ))
+    })?;
+    *index += 1;
+    Ok(parsed)
 }
 
 fn parse_optional_usize(
