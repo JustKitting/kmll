@@ -374,6 +374,7 @@ impl TypedOperationSpec {
 pub enum OptimizationActionOp {
     Split,
     Unroll,
+    LocalTile,
     TileGemm,
     StrideOrder,
 }
@@ -383,6 +384,7 @@ impl OptimizationActionOp {
         match self {
             Self::Split => "split",
             Self::Unroll => "unroll",
+            Self::LocalTile => "local-tile",
             Self::TileGemm => "tile-gemm",
             Self::StrideOrder => "stride-order",
         }
@@ -442,6 +444,15 @@ impl OptimizationActionSpec {
         }
     }
 
+    pub const fn local_tile(axis: u8, factor: u32) -> Self {
+        Self {
+            op: OptimizationActionOp::LocalTile,
+            axis: Some(axis),
+            arg: OptimizationActionArg::Factor(factor),
+            materialization: OptimizationActionMaterialization::DeferredGenerated,
+        }
+    }
+
     pub const fn tile_gemm(
         m: u32,
         n: u32,
@@ -495,6 +506,10 @@ pub enum OptimizationActionSpace {
         axis: u8,
         factors: Vec<u32>,
     },
+    LocalTile {
+        axis: u8,
+        factors: Vec<u32>,
+    },
     TileGemm {
         variants: Vec<OptimizationTile3dChoice>,
     },
@@ -508,6 +523,7 @@ impl OptimizationActionSpace {
         match self {
             Self::Split { variants } => variants.len(),
             Self::Unroll { factors, .. } => factors.len(),
+            Self::LocalTile { factors, .. } => factors.len(),
             Self::TileGemm { variants } => variants.len(),
             Self::StrideOrder { orders } => orders.len(),
         }
@@ -2002,6 +2018,18 @@ fn push_optimization_action_space_json(
             push_json_field_usize(out, "action_count", factors.len(), indent + 2, true);
             push_json_field_u32_array(out, "factors", factors, indent + 2, false);
         }
+        OptimizationActionSpace::LocalTile { axis, factors } => {
+            push_json_field_string(
+                out,
+                "op",
+                OptimizationActionOp::LocalTile.label(),
+                indent + 2,
+                true,
+            );
+            push_json_field_u32(out, "axis", u32::from(*axis), indent + 2, true);
+            push_json_field_usize(out, "action_count", factors.len(), indent + 2, true);
+            push_json_field_u32_array(out, "factors", factors, indent + 2, false);
+        }
         OptimizationActionSpace::TileGemm { variants } => {
             push_json_field_string(
                 out,
@@ -2771,6 +2799,7 @@ mod tests {
                 OptimizationActionMaterialization::DeferredGenerated,
             ),
             OptimizationActionSpec::unroll(1, 8),
+            OptimizationActionSpec::local_tile(1, 2),
         ])
         .with_score(score);
         let report = OptimizationSearchReport::new(
@@ -2800,6 +2829,10 @@ mod tests {
                 axis: 1,
                 factors: vec![2, 4, 8],
             },
+            OptimizationActionSpace::LocalTile {
+                axis: 1,
+                factors: vec![2, 4],
+            },
         ]));
 
         let json = report.to_json_string();
@@ -2808,7 +2841,7 @@ mod tests {
         assert!(json.contains("\"beam_width\": 8"));
         assert!(json.contains("\"require_launchable\": false"));
         assert!(json.contains("\"action_space\""));
-        assert!(json.contains("\"total_actions\": 5"));
+        assert!(json.contains("\"total_actions\": 7"));
         assert!(json.contains("\"variants\""));
         assert!(json.contains("\"materialization\": \"existing\""));
         assert!(json.contains("\"factors\": [2, 4, 8]"));
@@ -2816,6 +2849,7 @@ mod tests {
         assert!(json.contains("\"action_trace\""));
         assert!(json.contains("\"op\": \"split\""));
         assert!(json.contains("\"op\": \"unroll\""));
+        assert!(json.contains("\"op\": \"local-tile\""));
         assert!(json.contains("\"score\""));
         assert!(json.contains("\"source\": \"measured\""));
         assert!(json.contains("\"setup_segments\""));
