@@ -9,6 +9,26 @@ impl MatvecSearchProblem {
         )
     }
 
+    pub(in crate::autotune::matvec::problem) fn reduce_group_top_factors(&self) -> Vec<u32> {
+        Self::reduce_group_top_factors_for_plan(
+            MatvecSchedulePlan::new(RowMajorWarpRows::Rows1),
+            self.cols,
+        )
+    }
+
+    pub(in crate::autotune::matvec::problem) fn reduce_group_top_factors_for_plan(
+        plan: MatvecSchedulePlan,
+        cols: usize,
+    ) -> Vec<u32> {
+        let min_factor = plan.normalized().reduce_unroll.max(1);
+        KernelScheduleActionTemplate::INFERENCE_DEFAULT
+            .group_top_factors
+            .iter()
+            .copied()
+            .filter(|factor| *factor >= min_factor && (*factor as usize) < cols)
+            .collect()
+    }
+
     pub(in crate::autotune::matvec::problem) fn thread_group_factors(&self) -> Vec<u32> {
         KernelScheduleActionTemplate::INFERENCE_DEFAULT.legal_thread_group_factors(|factor| {
             MatvecThreadGroup::SEARCH_LANES_PER_ROW.contains(&factor)

@@ -31,7 +31,7 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
     assert_eq!(factors.first().copied(), Some(1));
     assert_eq!(factors.last().copied(), Some(32));
     let complete_space = problem.search_space();
-    assert_eq!(complete_space.spaces.len(), 5);
+    assert_eq!(complete_space.spaces.len(), 6);
     assert!(matches!(
         complete_space.spaces[0],
         KernelActionSpace::Split { .. }
@@ -50,6 +50,10 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
     ));
     assert!(matches!(
         complete_space.spaces[4],
+        KernelActionSpace::GroupTop { .. }
+    ));
+    assert!(matches!(
+        complete_space.spaces[5],
         KernelActionSpace::Group { .. }
     ));
     assert_eq!(actions.len(), 36);
@@ -97,7 +101,7 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
     let spaces = problem.action_spaces(&rows8);
     let actions = problem.schedule_actions(&rows8);
 
-    assert_eq!(spaces.spaces.len(), 3);
+    assert_eq!(spaces.spaces.len(), 4);
     assert_eq!(spaces.actions(), actions);
     let KernelActionSpace::Upcast { axis, factors } = &spaces.spaces[0] else {
         panic!("generated matvec split should expose upcast action-space metadata");
@@ -123,7 +127,14 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
     assert!(actions.contains(&KernelScheduleAction::unroll(1, 2)));
     assert!(actions.contains(&KernelScheduleAction::unroll(1, 7)));
     assert!(actions.contains(&KernelScheduleAction::unroll(1, 32)));
-    let KernelActionSpace::Group { axis, factors } = &spaces.spaces[2] else {
+    let KernelActionSpace::GroupTop { axis, factors } = &spaces.spaces[2] else {
+        panic!("generated matvec split should expose reduce group-top action-space metadata");
+    };
+    assert_eq!(*axis, 1);
+    assert_eq!(factors.as_slice(), &[13, 16, 28, 29, 32, 49, 64, 256]);
+    assert!(actions.contains(&KernelScheduleAction::group_top(1, 64)));
+
+    let KernelActionSpace::Group { axis, factors } = &spaces.spaces[3] else {
         panic!("generated matvec split should expose group action-space metadata");
     };
     assert_eq!(*axis, 1);
@@ -143,6 +154,31 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
         ]
     );
     assert_ne!(rows8.artifact_key(), unrolled.artifact_key());
+
+    let reduce_grouped = problem
+        .apply_schedule_action(&rows8, &KernelScheduleAction::group_top(1, 64))
+        .expect("reduce group-top action should produce generated candidate metadata");
+    assert_eq!(reduce_grouped.launch.kernel, "matvec_bf16_rows8_cg64");
+    let reduce_grouped_plan =
+        schedule_matvec_plan(&reduce_grouped.schedule).expect("grouped reduce should plan");
+    assert_eq!(reduce_grouped_plan.reduce_group_size(), 64);
+    assert!(reduce_grouped.schedule.transforms.iter().any(|transform| {
+        matches!(
+            transform,
+            ScheduleTransform::GroupTop {
+                axis: 1,
+                factor: 64
+            }
+        )
+    }));
+    assert_eq!(
+        reduce_grouped.action_trace,
+        vec![
+            KernelScheduleAction::group_top(0, 8),
+            KernelScheduleAction::group_top(1, 64),
+        ]
+    );
+    assert_ne!(rows8.artifact_key(), reduce_grouped.artifact_key());
 
     let upcast = problem
         .apply_schedule_action(&rows8, &KernelScheduleAction::upcast(0, 2))

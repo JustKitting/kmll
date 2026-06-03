@@ -51,11 +51,20 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
         let wasted_fma_ops = wasted_rows.checked_mul(self.cols)?.checked_mul(2)? as f64;
         let block_overhead = blocks as f64 * 2048.0;
         let unroll = f64::from(plan.reduce_unroll.max(1));
+        let reduce_group_loops = if plan.has_custom_reduce_group() {
+            self.cols
+                .div_ceil(plan.reduce_group_size().max(1) as usize)
+                .max(1)
+        } else {
+            1
+        };
         let loop_overhead = blocks as f64
             * row_upcast as f64
             * (self.cols as f64 / lanes_per_row as f64).ceil()
             * 64.0
             / unroll;
+        let reduce_group_overhead =
+            blocks as f64 * row_upcast as f64 * reduce_group_loops as f64 * 24.0;
         let thread_overhead = blocks as f64 * f64::from(plan.block_threads()) * 8.0;
         let subgroup_pressure =
             blocks as f64 * (32.0_f64 / lanes_per_row as f64 - 1.0_f64).max(0.0_f64) * 256.0;
@@ -72,6 +81,7 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
                 + wasted_fma_ops * 8.0
                 + block_overhead
                 + loop_overhead
+                + reduce_group_overhead
                 + thread_overhead
                 + subgroup_pressure
                 + row_upcast_pressure

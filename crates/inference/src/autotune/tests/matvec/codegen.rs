@@ -60,6 +60,39 @@ fn matvec_generator_renders_reduce_unroll_source_on_demand() {
 }
 
 #[test]
+fn matvec_generator_renders_reduce_group_source_on_demand() {
+    let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+    let candidate = problem.generated_candidate_for_plan(
+        MatvecSchedulePlan::new(RowMajorWarpRows::Rows8).with_reduce_group(64),
+    );
+    let generated = MatvecRustCudaGenerator
+        .source_for(&candidate)
+        .expect("matvec generator should render reduce-grouped source");
+
+    assert_eq!(generated.symbol, "matvec_bf16_rows8_cg64");
+    assert!(generated.source.contains("const REDUCE_GROUP: u32 = 64;"));
+    assert!(generated.source.contains("let mut col_group = 0usize;"));
+    assert!(generated.source.contains("while col_group < cols"));
+    assert!(
+        generated
+            .source
+            .contains("let col_group_end = if col_group + REDUCE_GROUP as usize < cols")
+    );
+    assert!(
+        generated
+            .source
+            .contains("let mut col = col_group + lane as usize;")
+    );
+    assert!(generated.source.contains("while col + 96 < col_group_end"));
+    assert!(generated.source.contains("while col < col_group_end"));
+    assert!(
+        generated
+            .source
+            .contains("col_group += REDUCE_GROUP as usize;")
+    );
+}
+
+#[test]
 fn matvec_generator_renders_row_upcast_source_on_demand() {
     let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
     let candidate = problem.generated_candidate_for_plan(

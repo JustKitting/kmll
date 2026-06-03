@@ -15,6 +15,7 @@ fn auto_optimize_preserves_parent_when_children_do_not_improve() {
             let plan = schedule_matvec_plan(&candidate.schedule)?;
             if plan.reduce_unroll == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL
                 && plan.row_upcast.is_default()
+                && !plan.has_custom_reduce_group()
                 && plan.thread_group.is_default()
             {
                 SearchScore::measured(1.0)

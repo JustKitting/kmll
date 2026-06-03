@@ -21,6 +21,17 @@ pub(in crate::autotune) fn schedule_matvec_reduce_unroll(schedule: &KernelSchedu
         })
 }
 
+pub(in crate::autotune) fn schedule_matvec_reduce_group(schedule: &KernelSchedule) -> u32 {
+    schedule
+        .transforms
+        .iter()
+        .find_map(|transform| match transform {
+            ScheduleTransform::GroupTop { axis: 1, factor } => Some(*factor),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
+
 pub(in crate::autotune) fn schedule_matvec_row_upcast(
     schedule: &KernelSchedule,
 ) -> Option<MatvecRowUpcast> {
@@ -58,6 +69,7 @@ pub(in crate::autotune) fn schedule_matvec_plan(
         row_upcast: schedule_matvec_row_upcast(schedule)?,
         reduce_unroll: schedule_matvec_reduce_unroll(schedule)
             .unwrap_or(MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL),
+        reduce_group: schedule_matvec_reduce_group(schedule),
         thread_group: schedule_matvec_thread_group(schedule)?,
     })
 }
@@ -66,14 +78,21 @@ pub(in crate::autotune) fn matvec_symbol_hint(plan: MatvecSchedulePlan) -> Strin
     let plan = plan.normalized();
     let mut base = format!("matvec_bf16_rows{}", plan.rows.rows_per_block());
     base.push_str(&plan.row_upcast.symbol_suffix());
+    let reduce_group_suffix = if plan.has_custom_reduce_group() {
+        format!("_cg{}", plan.reduce_group_size())
+    } else {
+        String::new()
+    };
     if plan.reduce_unroll == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
+        base.push_str(&reduce_group_suffix);
         base.push_str(&plan.thread_group.symbol_suffix());
         base
     } else {
         write!(
             &mut base,
-            "_u{}{}",
+            "_u{}{}{}",
             plan.reduce_unroll,
+            reduce_group_suffix,
             plan.thread_group.symbol_suffix()
         )
         .expect("write to string");
@@ -85,17 +104,24 @@ pub(in crate::autotune) fn matvec_operation_name(plan: MatvecSchedulePlan) -> St
     let plan = plan.normalized();
     let plan_name = plan.rows.plan_name();
     let row_upcast_suffix = plan.row_upcast.operation_suffix();
+    let reduce_group_suffix = if plan.has_custom_reduce_group() {
+        format!("-cg{}", plan.reduce_group_size())
+    } else {
+        String::new()
+    };
     if plan.reduce_unroll == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
         format!(
-            "{plan_name}::bf16{}{}",
+            "{plan_name}::bf16{}{}{}",
             row_upcast_suffix,
+            reduce_group_suffix,
             plan.thread_group.operation_suffix()
         )
     } else {
         format!(
-            "{plan_name}::bf16{}-u{}{}",
+            "{plan_name}::bf16{}-u{}{}{}",
             row_upcast_suffix,
             plan.reduce_unroll,
+            reduce_group_suffix,
             plan.thread_group.operation_suffix()
         )
     }

@@ -142,6 +142,12 @@ impl MatvecSearchProblem {
                 factor: plan.reduce_unroll,
             });
         }
+        if plan.has_custom_reduce_group() {
+            schedule = schedule.with_transform(ScheduleTransform::GroupTop {
+                axis: 1,
+                factor: plan.reduce_group_size(),
+            });
+        }
         let launch = CudaLaunchSpec::new(
             launch_kernel,
             (rows.grid_rows(self.rows), 1, 1),

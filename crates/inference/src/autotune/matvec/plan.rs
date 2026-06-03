@@ -202,6 +202,7 @@ pub struct MatvecSchedulePlan {
     pub rows: MatvecRowSplit,
     pub row_upcast: MatvecRowUpcast,
     pub reduce_unroll: u32,
+    pub reduce_group: u32,
     pub thread_group: MatvecThreadGroup,
 }
 
@@ -213,6 +214,7 @@ impl MatvecSchedulePlan {
             rows: rows.into(),
             row_upcast: MatvecRowUpcast::default_upcast(),
             reduce_unroll: Self::DEFAULT_REDUCE_UNROLL,
+            reduce_group: 0,
             thread_group: MatvecThreadGroup::default_group(),
         }
     }
@@ -227,9 +229,22 @@ impl MatvecSchedulePlan {
         self
     }
 
+    pub const fn with_reduce_group(mut self, factor: u32) -> Self {
+        self.reduce_group = factor;
+        self
+    }
+
     pub const fn with_thread_group(mut self, thread_group: MatvecThreadGroup) -> Self {
         self.thread_group = thread_group;
         self
+    }
+
+    pub const fn reduce_group_size(self) -> u32 {
+        self.reduce_group
+    }
+
+    pub const fn has_custom_reduce_group(self) -> bool {
+        self.reduce_group != 0
     }
 
     pub const fn row_groups_per_block(self) -> u32 {
@@ -244,5 +259,6 @@ impl MatvecSchedulePlan {
 
     pub const fn normalized(self) -> Self {
         self.with_reduce_unroll(self.reduce_unroll)
+            .with_reduce_group(self.reduce_group)
     }
 }
