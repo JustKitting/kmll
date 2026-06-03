@@ -831,6 +831,10 @@ fn artifact_store_writes_search_report_metadata_without_kernel_source() {
         Some(false)
     );
     assert_eq!(
+        report_json["duplicates"].as_u64(),
+        Some(result.duplicates as u64)
+    );
+    assert_eq!(
         report_json["action_space"]["total_actions"].as_u64(),
         Some(problem.search_space().actions().len() as u64)
     );
@@ -925,6 +929,10 @@ fn artifact_store_writes_auto_search_report_with_step_metadata() {
     assert_eq!(report_json["config"]["beam_width"].as_u64(), Some(4));
     assert_eq!(report_json["config"]["max_steps"].as_u64(), Some(2));
     assert_eq!(
+        report_json["duplicates"].as_u64(),
+        Some(result.duplicates as u64)
+    );
+    assert_eq!(
         report_json["action_space"]["total_actions"].as_u64(),
         Some(problem.search_space().actions().len() as u64)
     );
@@ -948,6 +956,11 @@ fn artifact_store_writes_auto_search_report_with_step_metadata() {
         steps
             .iter()
             .any(|step| step["best_before"].is_object() && step["best_after"].is_object())
+    );
+    assert!(
+        steps
+            .iter()
+            .all(|step| step["duplicates"].as_u64().is_some())
     );
     assert!(steps.iter().any(|step| {
         step["best_candidate"]["action_trace"]

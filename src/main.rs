@@ -583,9 +583,10 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         );
     }
     println!(
-        "search explored={} rejected={} beam_len={} steps={} exit={}",
+        "search explored={} rejected={} duplicates={} beam_len={} steps={} exit={}",
         result.explored,
         result.rejected,
+        result.duplicates,
         result.beam.len(),
         result.steps.len(),
         result.exit_reason.label()
@@ -865,9 +866,10 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         );
     }
     println!(
-        "search explored={} rejected={} beam_len={} steps={} exit={}",
+        "search explored={} rejected={} duplicates={} beam_len={} steps={} exit={}",
         result.explored,
         result.rejected,
+        result.duplicates,
         result.beam.len(),
         result.steps.len(),
         result.exit_reason.label()

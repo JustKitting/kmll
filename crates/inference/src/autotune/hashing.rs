@@ -87,6 +87,7 @@ pub(super) fn search_report_key(report: &OptimizationSearchReport) -> KernelMeta
     state = hash_optional_profiling_action_space_set(state, report.action_space.as_ref());
     state = hash_u64(state, report.explored as u64);
     state = hash_u64(state, report.rejected as u64);
+    state = hash_u64(state, report.duplicates as u64);
     if let Some(best) = &report.best {
         state = hash_optimization_candidate(state, best);
     } else {
@@ -109,6 +110,7 @@ pub(super) fn auto_search_report_key(report: &AutoOptimizationSearchReport) -> K
     state = hash_optional_profiling_action_space_set(state, report.action_space.as_ref());
     state = hash_u64(state, report.explored as u64);
     state = hash_u64(state, report.rejected as u64);
+    state = hash_u64(state, report.duplicates as u64);
     state = hash_str(state, report.exit_reason.label());
     if let ProfilingAutoOptimizationExitReason::NoImprovement { best_delta } = report.exit_reason {
         state = hash_u64(state, best_delta.to_bits());
@@ -119,6 +121,7 @@ pub(super) fn auto_search_report_key(report: &AutoOptimizationSearchReport) -> K
         state = hash_u64(state, step.generated as u64);
         state = hash_u64(state, step.accepted as u64);
         state = hash_u64(state, step.rejected as u64);
+        state = hash_u64(state, step.duplicates as u64);
         state = hash_optional_score(state, step.best_before);
         state = hash_optional_score(state, step.best_after);
         if let Some(best_candidate) = &step.best_candidate {

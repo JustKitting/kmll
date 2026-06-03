@@ -56,6 +56,7 @@ where
     let mut beam = vec![seed];
     let mut explored = 0;
     let mut rejected = 0;
+    let mut duplicates = 0;
 
     for _ in 0..config.max_depth {
         let mut candidates = Vec::new();
@@ -63,6 +64,7 @@ where
             let expansion = expand_metadata_candidates(problem, candidate, policy, &mut seen);
             explored += expansion.explored();
             rejected += expansion.rejected;
+            duplicates += expansion.duplicates;
             for mut next in expansion.candidates {
                 match score_candidate(&next) {
                     Some(score) => {
@@ -88,6 +90,7 @@ where
         beam,
         explored,
         rejected,
+        duplicates,
     }
 }
 
@@ -151,6 +154,7 @@ where
     let mut beam = vec![seed];
     let mut explored = 0;
     let mut rejected = 0;
+    let mut duplicates = 0;
     let mut steps = Vec::new();
     let mut exit_reason = AutoOptimizeExitReason::MaxSteps;
 
@@ -160,6 +164,7 @@ where
         let mut candidates = Vec::new();
         let mut generated = 0;
         let mut step_rejected = 0;
+        let mut step_duplicates = 0;
 
         for candidate in &beam {
             let expansion = expand_metadata_candidates(problem, candidate, policy, &mut seen);
@@ -167,6 +172,8 @@ where
             generated += expansion.explored();
             rejected += expansion.rejected;
             step_rejected += expansion.rejected;
+            duplicates += expansion.duplicates;
+            step_duplicates += expansion.duplicates;
             for mut next in expansion.candidates {
                 match score_candidate(&next) {
                     Some(score) => {
@@ -188,6 +195,7 @@ where
                 generated,
                 accepted: 0,
                 rejected: step_rejected,
+                duplicates: step_duplicates,
                 best_before,
                 best_after: None,
                 best_candidate: None,
@@ -217,6 +225,7 @@ where
             generated,
             accepted,
             rejected: step_rejected,
+            duplicates: step_duplicates,
             best_before,
             best_after,
             best_candidate: best_candidate.clone(),
@@ -244,6 +253,7 @@ where
         beam,
         explored,
         rejected,
+        duplicates,
         steps,
         exit_reason,
     }
@@ -294,6 +304,7 @@ where
                         beam: vec![candidate],
                         explored: 0,
                         rejected: 0,
+                        duplicates: 0,
                     },
                     cache_key,
                     cache_status: SelectionCacheStatus::Hit,
@@ -367,6 +378,7 @@ where
                         beam: vec![candidate],
                         explored: 0,
                         rejected: 0,
+                        duplicates: 0,
                         steps: Vec::new(),
                         exit_reason: AutoOptimizeExitReason::CacheHit,
                     },

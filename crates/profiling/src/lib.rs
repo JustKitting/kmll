@@ -845,6 +845,7 @@ pub struct OptimizationSearchReport {
     pub action_space: Option<OptimizationActionSpaceSet>,
     pub explored: usize,
     pub rejected: usize,
+    pub duplicates: usize,
     pub best: Option<OptimizationCandidateSpec>,
     pub beam: Vec<OptimizationCandidateSpec>,
 }
@@ -864,9 +865,15 @@ impl OptimizationSearchReport {
             action_space: None,
             explored,
             rejected,
+            duplicates: 0,
             best,
             beam,
         }
+    }
+
+    pub fn with_duplicates(mut self, duplicates: usize) -> Self {
+        self.duplicates = duplicates;
+        self
     }
 
     pub fn with_action_space(mut self, action_space: OptimizationActionSpaceSet) -> Self {
@@ -889,6 +896,7 @@ impl OptimizationSearchReport {
         );
         push_json_field_usize(out, "explored", self.explored, indent + 2, true);
         push_json_field_usize(out, "rejected", self.rejected, indent + 2, true);
+        push_json_field_usize(out, "duplicates", self.duplicates, indent + 2, true);
         push_optimization_candidate_field_json(out, "best", self.best.as_ref(), indent + 2, true);
         push_indent(out, indent + 2);
         out.push_str("\"beam\": [\n");
@@ -963,6 +971,7 @@ pub struct AutoOptimizationSearchStep {
     pub generated: usize,
     pub accepted: usize,
     pub rejected: usize,
+    pub duplicates: usize,
     pub best_before: Option<OptimizationScore>,
     pub best_after: Option<OptimizationScore>,
     pub best_candidate: Option<OptimizationCandidateSpec>,
@@ -976,6 +985,7 @@ pub struct AutoOptimizationSearchReport {
     pub action_space: Option<OptimizationActionSpaceSet>,
     pub explored: usize,
     pub rejected: usize,
+    pub duplicates: usize,
     pub exit_reason: AutoOptimizationExitReason,
     pub steps: Vec<AutoOptimizationSearchStep>,
     pub best: Option<OptimizationCandidateSpec>,
@@ -999,11 +1009,17 @@ impl AutoOptimizationSearchReport {
             action_space: None,
             explored,
             rejected,
+            duplicates: 0,
             exit_reason,
             steps,
             best,
             beam,
         }
+    }
+
+    pub fn with_duplicates(mut self, duplicates: usize) -> Self {
+        self.duplicates = duplicates;
+        self
     }
 
     pub fn with_action_space(mut self, action_space: OptimizationActionSpaceSet) -> Self {
@@ -1026,6 +1042,7 @@ impl AutoOptimizationSearchReport {
         );
         push_json_field_usize(out, "explored", self.explored, indent + 2, true);
         push_json_field_usize(out, "rejected", self.rejected, indent + 2, true);
+        push_json_field_usize(out, "duplicates", self.duplicates, indent + 2, true);
         push_auto_optimization_exit_reason_json(
             out,
             "exit_reason",
@@ -2015,6 +2032,7 @@ fn push_auto_optimization_search_step_json(
     push_json_field_usize(out, "generated", step.generated, indent + 2, true);
     push_json_field_usize(out, "accepted", step.accepted, indent + 2, true);
     push_json_field_usize(out, "rejected", step.rejected, indent + 2, true);
+    push_json_field_usize(out, "duplicates", step.duplicates, indent + 2, true);
     push_optimization_score_json(out, "best_before", step.best_before, indent + 2, true);
     push_optimization_score_json(out, "best_after", step.best_after, indent + 2, true);
     push_optimization_candidate_field_json(
@@ -3014,6 +3032,7 @@ mod tests {
             Some(candidate.clone()),
             vec![candidate],
         )
+        .with_duplicates(2)
         .with_action_space(OptimizationActionSpaceSet::new(vec![
             OptimizationActionSpace::Split {
                 variants: vec![
@@ -3055,6 +3074,7 @@ mod tests {
         assert!(json.contains("\"family\": \"matvec-bf16-row-major\""));
         assert!(json.contains("\"beam_width\": 8"));
         assert!(json.contains("\"require_launchable\": false"));
+        assert!(json.contains("\"duplicates\": 2"));
         assert!(json.contains("\"action_space\""));
         assert!(json.contains("\"total_actions\": 12"));
         assert!(json.contains("\"variants\""));
@@ -3116,6 +3136,7 @@ mod tests {
                 generated: 12,
                 accepted: 8,
                 rejected: 0,
+                duplicates: 4,
                 best_before: OptimizationScore::heuristic(2.0),
                 best_after: OptimizationScore::heuristic(3.0),
                 best_candidate: Some(candidate.clone()),
@@ -3124,6 +3145,7 @@ mod tests {
             Some(candidate.clone()),
             vec![candidate],
         )
+        .with_duplicates(4)
         .with_action_space(OptimizationActionSpaceSet::new(vec![
             OptimizationActionSpace::TileGemm {
                 variants: vec![OptimizationTile3dChoice::new(
@@ -3145,6 +3167,7 @@ mod tests {
 
         assert!(json.contains("\"max_steps\": 2"));
         assert!(json.contains("\"min_score_improvement\": 0.000000000000"));
+        assert!(json.contains("\"duplicates\": 4"));
         assert!(json.contains("\"action_space\""));
         assert!(json.contains("\"total_actions\": 3"));
         assert!(json.contains("\"op\": \"tile-gemm\""));

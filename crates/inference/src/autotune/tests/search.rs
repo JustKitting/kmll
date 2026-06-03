@@ -347,6 +347,30 @@ fn policy_aware_search_rejects_overbudget_candidates_during_beam_expansion() {
 }
 
 #[test]
+fn beam_and_auto_search_results_track_duplicate_expansions() {
+    let problem = BudgetedSearchProblem;
+    let beam_config = BeamSearchConfig {
+        beam_width: 2,
+        max_depth: 2,
+        require_launchable: false,
+    };
+
+    let result = beam_search_metadata(&problem, beam_config);
+    assert_eq!(result.duplicates, 4);
+    let report = result.optimization_report("budget-test", beam_config);
+    assert_eq!(report.duplicates, 4);
+
+    let auto_config = AutoOptimizeConfig::from_beam_search_config(beam_config);
+    let auto = auto_optimize_metadata(&problem, auto_config);
+    assert_eq!(auto.duplicates, 4);
+    assert_eq!(auto.steps.len(), 2);
+    assert_eq!(auto.steps[1].duplicates, 4);
+    let auto_report = auto.auto_optimization_report("budget-test", auto_config);
+    assert_eq!(auto_report.duplicates, 4);
+    assert_eq!(auto_report.steps[1].duplicates, 4);
+}
+
+#[test]
 fn expansion_policy_rejects_overbudget_kernel_resources() {
     let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
     let overbudget =

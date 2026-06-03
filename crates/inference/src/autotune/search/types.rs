@@ -56,6 +56,7 @@ pub struct BeamSearchResult {
     pub beam: Vec<KernelCandidateMetadata>,
     pub explored: usize,
     pub rejected: usize,
+    pub duplicates: usize,
 }
 
 impl BeamSearchResult {
@@ -81,6 +82,7 @@ impl BeamSearchResult {
                 .map(KernelCandidateMetadata::optimization_spec)
                 .collect(),
         )
+        .with_duplicates(self.duplicates)
     }
 
     pub fn optimization_report_with_action_space(
@@ -120,6 +122,7 @@ pub struct AutoOptimizeStep {
     pub generated: usize,
     pub accepted: usize,
     pub rejected: usize,
+    pub duplicates: usize,
     pub best_before: Option<SearchScore>,
     pub best_after: Option<SearchScore>,
     pub best_candidate: Option<KernelCandidateMetadata>,
@@ -132,6 +135,7 @@ pub struct AutoOptimizeResult {
     pub beam: Vec<KernelCandidateMetadata>,
     pub explored: usize,
     pub rejected: usize,
+    pub duplicates: usize,
     pub steps: Vec<AutoOptimizeStep>,
     pub exit_reason: AutoOptimizeExitReason,
 }
@@ -143,6 +147,7 @@ impl AutoOptimizeResult {
             beam: self.beam.clone(),
             explored: self.explored,
             rejected: self.rejected,
+            duplicates: self.duplicates,
         }
     }
 
@@ -194,6 +199,7 @@ impl AutoOptimizeResult {
                 .map(KernelCandidateMetadata::optimization_spec)
                 .collect(),
         )
+        .with_duplicates(self.duplicates)
     }
 
     pub fn auto_optimization_report_with_action_space(
@@ -227,6 +233,7 @@ fn profiling_auto_search_step(step: &AutoOptimizeStep) -> AutoOptimizationSearch
         generated: step.generated,
         accepted: step.accepted,
         rejected: step.rejected,
+        duplicates: step.duplicates,
         best_before: step.best_before,
         best_after: step.best_after,
         best_candidate: step
