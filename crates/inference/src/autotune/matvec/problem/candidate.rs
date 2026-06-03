@@ -1,5 +1,17 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::autotune::matvec::problem) enum MatvecRowGroupingTransform {
+    Split,
+    GroupTop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::autotune::matvec::problem) enum MatvecReduceGroupingTransform {
+    ThreadGroup,
+    Group,
+}
+
 impl MatvecSearchProblem {
     pub fn candidate_for_rows(&self, plan: RowMajorWarpRows) -> KernelCandidateMetadata {
         self.candidate_for_plan_with_materialization(
@@ -22,18 +34,44 @@ impl MatvecSearchProblem {
         self.generated_candidate_for_plan(MatvecSchedulePlan::new(rows))
     }
 
+    pub(in crate::autotune::matvec::problem) fn generated_candidate_for_row_group_top(
+        &self,
+        rows: MatvecRowSplit,
+    ) -> KernelCandidateMetadata {
+        self.generated_candidate_for_plan_with_grouping(
+            MatvecSchedulePlan::new(rows),
+            MatvecRowGroupingTransform::GroupTop,
+            MatvecReduceGroupingTransform::ThreadGroup,
+        )
+    }
+
     pub fn generated_candidate_for_plan(
         &self,
         plan: MatvecSchedulePlan,
     ) -> KernelCandidateMetadata {
+        self.generated_candidate_for_plan_with_grouping(
+            plan,
+            MatvecRowGroupingTransform::Split,
+            MatvecReduceGroupingTransform::ThreadGroup,
+        )
+    }
+
+    pub(in crate::autotune::matvec::problem) fn generated_candidate_for_plan_with_grouping(
+        &self,
+        plan: MatvecSchedulePlan,
+        row_grouping: MatvecRowGroupingTransform,
+        reduce_grouping: MatvecReduceGroupingTransform,
+    ) -> KernelCandidateMetadata {
         let plan = plan.normalized();
         let symbol_hint = matvec_symbol_hint(plan);
-        self.candidate_for_plan_with_materialization(
+        self.candidate_for_plan_with_materialization_and_grouping(
             plan,
             symbol_hint.clone(),
             KernelMaterialization::Generated {
                 symbol: symbol_hint,
             },
+            row_grouping,
+            reduce_grouping,
         )
     }
 
@@ -43,14 +81,38 @@ impl MatvecSearchProblem {
         launch_kernel: String,
         materialization: KernelMaterialization,
     ) -> KernelCandidateMetadata {
+        self.candidate_for_plan_with_materialization_and_grouping(
+            plan,
+            launch_kernel,
+            materialization,
+            MatvecRowGroupingTransform::Split,
+            MatvecReduceGroupingTransform::ThreadGroup,
+        )
+    }
+
+    pub(in crate::autotune::matvec::problem) fn candidate_for_plan_with_materialization_and_grouping(
+        &self,
+        plan: MatvecSchedulePlan,
+        launch_kernel: String,
+        materialization: KernelMaterialization,
+        row_grouping: MatvecRowGroupingTransform,
+        reduce_grouping: MatvecReduceGroupingTransform,
+    ) -> KernelCandidateMetadata {
         let plan = plan.normalized();
         let rows = plan.rows;
         let rows_per_block = rows.rows_per_block();
-        let mut schedule = KernelSchedule::new()
-            .with_transform(ScheduleTransform::Split {
+        let row_transform = match row_grouping {
+            MatvecRowGroupingTransform::Split => ScheduleTransform::Split {
                 axis: 0,
                 factor: rows_per_block,
-            })
+            },
+            MatvecRowGroupingTransform::GroupTop => ScheduleTransform::GroupTop {
+                axis: 0,
+                factor: rows_per_block,
+            },
+        };
+        let mut schedule = KernelSchedule::new()
+            .with_transform(row_transform)
             .with_transform(ScheduleTransform::ThreadGroup {
                 axis: 0,
                 factor: plan.block_threads(),
@@ -62,10 +124,17 @@ impl MatvecSearchProblem {
             });
         }
         if !plan.thread_group.is_default() {
-            schedule = schedule.with_transform(ScheduleTransform::ThreadGroup {
-                axis: 1,
-                factor: plan.thread_group.lanes_per_row(),
-            });
+            let reduce_grouping_transform = match reduce_grouping {
+                MatvecReduceGroupingTransform::ThreadGroup => ScheduleTransform::ThreadGroup {
+                    axis: 1,
+                    factor: plan.thread_group.lanes_per_row(),
+                },
+                MatvecReduceGroupingTransform::Group => ScheduleTransform::Group {
+                    axis: 1,
+                    factor: plan.thread_group.lanes_per_row(),
+                },
+            };
+            schedule = schedule.with_transform(reduce_grouping_transform);
         }
         if plan.reduce_unroll != MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
             schedule = schedule.with_transform(ScheduleTransform::Unroll {

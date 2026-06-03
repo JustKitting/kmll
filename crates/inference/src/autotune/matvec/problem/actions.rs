@@ -1,14 +1,22 @@
-use super::*;
+use super::{
+    candidate::{MatvecReduceGroupingTransform, MatvecRowGroupingTransform},
+    *,
+};
 
 impl KernelActionSearchProblem for MatvecSearchProblem {
     fn search_space(&self) -> KernelActionSpaceSet {
         let split_variants = self.split_variants();
+        let group_top_factors = self.group_top_factors();
         let row_upcast_factors = self.row_upcast_factors();
         let unroll_factors = self.reduce_unroll_factors();
-        let thread_group_factors = self.thread_group_factors();
+        let group_factors = self.group_factors();
         KernelActionSpaceSet::new(vec![
             KernelActionSpace::Split {
                 variants: split_variants,
+            },
+            KernelActionSpace::GroupTop {
+                axis: 0,
+                factors: group_top_factors,
             },
             KernelActionSpace::Upcast {
                 axis: 0,
@@ -18,9 +26,9 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 axis: 1,
                 factors: unroll_factors,
             },
-            KernelActionSpace::ThreadGroup {
+            KernelActionSpace::Group {
                 axis: 1,
-                factors: thread_group_factors,
+                factors: group_factors,
             },
         ])
     }
@@ -30,9 +38,15 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
             return KernelActionSpaceSet::default();
         }
         if candidate.schedule.depth() == 0 {
-            return KernelActionSpaceSet::new(vec![KernelActionSpace::Split {
-                variants: self.split_variants(),
-            }]);
+            return KernelActionSpaceSet::new(vec![
+                KernelActionSpace::Split {
+                    variants: self.split_variants(),
+                },
+                KernelActionSpace::GroupTop {
+                    axis: 0,
+                    factors: self.group_top_factors(),
+                },
+            ]);
         }
         let Some(plan) = schedule_matvec_plan(&candidate.schedule) else {
             return KernelActionSpaceSet::default();
@@ -54,9 +68,9 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
             });
         }
         if plan.thread_group.is_default() {
-            spaces.push(KernelActionSpace::ThreadGroup {
+            spaces.push(KernelActionSpace::Group {
                 axis: 1,
-                factors: self.thread_group_factors(),
+                factors: self.group_factors(),
             });
         }
         KernelActionSpaceSet::new(spaces)
@@ -96,6 +110,21 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 Some(candidate_with_action_trace(candidate, action, next))
             }
             KernelScheduleAction {
+                op: KernelScheduleActionOp::GroupTop,
+                axis: Some(0),
+                arg: KernelScheduleActionArg::Factor(rows_per_block),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                if candidate.schedule.depth() > 0
+                    || !self.group_top_factors().contains(rows_per_block)
+                {
+                    return None;
+                }
+                let rows = MatvecRowSplit::new(*rows_per_block)?;
+                let next = self.generated_candidate_for_row_group_top(rows);
+                Some(candidate_with_action_trace(candidate, action, next))
+            }
+            KernelScheduleAction {
                 op: KernelScheduleActionOp::Upcast,
                 axis: Some(0),
                 arg: KernelScheduleActionArg::Factor(factor),
@@ -111,7 +140,11 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                     return None;
                 }
                 let row_upcast = MatvecRowUpcast::new(*factor)?;
-                let next = self.generated_candidate_for_plan(plan.with_row_upcast(row_upcast));
+                let next = self.generated_candidate_for_plan_with_grouping(
+                    plan.with_row_upcast(row_upcast),
+                    row_grouping_transform(&candidate.schedule),
+                    reduce_grouping_transform(&candidate.schedule),
+                );
                 Some(candidate_with_action_trace(candidate, action, next))
             }
             KernelScheduleAction {
@@ -129,7 +162,34 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 if plan.reduce_unroll != MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
                     return None;
                 }
-                let next = self.generated_candidate_for_plan(plan.with_reduce_unroll(*factor));
+                let next = self.generated_candidate_for_plan_with_grouping(
+                    plan.with_reduce_unroll(*factor),
+                    row_grouping_transform(&candidate.schedule),
+                    reduce_grouping_transform(&candidate.schedule),
+                );
+                Some(candidate_with_action_trace(candidate, action, next))
+            }
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::Group,
+                axis: Some(1),
+                arg: KernelScheduleActionArg::Factor(factor),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                if candidate.generated.materialization.is_existing()
+                    || !self.group_factors().contains(factor)
+                {
+                    return None;
+                }
+                let plan = schedule_matvec_plan(&candidate.schedule)?;
+                if !plan.thread_group.is_default() {
+                    return None;
+                }
+                let thread_group = MatvecThreadGroup::new(*factor)?;
+                let next = self.generated_candidate_for_plan_with_grouping(
+                    plan.with_thread_group(thread_group),
+                    row_grouping_transform(&candidate.schedule),
+                    MatvecReduceGroupingTransform::Group,
+                );
                 Some(candidate_with_action_trace(candidate, action, next))
             }
             KernelScheduleAction {
@@ -148,10 +208,38 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                     return None;
                 }
                 let thread_group = MatvecThreadGroup::new(*factor)?;
-                let next = self.generated_candidate_for_plan(plan.with_thread_group(thread_group));
+                let next = self.generated_candidate_for_plan_with_grouping(
+                    plan.with_thread_group(thread_group),
+                    row_grouping_transform(&candidate.schedule),
+                    MatvecReduceGroupingTransform::ThreadGroup,
+                );
                 Some(candidate_with_action_trace(candidate, action, next))
             }
             _ => None,
         }
+    }
+}
+
+fn row_grouping_transform(schedule: &KernelSchedule) -> MatvecRowGroupingTransform {
+    if schedule
+        .transforms
+        .iter()
+        .any(|transform| matches!(transform, ScheduleTransform::GroupTop { axis: 0, .. }))
+    {
+        MatvecRowGroupingTransform::GroupTop
+    } else {
+        MatvecRowGroupingTransform::Split
+    }
+}
+
+fn reduce_grouping_transform(schedule: &KernelSchedule) -> MatvecReduceGroupingTransform {
+    if schedule
+        .transforms
+        .iter()
+        .any(|transform| matches!(transform, ScheduleTransform::Group { axis: 1, .. }))
+    {
+        MatvecReduceGroupingTransform::Group
+    } else {
+        MatvecReduceGroupingTransform::ThreadGroup
     }
 }

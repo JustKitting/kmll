@@ -5,7 +5,8 @@ pub(in crate::autotune) fn schedule_rows_per_block(schedule: &KernelSchedule) ->
         .transforms
         .iter()
         .find_map(|transform| match transform {
-            ScheduleTransform::Split { axis: 0, factor } => Some(*factor),
+            ScheduleTransform::Split { axis: 0, factor }
+            | ScheduleTransform::GroupTop { axis: 0, factor } => Some(*factor),
             _ => None,
         })
 }
@@ -40,7 +41,8 @@ pub(in crate::autotune) fn schedule_matvec_thread_group(
         .transforms
         .iter()
         .find_map(|transform| match transform {
-            ScheduleTransform::ThreadGroup { axis: 1, factor } => MatvecThreadGroup::new(*factor),
+            ScheduleTransform::ThreadGroup { axis: 1, factor }
+            | ScheduleTransform::Group { axis: 1, factor } => MatvecThreadGroup::new(*factor),
             _ => None,
         })
         .or_else(|| Some(MatvecThreadGroup::default_group()))

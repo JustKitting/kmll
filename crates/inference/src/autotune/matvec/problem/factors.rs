@@ -15,6 +15,15 @@ impl MatvecSearchProblem {
         })
     }
 
+    pub(in crate::autotune::matvec::problem) fn group_factors(&self) -> Vec<u32> {
+        KernelScheduleActionTemplate::INFERENCE_DEFAULT
+            .group_factors
+            .iter()
+            .copied()
+            .filter(|factor| MatvecThreadGroup::SEARCH_LANES_PER_ROW.contains(factor))
+            .collect()
+    }
+
     pub(in crate::autotune::matvec::problem) fn row_upcast_factors(&self) -> Vec<u32> {
         KernelScheduleActionTemplate::INFERENCE_DEFAULT
             .legal_upcast_factors(|factor| MatvecRowUpcast::SEARCH_FACTORS.contains(&factor))
@@ -34,6 +43,10 @@ impl MatvecSearchProblem {
         bounded_unroll_factors(self.rows, Self::MAX_ROWS_PER_BLOCK, None)
     }
 
+    pub(in crate::autotune::matvec::problem) fn group_top_factors(&self) -> Vec<u32> {
+        self.deferred_row_split_factors()
+    }
+
     pub(in crate::autotune::matvec::problem) fn split_variants(
         &self,
     ) -> Vec<KernelAxisFactorAction> {
@@ -44,9 +57,6 @@ impl MatvecSearchProblem {
                 plan.rows_per_block(),
                 KernelActionMaterialization::Existing,
             )
-        }));
-        variants.extend(self.deferred_row_split_factors().into_iter().map(|factor| {
-            KernelAxisFactorAction::new(0, factor, KernelActionMaterialization::DeferredGenerated)
         }));
         variants
     }

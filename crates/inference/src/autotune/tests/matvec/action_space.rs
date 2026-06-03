@@ -7,49 +7,50 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
     let spaces = problem.action_spaces(&seed);
     let actions = problem.schedule_actions(&seed);
 
-    assert_eq!(spaces.spaces.len(), 1);
+    assert_eq!(spaces.spaces.len(), 2);
     assert_eq!(spaces.actions(), actions);
     let KernelActionSpace::Split { variants } = &spaces.spaces[0] else {
-        panic!("matvec seed should expose split action-space metadata");
+        panic!("matvec seed should expose existing split action-space metadata");
     };
-    assert_eq!(variants.len(), 36);
+    assert_eq!(variants.len(), 4);
     assert!(variants.contains(&KernelAxisFactorAction::new(
         0,
         8,
         KernelActionMaterialization::Existing
-    )));
-    assert!(variants.contains(&KernelAxisFactorAction::new(
-        0,
-        13,
-        KernelActionMaterialization::DeferredGenerated
-    )));
-    assert!(variants.contains(&KernelAxisFactorAction::new(
-        0,
-        32,
-        KernelActionMaterialization::DeferredGenerated
     )));
     assert!(!variants.contains(&KernelAxisFactorAction::new(
         0,
         32,
         KernelActionMaterialization::Existing
     )));
+    let KernelActionSpace::GroupTop { axis, factors } = &spaces.spaces[1] else {
+        panic!("matvec seed should expose generated group-top action-space metadata");
+    };
+    assert_eq!(*axis, 0);
+    assert_eq!(factors.len(), 32);
+    assert_eq!(factors.first().copied(), Some(1));
+    assert_eq!(factors.last().copied(), Some(32));
     let complete_space = problem.search_space();
-    assert_eq!(complete_space.spaces.len(), 4);
+    assert_eq!(complete_space.spaces.len(), 5);
     assert!(matches!(
         complete_space.spaces[0],
         KernelActionSpace::Split { .. }
     ));
     assert!(matches!(
         complete_space.spaces[1],
-        KernelActionSpace::Upcast { .. }
+        KernelActionSpace::GroupTop { .. }
     ));
     assert!(matches!(
         complete_space.spaces[2],
-        KernelActionSpace::Unroll { .. }
+        KernelActionSpace::Upcast { .. }
     ));
     assert!(matches!(
         complete_space.spaces[3],
-        KernelActionSpace::ThreadGroup { .. }
+        KernelActionSpace::Unroll { .. }
+    ));
+    assert!(matches!(
+        complete_space.spaces[4],
+        KernelActionSpace::Group { .. }
     ));
     assert_eq!(actions.len(), 36);
     assert!(actions.contains(&KernelScheduleAction::split(
@@ -57,27 +58,26 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
         8,
         KernelActionMaterialization::Existing
     )));
-    assert!(actions.contains(&KernelScheduleAction::split(
-        0,
-        13,
-        KernelActionMaterialization::DeferredGenerated
-    )));
+    assert!(actions.contains(&KernelScheduleAction::group_top(0, 13)));
+    assert!(actions.contains(&KernelScheduleAction::group_top(0, 32)));
 
     let generated = problem
-        .apply_schedule_action(
-            &seed,
-            &KernelScheduleAction::split(0, 13, KernelActionMaterialization::DeferredGenerated),
-        )
-        .expect("row split action should produce candidate metadata");
+        .apply_schedule_action(&seed, &KernelScheduleAction::group_top(0, 13))
+        .expect("row group-top action should produce candidate metadata");
     assert_eq!(generated.launch.kernel, "matvec_bf16_rows13");
     assert_eq!(schedule_rows_per_block(&generated.schedule), Some(13));
+    assert!(generated.schedule.transforms.iter().any(|transform| {
+        matches!(
+            transform,
+            ScheduleTransform::GroupTop {
+                axis: 0,
+                factor: 13
+            }
+        )
+    }));
     assert_eq!(
         generated.action_trace,
-        vec![KernelScheduleAction::split(
-            0,
-            13,
-            KernelActionMaterialization::DeferredGenerated
-        )]
+        vec![KernelScheduleAction::group_top(0, 13)]
     );
     assert_eq!(
         generated.generated.materialization,
@@ -92,11 +92,8 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
     let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
     let seed = problem.seed();
     let rows8 = problem
-        .apply_schedule_action(
-            &seed,
-            &KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
-        )
-        .expect("row split action should produce generated candidate metadata");
+        .apply_schedule_action(&seed, &KernelScheduleAction::group_top(0, 8))
+        .expect("row group-top action should produce generated candidate metadata");
     let spaces = problem.action_spaces(&rows8);
     let actions = problem.schedule_actions(&rows8);
 
@@ -126,15 +123,12 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
     assert!(actions.contains(&KernelScheduleAction::unroll(1, 2)));
     assert!(actions.contains(&KernelScheduleAction::unroll(1, 7)));
     assert!(actions.contains(&KernelScheduleAction::unroll(1, 32)));
-    let KernelActionSpace::ThreadGroup { axis, factors } = &spaces.spaces[2] else {
-        panic!("generated matvec split should expose thread-group action-space metadata");
+    let KernelActionSpace::Group { axis, factors } = &spaces.spaces[2] else {
+        panic!("generated matvec split should expose group action-space metadata");
     };
     assert_eq!(*axis, 1);
-    assert_eq!(
-        factors.as_slice(),
-        MatvecThreadGroup::SEARCH_LANES_PER_ROW.as_slice()
-    );
-    assert!(actions.contains(&KernelScheduleAction::thread_group(1, 16)));
+    assert_eq!(factors.as_slice(), &[4, 8, 16]);
+    assert!(actions.contains(&KernelScheduleAction::group(1, 16)));
 
     let unrolled = problem
         .apply_schedule_action(&rows8, &KernelScheduleAction::unroll(1, 7))
@@ -144,7 +138,7 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
     assert_eq!(
         unrolled.action_trace,
         vec![
-            KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+            KernelScheduleAction::group_top(0, 8),
             KernelScheduleAction::unroll(1, 7),
         ]
     );
@@ -162,29 +156,47 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
     assert_eq!(
         upcast.action_trace,
         vec![
-            KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+            KernelScheduleAction::group_top(0, 8),
             KernelScheduleAction::upcast(0, 2),
         ]
     );
     assert_ne!(rows8.artifact_key(), upcast.artifact_key());
 
     let grouped = problem
-        .apply_schedule_action(&rows8, &KernelScheduleAction::thread_group(1, 16))
-        .expect("thread-group action should produce generated candidate metadata");
+        .apply_schedule_action(&rows8, &KernelScheduleAction::group(1, 16))
+        .expect("group action should produce generated candidate metadata");
     assert_eq!(grouped.launch.kernel, "matvec_bf16_rows8_tg16");
     assert_eq!(grouped.launch.block_dim.x, 128);
     assert_eq!(
         schedule_matvec_thread_group(&grouped.schedule).map(MatvecThreadGroup::lanes_per_row),
         Some(16)
     );
+    assert!(grouped.schedule.transforms.iter().any(|transform| {
+        matches!(
+            transform,
+            ScheduleTransform::Group {
+                axis: 1,
+                factor: 16
+            }
+        )
+    }));
     assert_eq!(
         grouped.action_trace,
         vec![
-            KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
-            KernelScheduleAction::thread_group(1, 16),
+            KernelScheduleAction::group_top(0, 8),
+            KernelScheduleAction::group(1, 16),
         ]
     );
     assert_ne!(rows8.artifact_key(), grouped.artifact_key());
+
+    let legacy_thread_grouped = problem
+        .apply_schedule_action(&rows8, &KernelScheduleAction::thread_group(1, 16))
+        .expect("legacy thread-group action should remain replay-compatible");
+    assert_eq!(
+        schedule_matvec_thread_group(&legacy_thread_grouped.schedule)
+            .map(MatvecThreadGroup::lanes_per_row),
+        Some(16)
+    );
 }
 
 #[test]

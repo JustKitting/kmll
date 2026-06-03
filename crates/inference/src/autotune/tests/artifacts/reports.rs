@@ -69,10 +69,14 @@ fn artifact_store_writes_search_report_metadata_without_kernel_source() {
     );
     assert_eq!(
         report_json["action_space"]["spaces"][1]["op"].as_str(),
-        Some("upcast")
+        Some("group-top")
     );
     assert_eq!(
         report_json["action_space"]["spaces"][2]["op"].as_str(),
+        Some("upcast")
+    );
+    assert_eq!(
+        report_json["action_space"]["spaces"][3]["op"].as_str(),
         Some("unroll")
     );
     assert_eq!(report_json["best"]["launchable"].as_bool(), Some(false));
@@ -198,7 +202,7 @@ fn artifact_store_writes_auto_search_report_with_step_metadata() {
     }));
     assert_eq!(
         report_json["best"]["action_trace"][0]["op"].as_str(),
-        Some("split")
+        Some("group-top")
     );
     assert!(!report_text.contains("#[kernel]"));
     assert!(!report_text.contains("pub fn matvec_bf16"));
