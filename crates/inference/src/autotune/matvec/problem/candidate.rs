@@ -148,6 +148,11 @@ impl MatvecSearchProblem {
                 factor: plan.reduce_group_size(),
             });
         }
+        if !plan.loop_order.is_default() {
+            schedule = schedule.with_transform(ScheduleTransform::StrideOrder {
+                axes: plan.loop_order.action_axes().to_vec(),
+            });
+        }
         let launch = CudaLaunchSpec::new(
             launch_kernel,
             (rows.grid_rows(self.rows), 1, 1),

@@ -130,6 +130,43 @@ fn matvec_generator_renders_row_upcast_source_on_demand() {
 }
 
 #[test]
+fn matvec_generator_renders_reduction_first_row_upcast_source_on_demand() {
+    let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+    let candidate = problem.generated_candidate_for_plan(
+        MatvecSchedulePlan::new(RowMajorWarpRows::Rows8)
+            .with_row_upcast(MatvecRowUpcast::new(2).expect("2 rows should be a supported upcast"))
+            .with_loop_order(MatvecLoopOrder::ReductionThenRow),
+    );
+    let generated = MatvecRustCudaGenerator
+        .source_for(&candidate)
+        .expect("matvec generator should render reduction-first row-upcast source");
+
+    assert_eq!(generated.symbol, "matvec_bf16_rows8_up2_rf");
+    assert!(generated.source.contains("let row0_active ="));
+    assert!(generated.source.contains("let row1_active ="));
+    assert!(generated.source.contains("let mut acc0 = 0.0_f32;"));
+    assert!(generated.source.contains("let mut acc1 = 0.0_f32;"));
+    assert!(generated.source.contains("let mut col = lane as usize;"));
+    assert!(generated.source.contains("let input_col0 = input[col0];"));
+    assert!(
+        generated
+            .source
+            .contains("acc0 += weight[row0_base + col0 * col_stride].to_f32() * input_col0;")
+    );
+    assert!(
+        generated
+            .source
+            .contains("acc1 += weight[row1_base + col0 * col_stride].to_f32() * input_col0;")
+    );
+    assert!(
+        generated
+            .source
+            .contains("let acc1 = warp_reduce_sum(acc1);")
+    );
+    assert!(generated.source.contains("if lane == 0 && row1_active"));
+}
+
+#[test]
 fn matvec_generator_renders_thread_group_source_on_demand() {
     let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
     let candidate = problem.generated_candidate_for_plan(

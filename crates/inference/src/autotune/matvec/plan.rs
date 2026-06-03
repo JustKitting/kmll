@@ -198,12 +198,56 @@ impl MatvecRowUpcast {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MatvecLoopOrder {
+    RowThenReduction,
+    ReductionThenRow,
+}
+
+impl MatvecLoopOrder {
+    pub const DEFAULT: Self = Self::RowThenReduction;
+
+    pub fn from_action_axes(axes: &[u8]) -> Option<Self> {
+        match axes {
+            [0, 1] => Some(Self::RowThenReduction),
+            [1, 0] => Some(Self::ReductionThenRow),
+            _ => None,
+        }
+    }
+
+    pub const fn action_axes(self) -> &'static [u8] {
+        match self {
+            Self::RowThenReduction => &[0, 1],
+            Self::ReductionThenRow => &[1, 0],
+        }
+    }
+
+    pub const fn is_default(self) -> bool {
+        matches!(self, Self::RowThenReduction)
+    }
+
+    pub const fn symbol_suffix(self) -> &'static str {
+        match self {
+            Self::RowThenReduction => "",
+            Self::ReductionThenRow => "_rf",
+        }
+    }
+
+    pub const fn operation_suffix(self) -> &'static str {
+        match self {
+            Self::RowThenReduction => "",
+            Self::ReductionThenRow => "-rf",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MatvecSchedulePlan {
     pub rows: MatvecRowSplit,
     pub row_upcast: MatvecRowUpcast,
     pub reduce_unroll: u32,
     pub reduce_group: u32,
     pub thread_group: MatvecThreadGroup,
+    pub loop_order: MatvecLoopOrder,
 }
 
 impl MatvecSchedulePlan {
@@ -216,6 +260,7 @@ impl MatvecSchedulePlan {
             reduce_unroll: Self::DEFAULT_REDUCE_UNROLL,
             reduce_group: 0,
             thread_group: MatvecThreadGroup::default_group(),
+            loop_order: MatvecLoopOrder::DEFAULT,
         }
     }
 
@@ -236,6 +281,11 @@ impl MatvecSchedulePlan {
 
     pub const fn with_thread_group(mut self, thread_group: MatvecThreadGroup) -> Self {
         self.thread_group = thread_group;
+        self
+    }
+
+    pub const fn with_loop_order(mut self, loop_order: MatvecLoopOrder) -> Self {
+        self.loop_order = loop_order;
         self
     }
 

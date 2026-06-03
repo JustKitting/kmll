@@ -59,6 +59,17 @@ impl MatvecSearchProblem {
             .collect()
     }
 
+    pub(in crate::autotune::matvec::problem) fn stride_orders_for_plan(
+        plan: MatvecSchedulePlan,
+    ) -> Vec<Vec<u8>> {
+        let plan = plan.normalized();
+        if plan.row_upcast.is_default() || !plan.loop_order.is_default() {
+            Vec::new()
+        } else {
+            vec![MatvecLoopOrder::ReductionThenRow.action_axes().to_vec()]
+        }
+    }
+
     pub(in crate::autotune::matvec::problem) fn deferred_row_split_factors(&self) -> Vec<u32> {
         bounded_unroll_factors(self.rows, Self::MAX_ROWS_PER_BLOCK, None)
     }

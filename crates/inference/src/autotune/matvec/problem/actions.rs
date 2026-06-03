@@ -11,6 +11,7 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
         let unroll_factors = self.reduce_unroll_factors();
         let reduce_group_top_factors = self.reduce_group_top_factors();
         let group_factors = self.group_factors();
+        let stride_orders = vec![MatvecLoopOrder::ReductionThenRow.action_axes().to_vec()];
         let mut spaces = vec![
             KernelActionSpace::Split {
                 variants: split_variants,
@@ -38,6 +39,11 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
             axis: 1,
             factors: group_factors,
         });
+        if !stride_orders.is_empty() {
+            spaces.push(KernelActionSpace::StrideOrder {
+                orders: stride_orders,
+            });
+        }
         KernelActionSpaceSet::new(spaces)
     }
 
@@ -86,6 +92,10 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 axis: 1,
                 factors: self.group_factors(),
             });
+        }
+        let orders = Self::stride_orders_for_plan(plan);
+        if !orders.is_empty() {
+            spaces.push(KernelActionSpace::StrideOrder { orders });
         }
         KernelActionSpaceSet::new(spaces)
     }
@@ -200,6 +210,27 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 }
                 let next = self.generated_candidate_for_plan_with_grouping(
                     plan.with_reduce_group(*factor),
+                    row_grouping_transform(&candidate.schedule),
+                    reduce_grouping_transform(&candidate.schedule),
+                );
+                Some(candidate_with_action_trace(candidate, action, next))
+            }
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::StrideOrder,
+                axis: None,
+                arg: KernelScheduleActionArg::AxisOrder(axes),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                if candidate.generated.materialization.is_existing() {
+                    return None;
+                }
+                let plan = schedule_matvec_plan(&candidate.schedule)?;
+                let order = MatvecLoopOrder::from_action_axes(axes)?;
+                if order.is_default() || !Self::stride_orders_for_plan(plan).contains(axes) {
+                    return None;
+                }
+                let next = self.generated_candidate_for_plan_with_grouping(
+                    plan.with_loop_order(order),
                     row_grouping_transform(&candidate.schedule),
                     reduce_grouping_transform(&candidate.schedule),
                 );

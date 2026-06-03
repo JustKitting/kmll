@@ -31,7 +31,7 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
     assert_eq!(factors.first().copied(), Some(1));
     assert_eq!(factors.last().copied(), Some(32));
     let complete_space = problem.search_space();
-    assert_eq!(complete_space.spaces.len(), 6);
+    assert_eq!(complete_space.spaces.len(), 7);
     assert!(matches!(
         complete_space.spaces[0],
         KernelActionSpace::Split { .. }
@@ -55,6 +55,10 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
     assert!(matches!(
         complete_space.spaces[5],
         KernelActionSpace::Group { .. }
+    ));
+    assert!(matches!(
+        complete_space.spaces[6],
+        KernelActionSpace::StrideOrder { .. }
     ));
     assert_eq!(actions.len(), 36);
     assert!(actions.contains(&KernelScheduleAction::split(
@@ -197,6 +201,42 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
         ]
     );
     assert_ne!(rows8.artifact_key(), upcast.artifact_key());
+
+    let upcast_spaces = problem.action_spaces(&upcast);
+    let KernelActionSpace::StrideOrder { orders } = upcast_spaces
+        .spaces
+        .iter()
+        .find(|space| matches!(space, KernelActionSpace::StrideOrder { .. }))
+        .expect("row-upcast matvec should expose stride-order metadata")
+    else {
+        panic!("row-upcast matvec should expose stride-order metadata");
+    };
+    assert_eq!(
+        orders.as_slice(),
+        &[MatvecLoopOrder::ReductionThenRow.action_axes().to_vec()]
+    );
+    let reduction_first = problem
+        .apply_schedule_action(&upcast, &KernelScheduleAction::stride_order(vec![1, 0]))
+        .expect("stride-order action should produce generated candidate metadata");
+    assert_eq!(reduction_first.launch.kernel, "matvec_bf16_rows8_up2_rf");
+    let reduction_first_plan =
+        schedule_matvec_plan(&reduction_first.schedule).expect("reduction-first plan should parse");
+    assert_eq!(
+        reduction_first_plan.loop_order,
+        MatvecLoopOrder::ReductionThenRow
+    );
+    assert!(reduction_first.schedule.transforms.iter().any(|transform| {
+        matches!(transform, ScheduleTransform::StrideOrder { axes } if axes == &[1, 0])
+    }));
+    assert_eq!(
+        reduction_first.action_trace,
+        vec![
+            KernelScheduleAction::group_top(0, 8),
+            KernelScheduleAction::upcast(0, 2),
+            KernelScheduleAction::stride_order(vec![1, 0]),
+        ]
+    );
+    assert_ne!(upcast.artifact_key(), reduction_first.artifact_key());
 
     let grouped = problem
         .apply_schedule_action(&rows8, &KernelScheduleAction::group(1, 16))
