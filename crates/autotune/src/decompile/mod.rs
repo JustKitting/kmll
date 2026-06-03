@@ -59,7 +59,9 @@ pub use self::{
         SassSyncKind, SassTensorElementType, SassTensorMmaShape, SassTensorMmaSignature,
         SassTensorScope, SassWarpShuffleMode, ScalarOperand, ScalarOperandKind, lift_sass_module,
     },
-    known_opcodes::{KnownSassOpcode, known_sass_opcodes},
+    known_opcodes::{
+        KnownSassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind, known_sass_opcodes,
+    },
     lifted::{
         SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedOpClass, SassLiftedOpDetail,
         SassLiftedOpKind, SassLiftedSemantics, SassLiftedValueRef, lift_sass_value_ir,

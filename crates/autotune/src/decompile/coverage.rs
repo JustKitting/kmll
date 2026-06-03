@@ -10,9 +10,9 @@ use nn_rust_inference::runtime;
 
 use super::{
     KernelIrModule, KernelIrOpKind, KnownSassOpcode, SassAnalysisModule, SassLiftedModule,
-    SassModifier, SassOpcode, SassPatternModule, SassRegionPath, analyze_sass_ir,
-    known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
-    render_sass_file_side_by_side,
+    SassModifier, SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind, SassPatternModule,
+    SassRegionPath, analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass,
+    recover_sass_patterns, render_sass_file_side_by_side,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,8 +178,8 @@ struct OpcodeCatalogBuilder {
     source_formats: BTreeSet<String>,
     architectures: BTreeSet<String>,
     known_sources: BTreeSet<String>,
-    classes: BTreeSet<String>,
-    kinds: BTreeSet<String>,
+    classes: BTreeSet<SassOpcodeCatalogClass>,
+    kinds: BTreeSet<SassOpcodeCatalogKind>,
     unsupported_count: usize,
 }
 
@@ -224,8 +224,16 @@ impl OpcodeCatalogBuilder {
             source_formats: self.source_formats.into_iter().collect(),
             architectures: self.architectures.into_iter().collect(),
             known_sources: self.known_sources.into_iter().collect(),
-            classes: self.classes.into_iter().collect(),
-            kinds: self.kinds.into_iter().collect(),
+            classes: self
+                .classes
+                .into_iter()
+                .map(|class| class.to_string())
+                .collect(),
+            kinds: self
+                .kinds
+                .into_iter()
+                .map(|kind| kind.to_string())
+                .collect(),
             support,
             coverage,
             unsupported_count: self.unsupported_count,
@@ -627,8 +635,8 @@ pub fn run_sass_coverage_scan(
         }
     }
 
-    let opcode_catalog = opcode_catalog_entries(opcode_catalog);
     let opcode_probe_targets = opcode_probe_targets(&opcode_catalog);
+    let opcode_catalog = opcode_catalog_entries(opcode_catalog);
     let opcode_counts = sorted_opcode_counts(opcode_counts);
     let opcode_signature_counts = sorted_opcode_signature_counts(opcode_signature_counts);
     let semantic_pattern_counts = sorted_counts(semantic_pattern_counts);
@@ -850,8 +858,8 @@ fn append_known_opcode(
         .or_default();
     entry.known = true;
     entry.locally_mapped |= known.locally_mapped;
-    entry.classes.insert(known.class.to_string());
-    entry.kinds.insert(known.kind.to_string());
+    entry.classes.insert(known.class);
+    entry.kinds.insert(known.kind);
     entry.known_sources.insert(known.source.to_string());
     for architecture in known.architectures {
         entry.architectures.insert((*architecture).to_string());
@@ -868,8 +876,8 @@ fn append_opcode_catalog_lifted_ops(
             if op.class.to_string() != "unsupported" {
                 entry.locally_mapped = true;
             }
-            entry.classes.insert(op.class.to_string());
-            entry.kinds.insert(op.kind.to_string());
+            entry.classes.insert(op.class.into());
+            entry.kinds.insert(op.kind.into());
         }
     }
 }
@@ -900,17 +908,19 @@ fn opcode_catalog_entries(
         .collect()
 }
 
-fn opcode_probe_targets(opcode_catalog: &[SassOpcodeCatalogEntry]) -> Vec<SassOpcodeProbeTarget> {
+fn opcode_probe_targets(
+    opcode_catalog: &BTreeMap<SassOpcode, OpcodeCatalogBuilder>,
+) -> Vec<SassOpcodeProbeTarget> {
     let mut targets = opcode_catalog
         .iter()
-        .filter(|entry| entry.known && !entry.observed)
-        .map(|entry| SassOpcodeProbeTarget {
-            opcode: entry.opcode.clone(),
+        .filter(|(_, entry)| entry.known && entry.instruction_count == 0)
+        .map(|(opcode, entry)| SassOpcodeProbeTarget {
+            opcode: opcode.to_string(),
             priority: opcode_probe_priority(entry),
-            architectures: entry.architectures.clone(),
-            classes: entry.classes.clone(),
-            kinds: entry.kinds.clone(),
-            known_sources: entry.known_sources.clone(),
+            architectures: entry.architectures.iter().cloned().collect(),
+            classes: entry.classes.iter().map(ToString::to_string).collect(),
+            kinds: entry.kinds.iter().map(ToString::to_string).collect(),
+            known_sources: entry.known_sources.iter().cloned().collect(),
             locally_mapped: entry.locally_mapped,
             recommended_action: if entry.locally_mapped {
                 "generate-sass-artifact"
@@ -930,12 +940,12 @@ fn opcode_probe_targets(opcode_catalog: &[SassOpcodeCatalogEntry]) -> Vec<SassOp
     targets
 }
 
-fn opcode_probe_priority(entry: &SassOpcodeCatalogEntry) -> u8 {
+fn opcode_probe_priority(entry: &OpcodeCatalogBuilder) -> u8 {
     if !entry.locally_mapped {
         100
-    } else if opcode_has_class(entry, "tensor-core")
-        || opcode_has_class(entry, "tensor-memory")
-        || opcode_has_class(entry, "warpgroup")
+    } else if opcode_has_class(entry, SassOpcodeCatalogClass::TensorCore)
+        || opcode_has_class(entry, SassOpcodeCatalogClass::TensorMemory)
+        || opcode_has_class(entry, SassOpcodeCatalogClass::WarpGroup)
     {
         90
     } else if !entry.architectures.is_empty() {
@@ -945,19 +955,19 @@ fn opcode_probe_priority(entry: &SassOpcodeCatalogEntry) -> u8 {
     }
 }
 
-fn opcode_probe_reason(entry: &SassOpcodeCatalogEntry) -> String {
+fn opcode_probe_reason(entry: &OpcodeCatalogBuilder) -> String {
     if !entry.locally_mapped {
         return "known opcode has no local lifter mapping".to_string();
     }
-    if opcode_has_class(entry, "tensor-core") {
+    if opcode_has_class(entry, SassOpcodeCatalogClass::TensorCore) {
         return "tensor-core opcode is mapped but unobserved in generated SASS artifacts"
             .to_string();
     }
-    if opcode_has_class(entry, "tensor-memory") {
+    if opcode_has_class(entry, SassOpcodeCatalogClass::TensorMemory) {
         return "tensor-memory opcode is mapped but unobserved in generated SASS artifacts"
             .to_string();
     }
-    if opcode_has_class(entry, "warpgroup") {
+    if opcode_has_class(entry, SassOpcodeCatalogClass::WarpGroup) {
         return "warpgroup opcode is mapped but unobserved in generated SASS artifacts".to_string();
     }
     if !entry.architectures.is_empty() {
@@ -967,8 +977,8 @@ fn opcode_probe_reason(entry: &SassOpcodeCatalogEntry) -> String {
     "mapped scalar opcode is unobserved in generated SASS artifacts".to_string()
 }
 
-fn opcode_has_class(entry: &SassOpcodeCatalogEntry, class: &str) -> bool {
-    entry.classes.iter().any(|candidate| candidate == class)
+fn opcode_has_class(entry: &OpcodeCatalogBuilder, class: SassOpcodeCatalogClass) -> bool {
+    entry.classes.contains(&class)
 }
 
 fn append_unsupported(
