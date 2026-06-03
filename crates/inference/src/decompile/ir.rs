@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use super::sass::*;
+use super::sass::{label_in_text, *};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelIrModule {
@@ -130,8 +130,24 @@ pub enum KernelIrOpKind {
         target: Option<String>,
         condition: Option<String>,
     },
+    Call {
+        target: Option<String>,
+        operands: Vec<String>,
+    },
+    Return {
+        target: Option<String>,
+        operands: Vec<String>,
+    },
     Exit {
         condition: Option<String>,
+    },
+    WarpShuffle {
+        mode: Option<String>,
+        predicate: String,
+        dst: String,
+        src: String,
+        offset: String,
+        mask: String,
     },
     Shift {
         dst: String,
@@ -250,6 +266,30 @@ fn lower_kind(instruction: &SassInstruction) -> (KernelIrOpKind, SassMappingConf
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
+        "CALL" => (
+            KernelIrOpKind::Call {
+                target: label_operand(instruction),
+                operands,
+            },
+            SassMappingConfidence::OpcodeHeuristic,
+        ),
+        "RET" => (
+            KernelIrOpKind::Return {
+                target: label_operand(instruction),
+                operands,
+            },
+            SassMappingConfidence::OpcodeHeuristic,
+        ),
+        "SHFL" => map_five_operands(instruction, |predicate, dst, src, offset, mask| {
+            KernelIrOpKind::WarpShuffle {
+                mode: instruction.modifiers.first().cloned(),
+                predicate,
+                dst,
+                src,
+                offset,
+                mask,
+            }
+        }),
         "S2R" | "S2UR" => map_two_operands(instruction, |dst, special| {
             KernelIrOpKind::ReadSpecialRegister { dst, special }
         }),
@@ -438,6 +478,26 @@ fn map_four_operands(
     }
 }
 
+fn map_five_operands(
+    instruction: &SassInstruction,
+    f: impl FnOnce(String, String, String, String, String) -> KernelIrOpKind,
+) -> (KernelIrOpKind, SassMappingConfidence) {
+    if instruction.operands.len() >= 5 {
+        (
+            f(
+                instruction.operands[0].raw.clone(),
+                instruction.operands[1].raw.clone(),
+                instruction.operands[2].raw.clone(),
+                instruction.operands[3].raw.clone(),
+                instruction.operands[4].raw.clone(),
+            ),
+            SassMappingConfidence::OpcodeHeuristic,
+        )
+    } else {
+        unsupported_arity(instruction, 5)
+    }
+}
+
 fn unsupported_arity(
     instruction: &SassInstruction,
     expected: usize,
@@ -468,7 +528,7 @@ fn label_operand(instruction: &SassInstruction) -> Option<String> {
         .iter()
         .find_map(|operand| match &operand.kind {
             SassOperandKind::Label(label) => Some(label.clone()),
-            _ => None,
+            _ => label_in_text(&operand.raw),
         })
 }
 

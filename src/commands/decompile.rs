@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use nn_rust_inference::{
-    decompile::{DecompileFixtureOptions, SimpleKernelFixtureKind, run_decompile_fixtures},
+    decompile::{
+        DecompileFixtureOptions, SassFileDecompileOptions, SimpleKernelFixtureKind,
+        run_decompile_fixtures, run_sass_file_decompile,
+    },
     runtime,
 };
 
@@ -9,6 +12,63 @@ use crate::{AppResult, invalid_input, parse_required_flag_value};
 
 const DECOMPILE_FIXTURES_USAGE: &str =
     "kernel-decompile-fixtures [--fixture NAME|all] [--artifact-root PATH] [--compile-arch sm_120]";
+const DECOMPILE_SASS_USAGE: &str =
+    "kernel-decompile-sass SASS_PATH [--source PATH] [--out-dir PATH]";
+
+pub(crate) fn run_kernel_decompile_sass(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    if index >= args.len() {
+        return Err(invalid_input(format!(
+            "kernel-decompile-sass requires SASS_PATH; usage: {DECOMPILE_SASS_USAGE}"
+        )));
+    }
+    let sass_path = PathBuf::from(&args[index]);
+    index += 1;
+    let mut source_path = None;
+    let mut output_dir = None;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--source" => {
+                source_path = Some(PathBuf::from(parse_required_flag_value(
+                    args, &mut index, "--source",
+                )?));
+            }
+            "--out-dir" => {
+                output_dir = Some(PathBuf::from(parse_required_flag_value(
+                    args,
+                    &mut index,
+                    "--out-dir",
+                )?));
+            }
+            flag if flag.starts_with("--") => {
+                return Err(invalid_input(format!(
+                    "kernel-decompile-sass unknown argument {flag:?}; usage: {DECOMPILE_SASS_USAGE}"
+                )));
+            }
+            extra => {
+                return Err(invalid_input(format!(
+                    "kernel-decompile-sass unexpected argument {extra:?}; usage: {DECOMPILE_SASS_USAGE}"
+                )));
+            }
+        }
+    }
+
+    let report = run_sass_file_decompile(&SassFileDecompileOptions {
+        sass_path,
+        source_path,
+        output_dir,
+    })?;
+    println!(
+        "kernel_decompile_sass parsed_instructions={} unsupported_instructions={} sass_path={} ir_path={} side_by_side_path={}",
+        report.parsed_instruction_count,
+        report.unsupported_instruction_count,
+        report.sass_path.display(),
+        report.ir_path.display(),
+        report.side_by_side_path.display(),
+    );
+    Ok(())
+}
 
 pub(crate) fn run_kernel_decompile_fixtures(args: &[String]) -> AppResult<()> {
     let mut index = 0;

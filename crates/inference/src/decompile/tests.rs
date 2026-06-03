@@ -39,6 +39,10 @@ matvec_bf16_rows17:
         /*00b0*/               @P0 BRA `(.L_x_1) ;                               /* 0x0 */
 .L_x_0:
         /*00c0*/                   BSYNC B0 ;                                    /* 0x0 */
+        /*00d0*/                   CALL.REL.NOINC `($helper) ;                   /* 0x0 */
+$helper:
+        /*00e0*/                   SHFL.DOWN PT, R5, R22, 0x10, 0x1f ;           /* 0x0 */
+        /*00f0*/                   RET.REL.NODEC R4 `(matvec_bf16_rows17) ;       /* 0x0 */
 "#;
 
 #[test]
@@ -137,6 +141,28 @@ fn lower_rows17_slice_keeps_predicates_and_half_fma_visible() {
             target: Some(ref target),
             condition: Some(ref condition)
         } if target == ".L_x_1" && condition == "P0"
+    )));
+    assert!(ops.iter().any(|op| matches!(
+        op.kind,
+        KernelIrOpKind::Call {
+            target: Some(ref target),
+            ..
+        } if target == "$helper"
+    )));
+    assert!(ops.iter().any(|op| matches!(
+        op.kind,
+        KernelIrOpKind::WarpShuffle {
+            mode: Some(ref mode),
+            offset: ref shuffle_offset,
+            ..
+        } if mode == "DOWN" && shuffle_offset == "0x10"
+    )));
+    assert!(ops.iter().any(|op| matches!(
+        op.kind,
+        KernelIrOpKind::Return {
+            target: Some(ref target),
+            ..
+        } if target == "matvec_bf16_rows17"
     )));
     assert_eq!(ir.unsupported_instruction_count(), 0);
 }

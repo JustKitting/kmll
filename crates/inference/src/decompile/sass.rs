@@ -211,8 +211,14 @@ fn parse_instruction_line(line: &str) -> Result<Option<SassInstruction>, SassPar
             "instruction address comment is not closed: {line}"
         )));
     };
-    let address = u64::from_str_radix(address.trim(), 16).map_err(|error| {
-        SassParseError::new(format!("invalid instruction address {address:?}: {error}"))
+    let address_text = address.trim();
+    if address_text.starts_with("0x") {
+        return Ok(None);
+    }
+    let address = u64::from_str_radix(address_text, 16).map_err(|error| {
+        SassParseError::new(format!(
+            "invalid instruction address {address_text:?}: {error}"
+        ))
     })?;
     let instruction_text = rest.split("/*").next().unwrap_or(rest).trim();
     if instruction_text.is_empty() {
@@ -391,8 +397,14 @@ fn parse_bracketed(text: &str) -> Option<(&str, &str)> {
 }
 
 fn parse_label_operand(raw: &str) -> Option<String> {
-    let label = raw.strip_prefix("`(")?.strip_suffix(')')?;
-    Some(label.to_string())
+    label_in_text(raw)
+}
+
+pub(super) fn label_in_text(raw: &str) -> Option<String> {
+    let start = raw.find("`(")?;
+    let rest = &raw[start + 2..];
+    let end = rest.find(')')?;
+    Some(rest[..end].to_string())
 }
 
 fn parse_register(raw: &str) -> Option<SassRegister> {

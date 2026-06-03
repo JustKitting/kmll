@@ -60,6 +60,23 @@ pub struct DecompileFixtureReport {
     pub unsupported_instruction_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassFileDecompileOptions {
+    pub sass_path: PathBuf,
+    pub source_path: Option<PathBuf>,
+    pub output_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassFileDecompileReport {
+    pub sass_path: PathBuf,
+    pub source_path: Option<PathBuf>,
+    pub ir_path: PathBuf,
+    pub side_by_side_path: PathBuf,
+    pub parsed_instruction_count: usize,
+    pub unsupported_instruction_count: usize,
+}
+
 pub fn run_decompile_fixtures(
     options: &DecompileFixtureOptions,
 ) -> Result<Vec<DecompileFixtureReport>, Box<dyn Error>> {
@@ -78,6 +95,52 @@ pub fn run_decompile_fixtures(
         reports.push(run_decompile_fixture(options, fixture)?);
     }
     Ok(reports)
+}
+
+pub fn run_sass_file_decompile(
+    options: &SassFileDecompileOptions,
+) -> Result<SassFileDecompileReport, Box<dyn Error>> {
+    let sass = fs::read_to_string(&options.sass_path)?;
+    let source = match &options.source_path {
+        Some(path) => Some((path.clone(), fs::read_to_string(path)?)),
+        None => None,
+    };
+    let parsed = parse_nvdisasm_sass(&sass)?;
+    let lowered = lower_sass_module(&parsed);
+    let output_dir = options.output_dir.clone().unwrap_or_else(|| {
+        options
+            .sass_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    });
+    fs::create_dir_all(&output_dir)?;
+    let stem = options
+        .sass_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("sass");
+    let ir_path = output_dir.join(format!("{stem}.lifted.ir.txt"));
+    fs::write(&ir_path, lowered.to_text().as_bytes())?;
+    let side_by_side_path = output_dir.join(format!("{stem}.source-sass-ir.txt"));
+    let side_by_side = render_sass_file_side_by_side(
+        options.sass_path.as_path(),
+        source
+            .as_ref()
+            .map(|(path, text)| (path.as_path(), text.as_str())),
+        &sass,
+        &lowered,
+    );
+    fs::write(&side_by_side_path, side_by_side.as_bytes())?;
+
+    Ok(SassFileDecompileReport {
+        sass_path: options.sass_path.clone(),
+        source_path: options.source_path.clone(),
+        ir_path,
+        side_by_side_path,
+        parsed_instruction_count: parsed.instruction_count(),
+        unsupported_instruction_count: lowered.unsupported_instruction_count(),
+    })
 }
 
 fn run_decompile_fixture(
@@ -214,6 +277,37 @@ pub fn render_side_by_side(
     writeln!(out, "{}", fixture.source.trim_end()).expect("write to string");
     writeln!(out, "```").expect("write to string");
     writeln!(out).expect("write to string");
+    writeln!(out, "## sass").expect("write to string");
+    writeln!(out, "```sass").expect("write to string");
+    writeln!(out, "{}", sass.trim_end()).expect("write to string");
+    writeln!(out, "```").expect("write to string");
+    writeln!(out).expect("write to string");
+    writeln!(out, "## project-ir").expect("write to string");
+    writeln!(out, "```text").expect("write to string");
+    writeln!(out, "{}", ir.to_text().trim_end()).expect("write to string");
+    writeln!(out, "```").expect("write to string");
+    out
+}
+
+pub fn render_sass_file_side_by_side(
+    sass_path: &Path,
+    source: Option<(&Path, &str)>,
+    sass: &str,
+    ir: &KernelIrModule,
+) -> String {
+    let mut out = String::new();
+    writeln!(out, "# sass={}", sass_path.display()).expect("write to string");
+    if let Some((source_path, _)) = source {
+        writeln!(out, "# source={}", source_path.display()).expect("write to string");
+    }
+    writeln!(out).expect("write to string");
+    if let Some((_, source_text)) = source {
+        writeln!(out, "## source").expect("write to string");
+        writeln!(out, "```rust").expect("write to string");
+        writeln!(out, "{}", source_text.trim_end()).expect("write to string");
+        writeln!(out, "```").expect("write to string");
+        writeln!(out).expect("write to string");
+    }
     writeln!(out, "## sass").expect("write to string");
     writeln!(out, "```sass").expect("write to string");
     writeln!(out, "{}", sass.trim_end()).expect("write to string");
