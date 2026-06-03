@@ -297,7 +297,7 @@ fn gemm_generator_renders_shared_load_unroll_source_on_demand() {
 }
 
 #[test]
-fn gemm_generator_renders_shared_load_thread_group_source_on_demand() {
+fn gemm_generator_renders_shared_load_group_source_on_demand() {
     let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
     let candidate = replay_schedule_actions(
         &problem,
@@ -310,19 +310,18 @@ fn gemm_generator_renders_shared_load_thread_group_source_on_demand() {
             ),
             KernelScheduleAction::upcast(0, 2),
             KernelScheduleAction::upcast(1, 2),
-            KernelScheduleAction::thread_group(3, 32),
-            KernelScheduleAction::thread_group(4, 64),
+            KernelScheduleAction::group(3, 32),
+            KernelScheduleAction::group(4, 64),
         ],
     )
-    .expect("valid shared-load-thread-group GEMM action trace should replay");
-    let plan =
-        schedule_gemm_plan(&candidate.schedule).expect("load-thread-grouped candidate should plan");
+    .expect("valid shared-load-group GEMM action trace should replay");
+    let plan = schedule_gemm_plan(&candidate.schedule).expect("load-grouped candidate should plan");
     assert_eq!(plan.a_load_thread_count(), 32);
     assert_eq!(plan.b_load_thread_count(), 64);
 
     let generated = GemmRustCudaGenerator
         .source_for(&candidate)
-        .expect("GEMM generator should render shared-load-thread-grouped source");
+        .expect("GEMM generator should render shared-load-grouped source");
 
     assert_eq!(
         generated.symbol,

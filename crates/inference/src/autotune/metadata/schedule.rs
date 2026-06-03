@@ -166,7 +166,8 @@ pub(in crate::autotune) fn schedule_gemm_a_load_thread_group(schedule: &KernelSc
         .transforms
         .iter()
         .find_map(|transform| match transform {
-            ScheduleTransform::ThreadGroup { axis: 3, factor } => Some(*factor),
+            ScheduleTransform::ThreadGroup { axis: 3, factor }
+            | ScheduleTransform::Group { axis: 3, factor } => Some(*factor),
             _ => None,
         })
         .unwrap_or(0)
@@ -177,7 +178,8 @@ pub(in crate::autotune) fn schedule_gemm_b_load_thread_group(schedule: &KernelSc
         .transforms
         .iter()
         .find_map(|transform| match transform {
-            ScheduleTransform::ThreadGroup { axis: 4, factor } => Some(*factor),
+            ScheduleTransform::ThreadGroup { axis: 4, factor }
+            | ScheduleTransform::Group { axis: 4, factor } => Some(*factor),
             _ => None,
         })
         .unwrap_or(0)

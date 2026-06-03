@@ -1,11 +1,30 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::autotune::gemm::problem) enum GemmLoadGroupingTransform {
+    ThreadGroup,
+    Group,
+}
+
 impl GemmSearchProblem {
     pub fn candidate_for_tile(&self, tile: GemmTileShape) -> KernelCandidateMetadata {
         self.candidate_for_plan(GemmSchedulePlan::new(tile))
     }
 
     pub fn candidate_for_plan(&self, plan: GemmSchedulePlan) -> KernelCandidateMetadata {
+        self.candidate_for_plan_with_load_grouping(
+            plan,
+            GemmLoadGroupingTransform::ThreadGroup,
+            GemmLoadGroupingTransform::ThreadGroup,
+        )
+    }
+
+    pub(in crate::autotune::gemm::problem) fn candidate_for_plan_with_load_grouping(
+        &self,
+        plan: GemmSchedulePlan,
+        a_load_grouping: GemmLoadGroupingTransform,
+        b_load_grouping: GemmLoadGroupingTransform,
+    ) -> KernelCandidateMetadata {
         let plan = plan.normalized();
         let tile = plan.tile;
         let existing_tile = Self::is_existing_plan(plan);
@@ -148,16 +167,30 @@ impl GemmSearchProblem {
             });
         }
         if plan.has_custom_a_load_thread_group() {
-            schedule = schedule.with_transform(ScheduleTransform::ThreadGroup {
-                axis: 3,
-                factor: plan.a_load_thread_count(),
-            });
+            let transform = match a_load_grouping {
+                GemmLoadGroupingTransform::ThreadGroup => ScheduleTransform::ThreadGroup {
+                    axis: 3,
+                    factor: plan.a_load_thread_count(),
+                },
+                GemmLoadGroupingTransform::Group => ScheduleTransform::Group {
+                    axis: 3,
+                    factor: plan.a_load_thread_count(),
+                },
+            };
+            schedule = schedule.with_transform(transform);
         }
         if plan.has_custom_b_load_thread_group() {
-            schedule = schedule.with_transform(ScheduleTransform::ThreadGroup {
-                axis: 4,
-                factor: plan.b_load_thread_count(),
-            });
+            let transform = match b_load_grouping {
+                GemmLoadGroupingTransform::ThreadGroup => ScheduleTransform::ThreadGroup {
+                    axis: 4,
+                    factor: plan.b_load_thread_count(),
+                },
+                GemmLoadGroupingTransform::Group => ScheduleTransform::Group {
+                    axis: 4,
+                    factor: plan.b_load_thread_count(),
+                },
+            };
+            schedule = schedule.with_transform(transform);
         }
         if plan.a_load_order == GemmATileLoadOrder::MContiguous {
             schedule = schedule.with_transform(ScheduleTransform::StrideOrder { axes: vec![0, 2] });
@@ -234,8 +267,58 @@ impl GemmSearchProblem {
         action: &KernelScheduleAction,
         plan: GemmSchedulePlan,
     ) -> Option<KernelCandidateMetadata> {
+        self.candidate_for_checked_plan_with_load_grouping(
+            parent,
+            action,
+            plan,
+            gemm_a_load_grouping_transform(&parent.schedule),
+            gemm_b_load_grouping_transform(&parent.schedule),
+        )
+    }
+
+    pub(in crate::autotune::gemm::problem) fn candidate_for_checked_plan_with_load_grouping(
+        &self,
+        parent: &KernelCandidateMetadata,
+        action: &KernelScheduleAction,
+        plan: GemmSchedulePlan,
+        a_load_grouping: GemmLoadGroupingTransform,
+        b_load_grouping: GemmLoadGroupingTransform,
+    ) -> Option<KernelCandidateMetadata> {
         let plan = plan.normalized();
-        Self::plan_within_resource_limits(plan)
-            .then(|| candidate_with_action_trace(parent, action, self.candidate_for_plan(plan)))
+        Self::plan_within_resource_limits(plan).then(|| {
+            candidate_with_action_trace(
+                parent,
+                action,
+                self.candidate_for_plan_with_load_grouping(plan, a_load_grouping, b_load_grouping),
+            )
+        })
+    }
+}
+
+pub(in crate::autotune::gemm::problem) fn gemm_a_load_grouping_transform(
+    schedule: &KernelSchedule,
+) -> GemmLoadGroupingTransform {
+    if schedule
+        .transforms
+        .iter()
+        .any(|transform| matches!(transform, ScheduleTransform::Group { axis: 3, .. }))
+    {
+        GemmLoadGroupingTransform::Group
+    } else {
+        GemmLoadGroupingTransform::ThreadGroup
+    }
+}
+
+pub(in crate::autotune::gemm::problem) fn gemm_b_load_grouping_transform(
+    schedule: &KernelSchedule,
+) -> GemmLoadGroupingTransform {
+    if schedule
+        .transforms
+        .iter()
+        .any(|transform| matches!(transform, ScheduleTransform::Group { axis: 4, .. }))
+    {
+        GemmLoadGroupingTransform::Group
+    } else {
+        GemmLoadGroupingTransform::ThreadGroup
     }
 }

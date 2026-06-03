@@ -46,21 +46,21 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     };
     assert_eq!(*b_load_axis, 4);
     assert_eq!(b_load_factors, &[2, 3, 4]);
-    let KernelActionSpace::ThreadGroup {
+    let KernelActionSpace::Group {
         axis: a_load_thread_axis,
         factors: a_load_thread_factors,
     } = &spaces.spaces[4]
     else {
-        panic!("upcast GEMM should expose A shared-load thread-group metadata");
+        panic!("upcast GEMM should expose A shared-load group metadata");
     };
     assert_eq!(*a_load_thread_axis, 3);
     assert_eq!(a_load_thread_factors, &[32, 64]);
-    let KernelActionSpace::ThreadGroup {
+    let KernelActionSpace::Group {
         axis: b_load_thread_axis,
         factors: b_load_thread_factors,
     } = &spaces.spaces[5]
     else {
-        panic!("upcast GEMM should expose B shared-load thread-group metadata");
+        panic!("upcast GEMM should expose B shared-load group metadata");
     };
     assert_eq!(*b_load_thread_axis, 4);
     assert_eq!(b_load_thread_factors, &[32, 64]);
@@ -78,9 +78,9 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     assert!(actions.contains(&KernelScheduleAction::unroll(3, 2)));
     assert!(!actions.contains(&KernelScheduleAction::unroll(3, 3)));
     assert!(actions.contains(&KernelScheduleAction::unroll(4, 4)));
-    assert!(actions.contains(&KernelScheduleAction::thread_group(3, 32)));
-    assert!(actions.contains(&KernelScheduleAction::thread_group(4, 64)));
-    assert!(!actions.contains(&KernelScheduleAction::thread_group(3, 128)));
+    assert!(actions.contains(&KernelScheduleAction::group(3, 32)));
+    assert!(actions.contains(&KernelScheduleAction::group(4, 64)));
+    assert!(!actions.contains(&KernelScheduleAction::group(3, 128)));
     assert!(actions.contains(&KernelScheduleAction::swap(0, 1)));
 
     let a_unrolled = problem
@@ -108,11 +108,8 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     );
 
     let a_thread_grouped = problem
-        .apply_schedule_action(
-            &upcast_candidate,
-            &KernelScheduleAction::thread_group(3, 32),
-        )
-        .expect("A shared-load thread-group should produce candidate metadata");
+        .apply_schedule_action(&upcast_candidate, &KernelScheduleAction::group(3, 32))
+        .expect("A shared-load group should produce candidate metadata");
     let a_thread_grouped_plan = schedule_gemm_plan(&a_thread_grouped.schedule)
         .expect("A shared-load thread-grouped candidate should plan");
     assert_eq!(a_thread_grouped_plan.a_load_thread_count(), 32);
@@ -123,11 +120,8 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     );
 
     let b_thread_grouped = problem
-        .apply_schedule_action(
-            &upcast_candidate,
-            &KernelScheduleAction::thread_group(4, 64),
-        )
-        .expect("B shared-load thread-group should produce candidate metadata");
+        .apply_schedule_action(&upcast_candidate, &KernelScheduleAction::group(4, 64))
+        .expect("B shared-load group should produce candidate metadata");
     let b_thread_grouped_plan = schedule_gemm_plan(&b_thread_grouped.schedule)
         .expect("B shared-load thread-grouped candidate should plan");
     assert_eq!(b_thread_grouped_plan.a_load_thread_count(), 128);

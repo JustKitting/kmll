@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    candidate::{
+        GemmLoadGroupingTransform, gemm_a_load_grouping_transform, gemm_b_load_grouping_transform,
+    },
+    *,
+};
 
 impl KernelActionSearchProblem for GemmSearchProblem {
     fn search_space(&self) -> KernelActionSpaceSet {
@@ -45,13 +50,13 @@ impl KernelActionSearchProblem for GemmSearchProblem {
             });
         }
         if !a_load_thread_group_factors.is_empty() {
-            spaces.push(KernelActionSpace::ThreadGroup {
+            spaces.push(KernelActionSpace::Group {
                 axis: 3,
                 factors: a_load_thread_group_factors,
             });
         }
         if !b_load_thread_group_factors.is_empty() {
-            spaces.push(KernelActionSpace::ThreadGroup {
+            spaces.push(KernelActionSpace::Group {
                 axis: 4,
                 factors: b_load_thread_group_factors,
             });
@@ -148,7 +153,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 })
                 .collect::<Vec<_>>();
             if !factors.is_empty() {
-                spaces.push(KernelActionSpace::ThreadGroup { axis: 3, factors });
+                spaces.push(KernelActionSpace::Group { axis: 3, factors });
             }
         }
         if !plan.has_custom_b_load_thread_group() {
@@ -159,7 +164,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 })
                 .collect::<Vec<_>>();
             if !factors.is_empty() {
-                spaces.push(KernelActionSpace::ThreadGroup { axis: 4, factors });
+                spaces.push(KernelActionSpace::Group { axis: 4, factors });
             }
         }
         if plan.thread_order == GemmThreadOrder::NThenM
@@ -308,6 +313,46 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 self.candidate_for_checked_plan(candidate, action, plan.with_n_per_thread(*factor))
             }
             KernelScheduleAction {
+                op: KernelScheduleActionOp::Group,
+                axis: Some(3),
+                arg: KernelScheduleActionArg::Factor(factor),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                let plan = schedule_gemm_plan(&candidate.schedule)?;
+                if plan.has_custom_a_load_thread_group()
+                    || !Self::load_thread_group_factors_for_plan(plan).contains(factor)
+                {
+                    return None;
+                }
+                self.candidate_for_checked_plan_with_load_grouping(
+                    candidate,
+                    action,
+                    plan.with_a_load_thread_group(*factor),
+                    GemmLoadGroupingTransform::Group,
+                    gemm_b_load_grouping_transform(&candidate.schedule),
+                )
+            }
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::Group,
+                axis: Some(4),
+                arg: KernelScheduleActionArg::Factor(factor),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                let plan = schedule_gemm_plan(&candidate.schedule)?;
+                if plan.has_custom_b_load_thread_group()
+                    || !Self::load_thread_group_factors_for_plan(plan).contains(factor)
+                {
+                    return None;
+                }
+                self.candidate_for_checked_plan_with_load_grouping(
+                    candidate,
+                    action,
+                    plan.with_b_load_thread_group(*factor),
+                    gemm_a_load_grouping_transform(&candidate.schedule),
+                    GemmLoadGroupingTransform::Group,
+                )
+            }
+            KernelScheduleAction {
                 op: KernelScheduleActionOp::ThreadGroup,
                 axis: Some(3),
                 arg: KernelScheduleActionArg::Factor(factor),
@@ -319,10 +364,12 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 {
                     return None;
                 }
-                self.candidate_for_checked_plan(
+                self.candidate_for_checked_plan_with_load_grouping(
                     candidate,
                     action,
                     plan.with_a_load_thread_group(*factor),
+                    GemmLoadGroupingTransform::ThreadGroup,
+                    gemm_b_load_grouping_transform(&candidate.schedule),
                 )
             }
             KernelScheduleAction {
@@ -337,10 +384,12 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 {
                     return None;
                 }
-                self.candidate_for_checked_plan(
+                self.candidate_for_checked_plan_with_load_grouping(
                     candidate,
                     action,
                     plan.with_b_load_thread_group(*factor),
+                    gemm_a_load_grouping_transform(&candidate.schedule),
+                    GemmLoadGroupingTransform::ThreadGroup,
                 )
             }
             KernelScheduleAction {

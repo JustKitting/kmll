@@ -65,21 +65,21 @@ fn gemm_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
     };
     assert_eq!(*b_load_axis, 4);
     assert_eq!(b_load_factors, &[2, 3, 4]);
-    let KernelActionSpace::ThreadGroup {
+    let KernelActionSpace::Group {
         axis: a_load_thread_axis,
         factors: a_load_thread_factors,
     } = &full_space.spaces[7]
     else {
-        panic!("GEMM global action space should expose A shared-load thread-group metadata");
+        panic!("GEMM global action space should expose A shared-load group metadata");
     };
     assert_eq!(*a_load_thread_axis, 3);
     assert_eq!(a_load_thread_factors, &[32, 64, 128, 256]);
-    let KernelActionSpace::ThreadGroup {
+    let KernelActionSpace::Group {
         axis: b_load_thread_axis,
         factors: b_load_thread_factors,
     } = &full_space.spaces[8]
     else {
-        panic!("GEMM global action space should expose B shared-load thread-group metadata");
+        panic!("GEMM global action space should expose B shared-load group metadata");
     };
     assert_eq!(*b_load_thread_axis, 4);
     assert_eq!(b_load_thread_factors, &[32, 64, 128, 256]);
@@ -200,21 +200,21 @@ fn gemm_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
     };
     assert_eq!(*n_axis, 1);
     assert_eq!(n_factors, &[2, 4]);
-    let KernelActionSpace::ThreadGroup {
+    let KernelActionSpace::Group {
         axis: a_load_thread_axis,
         factors: a_load_thread_factors,
     } = &schedule_spaces.spaces[4]
     else {
-        panic!("GEMM tile should expose A shared-load thread-group metadata");
+        panic!("GEMM tile should expose A shared-load group metadata");
     };
     assert_eq!(*a_load_thread_axis, 3);
     assert_eq!(a_load_thread_factors, &[32, 64, 128, 256]);
-    let KernelActionSpace::ThreadGroup {
+    let KernelActionSpace::Group {
         axis: b_load_thread_axis,
         factors: b_load_thread_factors,
     } = &schedule_spaces.spaces[5]
     else {
-        panic!("GEMM tile should expose B shared-load thread-group metadata");
+        panic!("GEMM tile should expose B shared-load group metadata");
     };
     assert_eq!(*b_load_thread_axis, 4);
     assert_eq!(b_load_thread_factors, &[32, 64, 128, 256]);
@@ -254,9 +254,9 @@ fn gemm_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
     assert!(schedule_actions.contains(&KernelScheduleAction::stride_order(vec![0, 2])));
     assert!(schedule_actions.contains(&KernelScheduleAction::stride_order(vec![2, 1])));
     assert!(schedule_actions.contains(&KernelScheduleAction::swap(0, 1)));
-    assert!(schedule_actions.contains(&KernelScheduleAction::thread_group(3, 64)));
-    assert!(schedule_actions.contains(&KernelScheduleAction::thread_group(4, 64)));
-    assert!(!schedule_actions.contains(&KernelScheduleAction::thread_group(3, 16)));
+    assert!(schedule_actions.contains(&KernelScheduleAction::group(3, 64)));
+    assert!(schedule_actions.contains(&KernelScheduleAction::group(4, 64)));
+    assert!(!schedule_actions.contains(&KernelScheduleAction::group(3, 16)));
 
     let m_split = problem
         .apply_schedule_action(
@@ -336,8 +336,8 @@ fn gemm_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
     assert_eq!(n_upcast.launch.block_dim.z, 1);
 
     let a_load_thread_group = problem
-        .apply_schedule_action(&tile_candidate, &KernelScheduleAction::thread_group(3, 64))
-        .expect("A shared-load thread-group action should produce candidate metadata");
+        .apply_schedule_action(&tile_candidate, &KernelScheduleAction::group(3, 64))
+        .expect("A shared-load group action should produce candidate metadata");
     let a_load_thread_group_plan = schedule_gemm_plan(&a_load_thread_group.schedule)
         .expect("A shared-load thread-group candidate should have plan");
     assert_eq!(a_load_thread_group_plan.a_load_thread_count(), 64);
@@ -354,7 +354,7 @@ fn gemm_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
             .any(|transform| {
                 matches!(
                     transform,
-                    ScheduleTransform::ThreadGroup {
+                    ScheduleTransform::Group {
                         axis: 3,
                         factor: 64
                     }
@@ -363,8 +363,8 @@ fn gemm_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
     );
 
     let b_load_thread_group = problem
-        .apply_schedule_action(&tile_candidate, &KernelScheduleAction::thread_group(4, 64))
-        .expect("B shared-load thread-group action should produce candidate metadata");
+        .apply_schedule_action(&tile_candidate, &KernelScheduleAction::group(4, 64))
+        .expect("B shared-load group action should produce candidate metadata");
     let b_load_thread_group_plan = schedule_gemm_plan(&b_load_thread_group.schedule)
         .expect("B shared-load thread-group candidate should have plan");
     assert_eq!(b_load_thread_group_plan.a_load_thread_count(), 512);
@@ -381,12 +381,32 @@ fn gemm_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
             .any(|transform| {
                 matches!(
                     transform,
-                    ScheduleTransform::ThreadGroup {
+                    ScheduleTransform::Group {
                         axis: 4,
                         factor: 64
                     }
                 )
             })
+    );
+
+    let legacy_a_load_thread_group = problem
+        .apply_schedule_action(&tile_candidate, &KernelScheduleAction::thread_group(3, 64))
+        .expect("legacy A shared-load thread-group action should replay");
+    let legacy_a_plan = schedule_gemm_plan(&legacy_a_load_thread_group.schedule)
+        .expect("legacy A shared-load thread-group candidate should have plan");
+    assert_eq!(legacy_a_plan.a_load_thread_count(), 64);
+    assert!(
+        legacy_a_load_thread_group
+            .schedule
+            .transforms
+            .iter()
+            .any(|transform| matches!(
+                transform,
+                ScheduleTransform::ThreadGroup {
+                    axis: 3,
+                    factor: 64
+                }
+            ))
     );
 
     let traced_tile = problem
