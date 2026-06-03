@@ -7,9 +7,10 @@ use std::{
     process,
 };
 
-use crate::{
-    autotune::{compile_standalone_kernel_crate, standalone_cargo_toml, standalone_main_source},
-    runtime,
+use nn_rust_inference::runtime;
+
+use crate::autotune::{
+    compile_standalone_kernel_crate, standalone_cargo_toml, standalone_main_source,
 };
 
 mod analysis;

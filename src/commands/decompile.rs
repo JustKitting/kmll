@@ -1,13 +1,11 @@
 use std::path::PathBuf;
 
-use nn_rust_inference::{
-    decompile::{
-        DecompileFixtureOptions, SassCoverageOptions, SassFileDecompileOptions,
-        SimpleKernelFixtureKind, run_decompile_fixtures, run_sass_coverage_scan,
-        run_sass_file_decompile,
-    },
-    runtime,
+use nn_rust_autotune::decompile::{
+    DecompileFixtureOptions, SassCoverageOptions, SassFileDecompileOptions,
+    SimpleKernelFixtureKind, run_decompile_fixtures, run_sass_coverage_scan,
+    run_sass_file_decompile,
 };
+use nn_rust_inference::runtime;
 
 use crate::{AppResult, invalid_input, parse_required_flag_value};
 

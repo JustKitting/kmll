@@ -1,0 +1,10 @@
+[package]
+name = "nn-rust-autotune"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cuda-core = { git = "https://github.com/NVlabs/cuda-oxide.git", tag = "v0.1.0" }
+nn-rust-inference = { path = "../inference" }
+nn-rust-profiling = { path = "../profiling" }
+serde_json = "1.0.150"

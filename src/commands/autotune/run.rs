@@ -1,4 +1,4 @@
-use nn_rust_inference::autotune::{
+use nn_rust_autotune::{
     AutoOptimizeConfig, CachedInferenceKernelAutoOptimize, GemmF32Bf16MeasuredAutotuneScorer,
     InferenceKernelAutoOptimize, InferenceKernelRustCudaGenerator, KernelArtifactStore,
     KernelAutotuneMeasureOptions, KernelCandidateMetadata, KernelExpansionPolicy,

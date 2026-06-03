@@ -4,7 +4,7 @@ use cuda_core::{CudaFunction, CudaModule, CudaStream, DeviceBuffer};
 
 use super::super::KernelCandidateMetadata;
 use super::KernelAutotuneMeasureResult;
-use crate::{
+use nn_rust_inference::{
     dtypes::Bf16,
     layout::{ColumnMajor, MatrixLayout, RowMajor},
 };

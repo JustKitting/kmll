@@ -7,6 +7,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use nn_rust_inference::{
+    layout::{
+        ColumnMajor, GemmKernelPlan, MatvecKernelPlan, RowMajor, RowMajorWarpRowMatvecPlan,
+        RowMajorWarpRows2MatvecPlan, RowMajorWarpRows4MatvecPlan, RowMajorWarpRows8MatvecPlan,
+        TiledGemm16Plan,
+    },
+    runtime,
+};
 pub use nn_rust_profiling::{
     AutoOptimizationExitReason as ProfilingAutoOptimizationExitReason,
     AutoOptimizationSearchConfig, AutoOptimizationSearchReport, AutoOptimizationSearchStep,
@@ -29,15 +37,6 @@ use nn_rust_profiling::{
     TypedOperationSpec,
 };
 use serde_json::{Value, json};
-
-use crate::{
-    layout::{
-        ColumnMajor, GemmKernelPlan, MatvecKernelPlan, RowMajor, RowMajorWarpRowMatvecPlan,
-        RowMajorWarpRows2MatvecPlan, RowMajorWarpRows4MatvecPlan, RowMajorWarpRows8MatvecPlan,
-        TiledGemm16Plan,
-    },
-    runtime,
-};
 
 mod artifacts;
 pub(crate) mod codegen;

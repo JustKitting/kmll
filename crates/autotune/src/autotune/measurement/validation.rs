@@ -1,5 +1,5 @@
 use super::{KernelAutotuneMeasureResult, invalid_data};
-use crate::{
+use nn_rust_inference::{
     dtypes::Bf16,
     layout::{Layout2D, MatrixLayout, RowMajor},
 };

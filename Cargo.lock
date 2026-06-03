@@ -210,10 +210,21 @@ name = "nn-rust"
 version = "0.1.0"
 dependencies = [
  "cuda-core",
+ "nn-rust-autotune",
  "nn-rust-inference",
  "nn-rust-profiling",
  "nn-rust-quantization",
  "tokio",
+]
+
+[[package]]
+name = "nn-rust-autotune"
+version = "0.1.0"
+dependencies = [
+ "cuda-core",
+ "nn-rust-inference",
+ "nn-rust-profiling",
+ "serde_json",
 ]
 
 [[package]]

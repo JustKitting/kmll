@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use nn_rust_inference::autotune::{
+use nn_rust_autotune::{
     AutoOptimizeConfig, BeamSearchConfig, KernelArtifactStore, KernelExpansionPolicy,
 };
 

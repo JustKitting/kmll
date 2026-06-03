@@ -19,7 +19,7 @@ use super::{
         compare_matvec_output, cpu_matvec_bf16_reference, fill_bf16_matrix, fill_stress_slice,
     },
 };
-use crate::{
+use nn_rust_inference::{
     dtypes::Bf16,
     layout::{MatrixLayout, RowMajor},
 };

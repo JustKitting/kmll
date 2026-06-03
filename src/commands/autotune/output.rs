@@ -1,4 +1,4 @@
-use nn_rust_inference::autotune::{
+use nn_rust_autotune::{
     EmittedKernelOptimizationSelection, KernelCandidateMetadata, KernelExpansionPolicy,
     KernelMaterialization, KernelOptimizationCacheKey, KernelScheduleAction,
     KernelScheduleActionArg, ScheduleTransform, SearchScore, SearchScoreSource,

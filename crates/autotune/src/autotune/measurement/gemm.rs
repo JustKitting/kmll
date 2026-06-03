@@ -17,7 +17,7 @@ use super::{
     invalid_data, invalid_input,
     validation::{compare_gemm_output, cpu_gemm_bf16_reference, fill_bf16_matrix, fill_matrix},
 };
-use crate::{
+use nn_rust_inference::{
     dtypes::Bf16,
     layout::{ColumnMajor, MatrixLayout, RowMajor},
     ops,

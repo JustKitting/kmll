@@ -1,13 +1,11 @@
 use std::path::PathBuf;
 
-use nn_rust_inference::{
-    autotune::{
-        KernelActionMaterialization, KernelArtifactStore, KernelScheduleAction,
-        MatvecRustCudaGenerator, MatvecSearchProblem, compile_standalone_kernel_crate,
-        replay_schedule_actions,
-    },
-    runtime,
+use nn_rust_autotune::{
+    KernelActionMaterialization, KernelArtifactStore, KernelScheduleAction,
+    MatvecRustCudaGenerator, MatvecSearchProblem, compile_standalone_kernel_crate,
+    replay_schedule_actions,
 };
+use nn_rust_inference::runtime;
 
 use crate::{AppResult, invalid_input, parse_required_flag_value, parse_required_usize};
 
