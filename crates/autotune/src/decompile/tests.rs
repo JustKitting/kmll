@@ -1688,6 +1688,15 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         access.kind == SassMemoryAccessKind::Load
             && access.space == MemorySpace::Descriptor
             && access.address_base.as_ref() == Some(&MemoryAddressBase::Descriptor(reg("UR4")))
+            && matches!(
+                &access.memory_address.kind,
+                MemoryAddressKind::Descriptor {
+                    descriptor,
+                    address,
+                    address_width: Some(64),
+                    offset: None,
+                } if descriptor == &reg("UR4") && address == &reg("R0")
+            )
     }));
     assert!(
         report

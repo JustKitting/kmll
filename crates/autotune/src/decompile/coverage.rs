@@ -9,15 +9,15 @@ use std::{
 use nn_rust_inference::runtime;
 
 use super::{
-    ControlTarget, KernelIrModule, KernelIrOpKind, KnownSassOpcode, MemoryAddressBase,
-    MemoryAddressImmediate, MemorySpace, PredicateCondition, RegisterRef, SassAnalysisModule,
-    SassBlockTerminator, SassCfgEdgeKind, SassLiftedModule, SassLiftedOpClass, SassLiftedOpDetail,
-    SassLiftedOpKind, SassLiftedSemantics, SassLiftedValueRef, SassMemoryAccessKind, SassModifier,
-    SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind, SassOpcodeCatalogSource,
-    SassPatternConfidence, SassPatternModule, SassRegionKind, SassRegionPath,
-    SassSemanticPatternCategory, SassSemanticPatternKind, SassValueOpKind, analyze_sass_ir,
-    known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
-    render_sass_file_side_by_side,
+    ControlTarget, KernelIrModule, KernelIrOpKind, KnownSassOpcode, MemoryAddress,
+    MemoryAddressBase, MemoryAddressImmediate, MemorySpace, PredicateCondition, RegisterRef,
+    SassAnalysisModule, SassBlockTerminator, SassCfgEdgeKind, SassLiftedModule, SassLiftedOpClass,
+    SassLiftedOpDetail, SassLiftedOpKind, SassLiftedSemantics, SassLiftedValueRef,
+    SassMemoryAccessKind, SassModifier, SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind,
+    SassOpcodeCatalogSource, SassPatternConfidence, SassPatternModule, SassRegionKind,
+    SassRegionPath, SassSemanticPatternCategory, SassSemanticPatternKind, SassValueOpKind,
+    analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass,
+    recover_sass_patterns, render_sass_file_side_by_side,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -597,7 +597,7 @@ pub struct SassCoverageMemoryAccess {
     pub space: MemorySpace,
     pub width_bits: Option<u32>,
     pub value_register: RegisterRef,
-    pub address_expr: String,
+    pub memory_address: MemoryAddress,
     pub address_registers: Vec<RegisterRef>,
     pub address_base: Option<MemoryAddressBase>,
     pub offset: Option<MemoryAddressImmediate>,
@@ -1347,7 +1347,7 @@ fn append_analysis(
                 space: access.space,
                 width_bits: access.width_bits,
                 value_register: access.value_register.clone(),
-                address_expr: access.memory_address.to_string(),
+                memory_address: access.memory_address.clone(),
                 address_registers: access.address_registers.clone(),
                 address_base: access.address_base.clone(),
                 offset: access.offset.clone(),
@@ -2086,7 +2086,7 @@ fn render_memory_accesses_tsv(report: &SassCoverageReport) -> String {
                 .map(|bits| bits.to_string())
                 .unwrap_or_default(),
             tsv(&access.value_register.to_string()),
-            tsv(&access.address_expr),
+            tsv(&access.memory_address.to_string()),
             tsv(&display_list(&access.address_registers)),
             tsv(&display_optional(access.address_base.as_ref())),
             tsv(&display_optional(access.offset.as_ref())),
