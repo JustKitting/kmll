@@ -46,6 +46,7 @@ include!("autotune/artifacts.rs");
 include!("autotune/search.rs");
 include!("autotune/matvec.rs");
 include!("autotune/gemm.rs");
+include!("autotune/problem.rs");
 include!("autotune/metadata.rs");
 include!("autotune/codegen.rs");
 include!("autotune/hashing.rs");

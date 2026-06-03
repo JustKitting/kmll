@@ -218,6 +218,11 @@ pub enum KernelGenerationError {
         family: String,
         generator: &'static str,
     },
+    UnsupportedOperation {
+        name: String,
+        kind: OperationKind,
+        reason: String,
+    },
     MissingTransform {
         family: String,
         transform: &'static str,
@@ -236,6 +241,13 @@ impl fmt::Display for KernelGenerationError {
                 write!(
                     f,
                     "candidate family {family:?} is not supported by generator {generator}"
+                )
+            }
+            Self::UnsupportedOperation { name, kind, reason } => {
+                write!(
+                    f,
+                    "operation {name:?} ({}) is not supported by inference autotune: {reason}",
+                    kind.label()
                 )
             }
             Self::MissingTransform { family, transform } => {

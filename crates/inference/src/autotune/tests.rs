@@ -71,5 +71,6 @@ mod tests {
     include!("tests/matvec.rs");
     include!("tests/gemm.rs");
     include!("tests/search.rs");
+    include!("tests/operation.rs");
     include!("tests/artifacts.rs");
 }
