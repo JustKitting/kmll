@@ -50,6 +50,10 @@ pub(in crate::autotune) fn implementation_key(
             let state = hash_str(state, "existing");
             hash_str(state, symbol)
         }
+        KernelMaterialization::Generated { symbol } => {
+            let state = hash_str(state, "generated");
+            hash_str(state, symbol)
+        }
         KernelMaterialization::DeferredGenerated { symbol_hint, .. } => {
             let state = hash_str(state, "deferred-generated");
             hash_str(state, symbol_hint)

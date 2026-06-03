@@ -218,12 +218,28 @@ impl KernelImplementationKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KernelMaterialization {
     Existing { symbol: &'static str },
+    Generated { symbol: String },
     DeferredGenerated { symbol_hint: String, reason: String },
 }
 
 impl KernelMaterialization {
     pub const fn is_launchable(&self) -> bool {
         matches!(self, Self::Existing { .. })
+    }
+
+    pub const fn is_materializable(&self) -> bool {
+        matches!(self, Self::Existing { .. } | Self::Generated { .. })
+    }
+
+    pub const fn is_existing(&self) -> bool {
+        matches!(self, Self::Existing { .. })
+    }
+
+    pub const fn requires_generated_module(&self) -> bool {
+        matches!(
+            self,
+            Self::Generated { .. } | Self::DeferredGenerated { .. }
+        )
     }
 }
 

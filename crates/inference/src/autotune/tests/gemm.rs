@@ -90,27 +90,29 @@ fn action_trace_replay_reconstructs_2d_upcast_gemm_candidate() {
 }
 
 #[test]
-fn gemm_describes_deferred_tiles_without_storing_kernel_payloads() {
+fn gemm_describes_generated_tiles_without_storing_kernel_payloads() {
     let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
     let actions = vec![
         KernelScheduleAction::split(0, 13, KernelActionMaterialization::DeferredGenerated),
         KernelScheduleAction::split(1, 24, KernelActionMaterialization::DeferredGenerated),
         KernelScheduleAction::split(2, 13, KernelActionMaterialization::DeferredGenerated),
     ];
-    let deferred = replay_schedule_actions(&problem, &actions)
-        .expect("GEMM split trace should expose arbitrary deferred generated tile metadata");
+    let generated = replay_schedule_actions(&problem, &actions)
+        .expect("GEMM split trace should expose arbitrary generated tile metadata");
     assert_eq!(
-        schedule_gemm_tile(&deferred.schedule),
+        schedule_gemm_tile(&generated.schedule),
         Some(GemmTileShape::new(13, 24, 13))
     );
-    assert!(!deferred.is_launchable());
-    assert_eq!(deferred.launch.kernel, "gemm_f32_bf16_tile_13x24x13");
-    assert!(matches!(
-        deferred.generated.materialization,
-        KernelMaterialization::DeferredGenerated { .. }
-    ));
-    assert_eq!(deferred.action_trace, actions);
-    assert_eq!(deferred.generated.generator, "tiled-gemm-generator");
+    assert!(!generated.is_launchable());
+    assert_eq!(generated.launch.kernel, "gemm_f32_bf16_tile_13x24x13");
+    assert_eq!(
+        generated.generated.materialization,
+        KernelMaterialization::Generated {
+            symbol: "gemm_f32_bf16_tile_13x24x13".to_string()
+        }
+    );
+    assert_eq!(generated.action_trace, actions);
+    assert_eq!(generated.generated.generator, "tiled-gemm-generator");
 }
 
 #[test]
@@ -767,10 +769,12 @@ fn gemm_search_expands_tile_metadata_into_reduce_unroll_variants() {
     assert_ne!(tile_candidate.artifact_key(), unroll7.artifact_key());
     assert_eq!(unroll7.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u7");
     assert!(!unroll7.is_launchable());
-    assert!(matches!(
+    assert_eq!(
         unroll7.generated.materialization,
-        KernelMaterialization::DeferredGenerated { .. }
-    ));
+        KernelMaterialization::Generated {
+            symbol: "gemm_f32_bf16_tile_16x32x16_u7".to_string()
+        }
+    );
 }
 
 #[test]
@@ -1186,7 +1190,7 @@ fn gemm_resource_limits_reject_overbudget_plan_metadata() {
 }
 
 #[test]
-fn gemm_search_can_rank_deferred_generated_descriptors_when_allowed() {
+fn gemm_search_can_rank_generated_descriptors_when_allowed() {
     let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
     let result = beam_search_metadata(
         &problem,
@@ -1214,7 +1218,7 @@ fn gemm_search_can_rank_deferred_generated_descriptors_when_allowed() {
     ));
     assert!(matches!(
         best.generated.materialization,
-        KernelMaterialization::DeferredGenerated { .. }
+        KernelMaterialization::Generated { .. }
     ));
 }
 

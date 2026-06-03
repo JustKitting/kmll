@@ -62,7 +62,7 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
         let row_upcast_pressure =
             blocks as f64 * (row_upcast as f64 - 1.0_f64).max(0.0_f64) * 384.0;
         let register_pressure = blocks as f64 * (unroll - 1.0_f64).max(0.0_f64) * 32.0;
-        let generic_runtime_penalty = if candidate.is_launchable() {
+        let generic_runtime_penalty = if candidate.generated.materialization.is_existing() {
             blocks as f64 * 64.0
         } else {
             0.0

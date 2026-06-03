@@ -108,9 +108,8 @@ impl GemmSearchProblem {
                 symbol: "gemm_f32_bf16_tiled_kernel",
             }
         } else {
-            KernelMaterialization::DeferredGenerated {
-                symbol_hint,
-                reason: "schedule descriptor has no emitted Rust CUDA kernel yet".to_string(),
+            KernelMaterialization::Generated {
+                symbol: symbol_hint,
             }
         };
         let mut schedule = KernelSchedule::new().with_transform(ScheduleTransform::TileGemm {

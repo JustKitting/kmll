@@ -39,10 +39,10 @@ fn artifact_store_writes_metadata_manifest_without_kernel_source() {
     assert_eq!(manifest["generator"].as_str(), Some("tiled-gemm-generator"));
     assert_eq!(
         manifest["materialization"]["kind"].as_str(),
-        Some("deferred-generated")
+        Some("generated")
     );
     assert_eq!(
-        manifest["materialization"]["symbol_hint"].as_str(),
+        manifest["materialization"]["symbol"].as_str(),
         Some("gemm_f32_bf16_tile_16x32x16")
     );
     assert_eq!(manifest["schedule"][0]["op"].as_str(), Some("tile-gemm"));
@@ -997,7 +997,7 @@ fn artifact_store_records_b_load_stride_order_metadata() {
         serde_json::from_str(&manifest_text).expect("manifest should be valid JSON");
 
     assert_eq!(
-        manifest["materialization"]["symbol_hint"].as_str(),
+        manifest["materialization"]["symbol"].as_str(),
         Some("gemm_f32_bf16_tile_16x32x16_bk")
     );
     assert_eq!(manifest["schedule"][1]["op"].as_str(), Some("stride-order"));

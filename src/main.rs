@@ -1075,6 +1075,7 @@ fn print_selection_cache_write(
 fn print_kernel_candidate(rank: usize, candidate: &KernelCandidateMetadata) {
     let materialization = match &candidate.generated.materialization {
         KernelMaterialization::Existing { symbol } => format!("existing:{symbol}"),
+        KernelMaterialization::Generated { symbol } => format!("generated:{symbol}"),
         KernelMaterialization::DeferredGenerated {
             symbol_hint,
             reason,

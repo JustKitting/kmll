@@ -26,6 +26,7 @@ impl KernelSourceGenerator for MatvecRustCudaGenerator {
         })?;
         let symbol = match &candidate.generated.materialization {
             KernelMaterialization::Existing { symbol } => (*symbol).to_string(),
+            KernelMaterialization::Generated { symbol } => sanitize_identifier(symbol),
             KernelMaterialization::DeferredGenerated { symbol_hint, .. } => {
                 sanitize_identifier(symbol_hint)
             }
@@ -63,6 +64,7 @@ impl KernelSourceGenerator for GemmRustCudaGenerator {
         })?;
         let symbol = match &candidate.generated.materialization {
             KernelMaterialization::Existing { symbol } => (*symbol).to_string(),
+            KernelMaterialization::Generated { symbol } => sanitize_identifier(symbol),
             KernelMaterialization::DeferredGenerated { symbol_hint, .. } => {
                 sanitize_identifier(symbol_hint)
             }

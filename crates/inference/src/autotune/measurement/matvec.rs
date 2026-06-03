@@ -132,7 +132,8 @@ impl<'a> MatvecBf16MeasuredAutotuneScorer<'a> {
     ) -> KernelAutotuneMeasureResult<Vec<OptimizationTimingSegment>> {
         match &candidate.generated.materialization {
             KernelMaterialization::Existing { .. } => Ok(Vec::new()),
-            KernelMaterialization::DeferredGenerated { .. } => {
+            KernelMaterialization::Generated { .. }
+            | KernelMaterialization::DeferredGenerated { .. } => {
                 self.ensure_generated_bf16_matvec(candidate)
             }
         }
@@ -160,7 +161,8 @@ impl<'a> MatvecBf16MeasuredAutotuneScorer<'a> {
                     self.cols,
                 )
             }
-            KernelMaterialization::DeferredGenerated { .. } => {
+            KernelMaterialization::Generated { .. }
+            | KernelMaterialization::DeferredGenerated { .. } => {
                 self.launch_generated_bf16_matvec(candidate)
             }
         }

@@ -142,7 +142,8 @@ impl<'a> GemmF32Bf16MeasuredAutotuneScorer<'a> {
     ) -> KernelAutotuneMeasureResult<Vec<OptimizationTimingSegment>> {
         match &candidate.generated.materialization {
             KernelMaterialization::Existing { .. } => Ok(Vec::new()),
-            KernelMaterialization::DeferredGenerated { .. } => {
+            KernelMaterialization::Generated { .. }
+            | KernelMaterialization::DeferredGenerated { .. } => {
                 self.ensure_generated_bf16_gemm(candidate)
             }
         }
@@ -161,7 +162,8 @@ impl<'a> GemmF32Bf16MeasuredAutotuneScorer<'a> {
                 }
                 self.launch_existing_bf16_gemm()
             }
-            KernelMaterialization::DeferredGenerated { .. } => {
+            KernelMaterialization::Generated { .. }
+            | KernelMaterialization::DeferredGenerated { .. } => {
                 self.launch_generated_bf16_gemm(candidate)
             }
         }

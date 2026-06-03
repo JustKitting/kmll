@@ -37,7 +37,7 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
         let Some(plan) = schedule_matvec_plan(&candidate.schedule) else {
             return KernelActionSpaceSet::default();
         };
-        if candidate.is_launchable() {
+        if candidate.generated.materialization.is_existing() {
             return KernelActionSpaceSet::default();
         }
         let mut spaces = Vec::new();
@@ -101,7 +101,7 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 arg: KernelScheduleActionArg::Factor(factor),
                 materialization: KernelActionMaterialization::DeferredGenerated,
             } => {
-                if candidate.is_launchable() {
+                if candidate.generated.materialization.is_existing() {
                     return None;
                 }
                 let plan = schedule_matvec_plan(&candidate.schedule)?;
@@ -120,7 +120,9 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 arg: KernelScheduleActionArg::Factor(factor),
                 materialization: KernelActionMaterialization::DeferredGenerated,
             } => {
-                if candidate.is_launchable() || !self.reduce_unroll_factors().contains(factor) {
+                if candidate.generated.materialization.is_existing()
+                    || !self.reduce_unroll_factors().contains(factor)
+                {
                     return None;
                 }
                 let plan = schedule_matvec_plan(&candidate.schedule)?;
@@ -136,7 +138,9 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 arg: KernelScheduleActionArg::Factor(factor),
                 materialization: KernelActionMaterialization::DeferredGenerated,
             } => {
-                if candidate.is_launchable() || !self.thread_group_factors().contains(factor) {
+                if candidate.generated.materialization.is_existing()
+                    || !self.thread_group_factors().contains(factor)
+                {
                     return None;
                 }
                 let plan = schedule_matvec_plan(&candidate.schedule)?;

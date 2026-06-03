@@ -31,9 +31,8 @@ impl MatvecSearchProblem {
         self.candidate_for_plan_with_materialization(
             plan,
             symbol_hint.clone(),
-            KernelMaterialization::DeferredGenerated {
-                symbol_hint,
-                reason: "row split descriptor has no emitted Rust CUDA kernel yet".to_string(),
+            KernelMaterialization::Generated {
+                symbol: symbol_hint,
             },
         )
     }

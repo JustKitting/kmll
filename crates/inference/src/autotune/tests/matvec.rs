@@ -56,15 +56,17 @@ fn matvec_search_exposes_generated_row_split_metadata() {
     assert_eq!(generated.launch.kernel, "matvec_bf16_rows13");
     assert_eq!(generated.launch.grid_dim.x, 316);
     assert_eq!(generated.launch.block_dim.x, 416);
-    assert!(matches!(
+    assert_eq!(
         generated.generated.materialization,
-        KernelMaterialization::DeferredGenerated { .. }
-    ));
+        KernelMaterialization::Generated {
+            symbol: "matvec_bf16_rows13".to_string()
+        }
+    );
     assert_eq!(generated.generated.generator, "row-major-matvec-generator");
 }
 
 #[test]
-fn matvec_action_space_exposes_existing_and_deferred_row_splits() {
+fn matvec_action_space_exposes_existing_and_generated_row_splits() {
     let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
     let seed = problem.seed();
     let spaces = problem.action_spaces(&seed);
@@ -142,10 +144,12 @@ fn matvec_action_space_exposes_existing_and_deferred_row_splits() {
             KernelActionMaterialization::DeferredGenerated
         )]
     );
-    assert!(matches!(
+    assert_eq!(
         generated.generated.materialization,
-        KernelMaterialization::DeferredGenerated { .. }
-    ));
+        KernelMaterialization::Generated {
+            symbol: "matvec_bf16_rows13".to_string()
+        }
+    );
 }
 
 #[test]

@@ -64,6 +64,9 @@ pub(in crate::autotune) fn materialization_json(materialization: &KernelMaterial
         KernelMaterialization::Existing { symbol } => {
             json!({"kind": "existing", "symbol": symbol})
         }
+        KernelMaterialization::Generated { symbol } => {
+            json!({"kind": "generated", "symbol": symbol})
+        }
         KernelMaterialization::DeferredGenerated {
             symbol_hint,
             reason,
