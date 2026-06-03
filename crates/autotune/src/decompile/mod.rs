@@ -35,7 +35,7 @@ pub use self::{
         SassCoverageLiveRange, SassCoverageMemoryAccess, SassCoverageNaturalLoop,
         SassCoverageOptions, SassCoverageReachingUse, SassCoverageReport,
         SassCoverageSemanticPattern, SassCoverageSsaValue, SassCoverageValueOp,
-        SassOpcodeCatalogEntry, SassOpcodeCount, SassUnsupportedInstruction,
+        SassOpcodeCatalogEntry, SassOpcodeCount, SassOpcodeProbeTarget, SassUnsupportedInstruction,
         run_sass_coverage_scan,
     },
     fixtures::{SimpleKernelFixture, SimpleKernelFixtureKind, simple_kernel_fixtures},

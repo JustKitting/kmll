@@ -51,7 +51,7 @@ pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
 
     let report = run_sass_coverage_scan(&options)?;
     println!(
-        "kernel_decompile_coverage root={} files_seen={} files_parsed={} parse_errors={} parsed_instructions={} cfg_blocks={} cfg_edges={} dominator_blocks={} natural_loops={} dataflow_ops={} reaching_uses={} ssa_values={} def_use_edges={} value_ops={} lifted_ops={} live_ranges={} memory_accesses={} semantic_patterns={} known_opcodes={} locally_mapped_opcodes={} known_unobserved_opcodes={} known_unmapped_opcodes={} observed_unregistered_opcodes={} observed_unmapped_opcodes={} unsupported_instructions={} summary_path={} files_path={} opcode_catalog_path={} opcode_frequency_path={} opcode_signature_frequency_path={} cfg_blocks_path={} cfg_edges_path={} dominators_path={} natural_loops_path={} dataflow_path={} reaching_uses_path={} ssa_values_path={} def_use_edges_path={} value_ops_path={} lifted_ops_path={} live_ranges_path={} memory_accesses_path={} semantic_patterns_path={} semantic_pattern_frequency_path={} unsupported_instructions_path={}",
+        "kernel_decompile_coverage root={} files_seen={} files_parsed={} parse_errors={} parsed_instructions={} cfg_blocks={} cfg_edges={} dominator_blocks={} natural_loops={} dataflow_ops={} reaching_uses={} ssa_values={} def_use_edges={} value_ops={} lifted_ops={} live_ranges={} memory_accesses={} semantic_patterns={} known_opcodes={} locally_mapped_opcodes={} known_unobserved_opcodes={} opcode_probe_targets={} known_unmapped_opcodes={} observed_unregistered_opcodes={} observed_unmapped_opcodes={} unsupported_instructions={} summary_path={} files_path={} opcode_catalog_path={} opcode_probe_targets_path={} opcode_frequency_path={} opcode_signature_frequency_path={} cfg_blocks_path={} cfg_edges_path={} dominators_path={} natural_loops_path={} dataflow_path={} reaching_uses_path={} ssa_values_path={} def_use_edges_path={} value_ops_path={} lifted_ops_path={} live_ranges_path={} memory_accesses_path={} semantic_patterns_path={} semantic_pattern_frequency_path={} unsupported_instructions_path={}",
         report.root.display(),
         report.files.len(),
         report.parsed_file_count,
@@ -73,6 +73,7 @@ pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
         report.known_opcode_count,
         report.locally_mapped_opcode_count,
         report.known_unobserved_opcode_count,
+        report.opcode_probe_target_count,
         report.known_unmapped_opcode_count,
         report.observed_unregistered_opcode_count,
         report.observed_unmapped_opcode_count,
@@ -80,6 +81,7 @@ pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
         report.summary_path.display(),
         report.files_path.display(),
         report.opcode_catalog_path.display(),
+        report.opcode_probe_targets_path.display(),
         report.opcode_frequency_path.display(),
         report.opcode_signature_frequency_path.display(),
         report.cfg_blocks_path.display(),

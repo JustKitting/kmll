@@ -855,6 +855,10 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.known_opcode_count > 0);
     assert!(report.locally_mapped_opcode_count > 0);
     assert!(report.known_unobserved_opcode_count > 0);
+    assert_eq!(
+        report.opcode_probe_target_count,
+        report.known_unobserved_opcode_count
+    );
     assert_eq!(report.known_unmapped_opcode_count, 0);
     assert!(report.observed_unregistered_opcode_count > 0);
     assert!(report.observed_unmapped_opcode_count > 0);
@@ -926,6 +930,25 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
             .iter()
             .any(|class| class == "tensor-core")
     );
+    let hmma_probe = report
+        .opcode_probe_targets
+        .iter()
+        .find(|target| target.opcode == "HMMA")
+        .expect("known unobserved HMMA should be a probe target");
+    assert!(hmma_probe.locally_mapped);
+    assert_eq!(hmma_probe.recommended_action, "generate-sass-artifact");
+    assert!(
+        hmma_probe
+            .architectures
+            .iter()
+            .any(|architecture| architecture == "sm120")
+    );
+    assert!(
+        !report
+            .opcode_probe_targets
+            .iter()
+            .any(|target| target.opcode == "IADD")
+    );
     assert!(
         report
             .unsupported_instructions
@@ -939,6 +962,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.summary_path.exists());
     assert!(report.files_path.exists());
     assert!(report.opcode_catalog_path.exists());
+    assert!(report.opcode_probe_targets_path.exists());
     assert!(report.opcode_frequency_path.exists());
     assert!(report.opcode_signature_frequency_path.exists());
     assert!(report.semantic_patterns_path.exists());
@@ -1012,6 +1036,13 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     ));
     assert!(opcode_catalog_tsv.contains("MYSTERY"));
     assert!(opcode_catalog_tsv.contains("HMMA"));
+    let opcode_probe_targets_tsv = fs::read_to_string(&report.opcode_probe_targets_path)
+        .expect("opcode probe target TSV should read");
+    assert!(opcode_probe_targets_tsv.starts_with(
+        "opcode\tlocally_mapped\tarchitectures\tclasses\tkinds\tknown_sources\trecommended_action"
+    ));
+    assert!(opcode_probe_targets_tsv.contains("HMMA"));
+    assert!(opcode_probe_targets_tsv.contains("generate-sass-artifact"));
     assert!(
         report
             .files

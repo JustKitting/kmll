@@ -37,6 +37,7 @@ pub struct SassCoverageReport {
     pub summary_path: PathBuf,
     pub files_path: PathBuf,
     pub opcode_catalog_path: PathBuf,
+    pub opcode_probe_targets_path: PathBuf,
     pub opcode_frequency_path: PathBuf,
     pub opcode_signature_frequency_path: PathBuf,
     pub semantic_patterns_path: PathBuf,
@@ -56,6 +57,7 @@ pub struct SassCoverageReport {
     pub unsupported_instructions_path: PathBuf,
     pub files: Vec<SassCoverageFileReport>,
     pub opcode_catalog: Vec<SassOpcodeCatalogEntry>,
+    pub opcode_probe_targets: Vec<SassOpcodeProbeTarget>,
     pub opcode_counts: Vec<SassOpcodeCount>,
     pub opcode_signature_counts: Vec<SassOpcodeCount>,
     pub semantic_pattern_counts: Vec<SassOpcodeCount>,
@@ -92,6 +94,7 @@ pub struct SassCoverageReport {
     pub known_opcode_count: usize,
     pub locally_mapped_opcode_count: usize,
     pub known_unobserved_opcode_count: usize,
+    pub opcode_probe_target_count: usize,
     pub known_unmapped_opcode_count: usize,
     pub observed_unregistered_opcode_count: usize,
     pub observed_unmapped_opcode_count: usize,
@@ -127,6 +130,17 @@ pub struct SassCoverageFileReport {
 pub struct SassOpcodeCount {
     pub opcode: String,
     pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassOpcodeProbeTarget {
+    pub opcode: String,
+    pub architectures: Vec<String>,
+    pub classes: Vec<String>,
+    pub kinds: Vec<String>,
+    pub known_sources: Vec<String>,
+    pub locally_mapped: bool,
+    pub recommended_action: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -550,6 +564,7 @@ pub fn run_sass_coverage_scan(
     }
 
     let opcode_catalog = opcode_catalog_entries(opcode_catalog);
+    let opcode_probe_targets = opcode_probe_targets(&opcode_catalog);
     let opcode_counts = sorted_counts(opcode_counts);
     let opcode_signature_counts = sorted_counts(opcode_signature_counts);
     let semantic_pattern_counts = sorted_counts(semantic_pattern_counts);
@@ -581,6 +596,7 @@ pub fn run_sass_coverage_scan(
         .iter()
         .filter(|entry| entry.known && entry.instruction_count == 0)
         .count();
+    let opcode_probe_target_count = opcode_probe_targets.len();
     let known_unmapped_opcode_count = opcode_catalog
         .iter()
         .filter(|entry| entry.known && !entry.locally_mapped)
@@ -598,6 +614,7 @@ pub fn run_sass_coverage_scan(
     let summary_path = options.output_dir.join("summary.txt");
     let files_path = options.output_dir.join("files.tsv");
     let opcode_catalog_path = options.output_dir.join("opcode-catalog.tsv");
+    let opcode_probe_targets_path = options.output_dir.join("opcode-probe-targets.tsv");
     let opcode_frequency_path = options.output_dir.join("opcode-frequency.tsv");
     let opcode_signature_frequency_path = options.output_dir.join("opcode-signature-frequency.tsv");
     let semantic_patterns_path = options.output_dir.join("semantic-patterns.tsv");
@@ -622,6 +639,7 @@ pub fn run_sass_coverage_scan(
         summary_path,
         files_path,
         opcode_catalog_path,
+        opcode_probe_targets_path,
         opcode_frequency_path,
         opcode_signature_frequency_path,
         semantic_patterns_path,
@@ -641,6 +659,7 @@ pub fn run_sass_coverage_scan(
         unsupported_instructions_path,
         files,
         opcode_catalog,
+        opcode_probe_targets,
         opcode_counts,
         opcode_signature_counts,
         semantic_pattern_counts,
@@ -677,6 +696,7 @@ pub fn run_sass_coverage_scan(
         known_opcode_count,
         locally_mapped_opcode_count,
         known_unobserved_opcode_count,
+        opcode_probe_target_count,
         known_unmapped_opcode_count,
         observed_unregistered_opcode_count,
         observed_unmapped_opcode_count,
@@ -814,6 +834,27 @@ fn opcode_catalog_entries(
     opcode_catalog
         .into_iter()
         .map(|(opcode, entry)| entry.into_entry(opcode))
+        .collect()
+}
+
+fn opcode_probe_targets(opcode_catalog: &[SassOpcodeCatalogEntry]) -> Vec<SassOpcodeProbeTarget> {
+    opcode_catalog
+        .iter()
+        .filter(|entry| entry.known && !entry.observed)
+        .map(|entry| SassOpcodeProbeTarget {
+            opcode: entry.opcode.clone(),
+            architectures: entry.architectures.clone(),
+            classes: entry.classes.clone(),
+            kinds: entry.kinds.clone(),
+            known_sources: entry.known_sources.clone(),
+            locally_mapped: entry.locally_mapped,
+            recommended_action: if entry.locally_mapped {
+                "generate-sass-artifact"
+            } else {
+                "add-lifter-mapping"
+            }
+            .to_string(),
+        })
         .collect()
 }
 
@@ -1060,6 +1101,10 @@ fn write_coverage_reports(report: &SassCoverageReport) -> Result<(), Box<dyn Err
         render_opcode_catalog_tsv(report).as_bytes(),
     )?;
     fs::write(
+        &report.opcode_probe_targets_path,
+        render_opcode_probe_targets_tsv(report).as_bytes(),
+    )?;
+    fs::write(
         &report.opcode_frequency_path,
         render_counts_tsv("opcode", &report.opcode_counts).as_bytes(),
     )?;
@@ -1171,6 +1216,12 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
     .expect("write to string");
     writeln!(
         out,
+        "opcode_probe_targets={}",
+        report.opcode_probe_target_count
+    )
+    .expect("write to string");
+    writeln!(
+        out,
         "known_unmapped_opcodes={}",
         report.known_unmapped_opcode_count
     )
@@ -1258,6 +1309,30 @@ fn render_opcode_catalog_tsv(report: &SassCoverageReport) -> String {
             tsv(&entry.support),
             tsv(&entry.coverage),
             entry.unsupported_count,
+        )
+        .expect("write to string");
+    }
+    out
+}
+
+fn render_opcode_probe_targets_tsv(report: &SassCoverageReport) -> String {
+    let mut out = String::new();
+    writeln!(
+        out,
+        "opcode\tlocally_mapped\tarchitectures\tclasses\tkinds\tknown_sources\trecommended_action"
+    )
+    .expect("write to string");
+    for target in &report.opcode_probe_targets {
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            tsv(&target.opcode),
+            target.locally_mapped,
+            tsv(&target.architectures.join(",")),
+            tsv(&target.classes.join(",")),
+            tsv(&target.kinds.join(",")),
+            tsv(&target.known_sources.join(",")),
+            tsv(&target.recommended_action),
         )
         .expect("write to string");
     }
