@@ -1,6 +1,8 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use super::SassOpcodeKind;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnownSassOpcode {
-    pub opcode: &'static str,
+    pub opcode: SassOpcodeKind,
     pub architectures: &'static [&'static str],
     pub class: &'static str,
     pub kind: &'static str,
@@ -16,9 +18,9 @@ const LOCAL_LIFTER: &str = "local-sass-lifter";
 const NVIDIA_BINARY_UTILITIES: &str = "nvidia-cuda-binary-utilities-instruction-reference";
 
 macro_rules! local {
-    ($opcode:literal, $class:literal, $kind:literal) => {
+    ($opcode:ident, $class:literal, $kind:literal) => {
         KnownSassOpcode {
-            opcode: $opcode,
+            opcode: SassOpcodeKind::$opcode,
             architectures: &[],
             class: $class,
             kind: $kind,
@@ -29,9 +31,9 @@ macro_rules! local {
 }
 
 macro_rules! nvidia_mapped {
-    ($opcode:literal, [$($arch:literal),* $(,)?], $class:literal, $kind:literal) => {
+    ($opcode:ident, [$($arch:literal),* $(,)?], $class:literal, $kind:literal) => {
         KnownSassOpcode {
-            opcode: $opcode,
+            opcode: SassOpcodeKind::$opcode,
             architectures: &[$($arch),*],
             class: $class,
             kind: $kind,
@@ -42,153 +44,143 @@ macro_rules! nvidia_mapped {
 }
 
 const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
-    local!("BAR", "synchronization", "sync"),
-    local!("BRA", "control-flow", "branch"),
-    local!("BSSY", "synchronization", "sync"),
-    local!("BSYNC", "synchronization", "sync"),
-    local!("CALL", "control-flow", "call"),
-    local!("CS2R", "data-movement", "special-read"),
-    local!("EXIT", "control-flow", "exit"),
-    local!("FADD", "float-math", "float-add"),
-    local!("FFMA", "float-math", "fused-multiply-add"),
-    local!("FMUL", "float-math", "float-mul"),
-    local!("FSETP", "predicate", "compare-set"),
-    local!("HADD2", "float-math", "packed-half-add"),
-    local!("HFMA2", "float-math", "fused-multiply-add"),
-    local!("HMUL2", "float-math", "packed-half-mul"),
-    local!("IADD", "integer-math", "integer-add"),
-    local!("IADD3", "integer-math", "integer-add"),
-    local!("IMAD", "integer-math", "integer-mad"),
-    local!("ISETP", "predicate", "compare-set"),
-    local!("LD", "memory", "load"),
-    local!("LDC", "memory", "load-const"),
-    local!("LDCU", "memory", "load-const"),
-    local!("LDG", "memory", "load"),
-    local!("LDL", "memory", "load"),
-    local!("LDS", "memory", "load"),
-    local!("LEA", "address", "address-calc"),
-    local!("LOP3", "integer-math", "logic-lut"),
-    local!("MOV", "data-movement", "move"),
-    local!("NOP", "no-op", "no-op"),
-    local!("PLOP3", "integer-math", "logic-lut"),
-    local!("PRMT", "data-movement", "permute"),
-    local!("RET", "control-flow", "return"),
-    local!("S2R", "data-movement", "special-read"),
-    local!("S2UR", "data-movement", "special-read"),
-    local!("SHF", "integer-math", "shift"),
-    local!("SHFL", "warp", "warp-shuffle"),
-    local!("ST", "memory", "store"),
-    local!("STG", "memory", "store"),
-    local!("STL", "memory", "store"),
-    local!("STS", "memory", "store"),
-    local!("UIADD3", "integer-math", "integer-add"),
-    local!("UIMAD", "integer-math", "integer-mad"),
-    local!("UISETP", "predicate", "compare-set"),
-    local!("ULDC", "memory", "load-const"),
-    local!("ULEA", "address", "address-calc"),
-    local!("ULOP3", "integer-math", "logic-lut"),
-    local!("UMOV", "data-movement", "move"),
-    local!("USHF", "integer-math", "shift"),
-    nvidia_mapped!("BGMMA", ["sm90"], "tensor-core", "warpgroup-mma"),
+    local!(Bar, "synchronization", "sync"),
+    local!(Bra, "control-flow", "branch"),
+    local!(Bssy, "synchronization", "sync"),
+    local!(Bsync, "synchronization", "sync"),
+    local!(Call, "control-flow", "call"),
+    local!(Cs2r, "data-movement", "special-read"),
+    local!(Exit, "control-flow", "exit"),
+    local!(Fadd, "float-math", "float-add"),
+    local!(Ffma, "float-math", "fused-multiply-add"),
+    local!(Fmul, "float-math", "float-mul"),
+    local!(Fsetp, "predicate", "compare-set"),
+    local!(Hadd2, "float-math", "packed-half-add"),
+    local!(Hfma2, "float-math", "fused-multiply-add"),
+    local!(Hmul2, "float-math", "packed-half-mul"),
+    local!(Iadd, "integer-math", "integer-add"),
+    local!(Iadd3, "integer-math", "integer-add"),
+    local!(Imad, "integer-math", "integer-mad"),
+    local!(Isetp, "predicate", "compare-set"),
+    local!(Ld, "memory", "load"),
+    local!(Ldc, "memory", "load-const"),
+    local!(Ldcu, "memory", "load-const"),
+    local!(Ldg, "memory", "load"),
+    local!(Ldl, "memory", "load"),
+    local!(Lds, "memory", "load"),
+    local!(Lea, "address", "address-calc"),
+    local!(Lop3, "integer-math", "logic-lut"),
+    local!(Mov, "data-movement", "move"),
+    local!(Nop, "no-op", "no-op"),
+    local!(Plop3, "integer-math", "logic-lut"),
+    local!(Prmt, "data-movement", "permute"),
+    local!(Ret, "control-flow", "return"),
+    local!(S2r, "data-movement", "special-read"),
+    local!(S2ur, "data-movement", "special-read"),
+    local!(Shf, "integer-math", "shift"),
+    local!(Shfl, "warp", "warp-shuffle"),
+    local!(St, "memory", "store"),
+    local!(Stg, "memory", "store"),
+    local!(Stl, "memory", "store"),
+    local!(Sts, "memory", "store"),
+    local!(Uiadd3, "integer-math", "integer-add"),
+    local!(Uimad, "integer-math", "integer-mad"),
+    local!(Uisetp, "predicate", "compare-set"),
+    local!(Uldc, "memory", "load-const"),
+    local!(Ulea, "address", "address-calc"),
+    local!(Ulop3, "integer-math", "logic-lut"),
+    local!(Umov, "data-movement", "move"),
+    local!(Ushf, "integer-math", "shift"),
+    nvidia_mapped!(Bgmma, ["sm90"], "tensor-core", "warpgroup-mma"),
     nvidia_mapped!(
-        "BMMA",
+        Bmma,
         ["sm80", "sm86", "sm89", "sm90"],
         "tensor-core",
         "bit-mma"
     ),
-    nvidia_mapped!("DMMA", ["sm100", "sm120"], "tensor-core", "fp64-mma"),
-    nvidia_mapped!("HGMMA", ["sm90"], "tensor-core", "warpgroup-mma"),
+    nvidia_mapped!(Dmma, ["sm100", "sm120"], "tensor-core", "fp64-mma"),
+    nvidia_mapped!(Hgmma, ["sm90"], "tensor-core", "warpgroup-mma"),
     nvidia_mapped!(
-        "HMMA",
+        Hmma,
         ["sm80", "sm86", "sm89", "sm90", "sm100", "sm120"],
         "tensor-core",
         "half-mma"
     ),
-    nvidia_mapped!("IGMMA", ["sm90"], "tensor-core", "warpgroup-mma"),
+    nvidia_mapped!(Igmma, ["sm90"], "tensor-core", "warpgroup-mma"),
     nvidia_mapped!(
-        "IMMA",
+        Imma,
         ["sm80", "sm86", "sm89", "sm90", "sm100", "sm120"],
         "tensor-core",
         "integer-mma"
     ),
-    nvidia_mapped!("OMMA", ["sm100", "sm120"], "tensor-core", "fp4-mma"),
-    nvidia_mapped!("QGMMA", ["sm90"], "tensor-core", "warpgroup-mma"),
-    nvidia_mapped!("QMMA", ["sm100", "sm120"], "tensor-core", "fp8-mma"),
-    nvidia_mapped!("LDT", ["sm100", "sm120"], "tensor-memory", "tensor-load"),
+    nvidia_mapped!(Omma, ["sm100", "sm120"], "tensor-core", "fp4-mma"),
+    nvidia_mapped!(Qgmma, ["sm90"], "tensor-core", "warpgroup-mma"),
+    nvidia_mapped!(Qmma, ["sm100", "sm120"], "tensor-core", "fp8-mma"),
+    nvidia_mapped!(Ldt, ["sm100", "sm120"], "tensor-memory", "tensor-load"),
     nvidia_mapped!(
-        "LDTM",
+        Ldtm,
         ["sm100", "sm120"],
         "tensor-memory",
         "tensor-load-matrix"
     ),
-    nvidia_mapped!("STT", ["sm100", "sm120"], "tensor-memory", "tensor-store"),
+    nvidia_mapped!(Stt, ["sm100", "sm120"], "tensor-memory", "tensor-store"),
     nvidia_mapped!(
-        "STTM",
+        Sttm,
         ["sm100", "sm120"],
         "tensor-memory",
         "tensor-store-matrix"
     ),
-    nvidia_mapped!("UBLKCP", ["sm100", "sm120"], "tensor-memory", "bulk-copy"),
+    nvidia_mapped!(Ublkcp, ["sm100", "sm120"], "tensor-memory", "bulk-copy"),
+    nvidia_mapped!(Ublkpf, ["sm100", "sm120"], "tensor-memory", "bulk-prefetch"),
+    nvidia_mapped!(Ublkred, ["sm100", "sm120"], "tensor-memory", "bulk-reduce"),
     nvidia_mapped!(
-        "UBLKPF",
-        ["sm100", "sm120"],
-        "tensor-memory",
-        "bulk-prefetch"
-    ),
-    nvidia_mapped!(
-        "UBLKRED",
-        ["sm100", "sm120"],
-        "tensor-memory",
-        "bulk-reduce"
-    ),
-    nvidia_mapped!(
-        "UTCHMMA",
+        Utchmma,
         ["sm100", "sm120"],
         "tensor-core",
         "uniform-half-mma"
     ),
     nvidia_mapped!(
-        "UTCIMMA",
+        Utcimma,
         ["sm100", "sm120"],
         "tensor-core",
         "uniform-integer-mma"
     ),
     nvidia_mapped!(
-        "UTCOMMA",
+        Utcomma,
         ["sm100", "sm120"],
         "tensor-core",
         "uniform-fp4-mma"
     ),
     nvidia_mapped!(
-        "UTCQMMA",
+        Utcqmma,
         ["sm100", "sm120"],
         "tensor-core",
         "uniform-fp8-mma"
     ),
     nvidia_mapped!(
-        "UTMALDG",
+        Utmaldg,
         ["sm100", "sm120"],
         "tensor-memory",
         "tensor-memory-load-global"
     ),
     nvidia_mapped!(
-        "UTMAPF",
+        Utmapf,
         ["sm100", "sm120"],
         "tensor-memory",
         "tensor-memory-prefetch"
     ),
     nvidia_mapped!(
-        "UTMAREDG",
+        Utmaredg,
         ["sm100", "sm120"],
         "tensor-memory",
         "tensor-memory-reduce-global"
     ),
     nvidia_mapped!(
-        "UTMASTG",
+        Utmastg,
         ["sm100", "sm120"],
         "tensor-memory",
         "tensor-memory-store-global"
     ),
-    nvidia_mapped!("WARPGROUP", ["sm90"], "warpgroup", "warpgroup-control"),
-    nvidia_mapped!("WARPGROUPSET", ["sm90"], "warpgroup", "warpgroup-control"),
+    nvidia_mapped!(Warpgroup, ["sm90"], "warpgroup", "warpgroup-control"),
+    nvidia_mapped!(Warpgroupset, ["sm90"], "warpgroup", "warpgroup-control"),
 ];

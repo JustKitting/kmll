@@ -842,7 +842,7 @@ fn append_known_opcode(
     known: &KnownSassOpcode,
 ) {
     let entry = opcode_catalog
-        .entry(SassOpcode::new(known.opcode))
+        .entry(SassOpcode::from_kind(known.opcode.clone()))
         .or_default();
     entry.known = true;
     entry.locally_mapped |= known.locally_mapped;

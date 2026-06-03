@@ -79,6 +79,11 @@ impl SassOpcode {
         }
     }
 
+    pub fn from_kind(kind: SassOpcodeKind) -> Self {
+        let raw = kind.as_str().to_string();
+        Self { kind, raw }
+    }
+
     pub fn from_ir_op(op: &KernelIrOp) -> Self {
         match &op.kind {
             KernelIrOpKind::Unsupported { opcode, .. } => opcode.clone(),
@@ -422,6 +427,86 @@ impl SassOpcodeKind {
             "WARPGROUP" => Self::Warpgroup,
             "WARPGROUPSET" => Self::Warpgroupset,
             _ => Self::Raw(raw),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Bar => "BAR",
+            Self::Bra => "BRA",
+            Self::Bssy => "BSSY",
+            Self::Bsync => "BSYNC",
+            Self::Call => "CALL",
+            Self::Cs2r => "CS2R",
+            Self::Exit => "EXIT",
+            Self::Fadd => "FADD",
+            Self::Ffma => "FFMA",
+            Self::Fmul => "FMUL",
+            Self::Fsetp => "FSETP",
+            Self::Hadd2 => "HADD2",
+            Self::Hfma2 => "HFMA2",
+            Self::Hmul2 => "HMUL2",
+            Self::Iadd => "IADD",
+            Self::Iadd3 => "IADD3",
+            Self::Imad => "IMAD",
+            Self::Isetp => "ISETP",
+            Self::Ld => "LD",
+            Self::Ldc => "LDC",
+            Self::Ldcu => "LDCU",
+            Self::Ldg => "LDG",
+            Self::Ldl => "LDL",
+            Self::Lds => "LDS",
+            Self::Lea => "LEA",
+            Self::Lop3 => "LOP3",
+            Self::Mov => "MOV",
+            Self::Nop => "NOP",
+            Self::Plop3 => "PLOP3",
+            Self::Prmt => "PRMT",
+            Self::Ret => "RET",
+            Self::S2r => "S2R",
+            Self::S2ur => "S2UR",
+            Self::Shf => "SHF",
+            Self::Shfl => "SHFL",
+            Self::St => "ST",
+            Self::Stg => "STG",
+            Self::Stl => "STL",
+            Self::Sts => "STS",
+            Self::Uiadd3 => "UIADD3",
+            Self::Uimad => "UIMAD",
+            Self::Uisetp => "UISETP",
+            Self::Uldc => "ULDC",
+            Self::Ulea => "ULEA",
+            Self::Ulop3 => "ULOP3",
+            Self::Umov => "UMOV",
+            Self::Ushf => "USHF",
+            Self::Bgmma => "BGMMA",
+            Self::Bmma => "BMMA",
+            Self::Dmma => "DMMA",
+            Self::Hgmma => "HGMMA",
+            Self::Hmma => "HMMA",
+            Self::Igmma => "IGMMA",
+            Self::Imma => "IMMA",
+            Self::Omma => "OMMA",
+            Self::Qgmma => "QGMMA",
+            Self::Qmma => "QMMA",
+            Self::Ldt => "LDT",
+            Self::Ldtm => "LDTM",
+            Self::Stt => "STT",
+            Self::Sttm => "STTM",
+            Self::Ublkcp => "UBLKCP",
+            Self::Ublkpf => "UBLKPF",
+            Self::Ublkred => "UBLKRED",
+            Self::Utchmma => "UTCHMMA",
+            Self::Utcimma => "UTCIMMA",
+            Self::Utcomma => "UTCOMMA",
+            Self::Utcqmma => "UTCQMMA",
+            Self::Utmaldg => "UTMALDG",
+            Self::Utmapf => "UTMAPF",
+            Self::Utmaredg => "UTMAREDG",
+            Self::Utmastg => "UTMASTG",
+            Self::Warpgroup => "WARPGROUP",
+            Self::Warpgroupset => "WARPGROUPSET",
+            Self::Raw(raw) => raw,
         }
     }
 }
