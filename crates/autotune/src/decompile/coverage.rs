@@ -175,7 +175,7 @@ pub struct SassOpcodeCatalogEntry {
     pub locally_mapped: bool,
     pub instruction_count: usize,
     pub signature_count: usize,
-    pub signatures: Vec<String>,
+    pub signatures: Vec<SassOpcodeSignature>,
     pub source_formats: Vec<SassCoverageSourceFormat>,
     pub architectures: Vec<String>,
     pub known_sources: Vec<SassOpcodeCatalogSource>,
@@ -295,11 +295,7 @@ impl OpcodeCatalogBuilder {
             self.unsupported_count,
         );
         let coverage = SassOpcodeCoverageState::from_catalog(self.known, observed, support);
-        let signatures = self
-            .signatures
-            .into_iter()
-            .map(|signature| signature.to_string())
-            .collect::<Vec<_>>();
+        let signatures = self.signatures.into_iter().collect::<Vec<_>>();
         SassOpcodeCatalogEntry {
             opcode,
             known: self.known,
@@ -1584,7 +1580,7 @@ fn render_opcode_catalog_tsv(report: &SassCoverageReport) -> String {
             entry.locally_mapped,
             entry.instruction_count,
             entry.signature_count,
-            tsv(&entry.signatures.join(",")),
+            tsv(&display_list(&entry.signatures)),
             tsv(&display_list(&entry.source_formats)),
             tsv(&entry.architectures.join(",")),
             tsv(&display_list(&entry.known_sources)),

@@ -1522,6 +1522,12 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
             .iter()
             .any(|format| format == &SassCoverageSourceFormat::Sass)
     );
+    assert!(
+        iadd_catalog
+            .signatures
+            .iter()
+            .any(|signature| signature.opcode == SassOpcode::new("IADD"))
+    );
     let hmma_catalog = report
         .opcode_catalog
         .iter()
