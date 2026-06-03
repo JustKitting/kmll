@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
-    fmt::Write as _,
+    fmt::{self, Write as _},
     fs,
     path::{Path, PathBuf},
 };
@@ -10,8 +10,9 @@ use nn_rust_inference::runtime;
 
 use super::{
     KernelIrModule, KernelIrOpKind, KnownSassOpcode, SassAnalysisModule, SassLiftedModule,
-    SassPatternModule, SassRegionPath, analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir,
-    parse_nvidia_sass, recover_sass_patterns, render_sass_file_side_by_side,
+    SassModifier, SassOpcode, SassPatternModule, SassRegionPath, analyze_sass_ir,
+    known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
+    render_sass_file_side_by_side,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,6 +229,35 @@ impl OpcodeCatalogBuilder {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SassOpcodeSignature {
+    opcode: SassOpcode,
+    modifiers: Vec<SassModifier>,
+}
+
+impl SassOpcodeSignature {
+    fn from_instruction(instruction: &super::SassInstruction) -> Self {
+        Self {
+            opcode: SassOpcode::new(instruction.opcode.clone()),
+            modifiers: instruction
+                .modifiers
+                .iter()
+                .map(|modifier| SassModifier::parse(modifier.as_str()))
+                .collect(),
+        }
+    }
+}
+
+impl fmt::Display for SassOpcodeSignature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.opcode)?;
+        for modifier in &self.modifiers {
+            write!(f, ".{modifier}")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassUnsupportedInstruction {
     pub sass_path: PathBuf,
@@ -430,10 +460,10 @@ pub fn run_sass_coverage_scan(
 
     fs::create_dir_all(&options.output_dir)?;
     let mut files = Vec::new();
-    let mut opcode_catalog = BTreeMap::<String, OpcodeCatalogBuilder>::new();
+    let mut opcode_catalog = BTreeMap::<SassOpcode, OpcodeCatalogBuilder>::new();
     seed_known_opcode_catalog(&mut opcode_catalog);
-    let mut opcode_counts = BTreeMap::<String, usize>::new();
-    let mut opcode_signature_counts = BTreeMap::<String, usize>::new();
+    let mut opcode_counts = BTreeMap::<SassOpcode, usize>::new();
+    let mut opcode_signature_counts = BTreeMap::<SassOpcodeSignature, usize>::new();
     let mut semantic_pattern_counts = BTreeMap::<String, usize>::new();
     let mut semantic_patterns = Vec::new();
     let mut cfg_blocks = Vec::new();
@@ -460,17 +490,15 @@ pub fn run_sass_coverage_scan(
             Ok(parsed) => {
                 for function in &parsed.functions {
                     for instruction in &function.instructions {
-                        let signature =
-                            opcode_signature(&instruction.opcode, &instruction.modifiers);
-                        *opcode_counts.entry(instruction.opcode.clone()).or_default() += 1;
+                        let opcode = SassOpcode::new(instruction.opcode.clone());
+                        let signature = SassOpcodeSignature::from_instruction(instruction);
+                        *opcode_counts.entry(opcode.clone()).or_default() += 1;
                         *opcode_signature_counts
                             .entry(signature.clone())
                             .or_default() += 1;
-                        let catalog_entry = opcode_catalog
-                            .entry(instruction.opcode.clone())
-                            .or_default();
+                        let catalog_entry = opcode_catalog.entry(opcode).or_default();
                         catalog_entry.instruction_count += 1;
-                        catalog_entry.signatures.insert(signature);
+                        catalog_entry.signatures.insert(signature.to_string());
                         catalog_entry
                             .source_formats
                             .insert(source_format.to_string());
@@ -597,8 +625,8 @@ pub fn run_sass_coverage_scan(
 
     let opcode_catalog = opcode_catalog_entries(opcode_catalog);
     let opcode_probe_targets = opcode_probe_targets(&opcode_catalog);
-    let opcode_counts = sorted_counts(opcode_counts);
-    let opcode_signature_counts = sorted_counts(opcode_signature_counts);
+    let opcode_counts = sorted_opcode_counts(opcode_counts);
+    let opcode_signature_counts = sorted_opcode_signature_counts(opcode_signature_counts);
     let semantic_pattern_counts = sorted_counts(semantic_pattern_counts);
     let parsed_file_count = files
         .iter()
@@ -789,14 +817,6 @@ fn relative_sass_path(root: &Path, sass_path: &Path) -> PathBuf {
         })
 }
 
-fn opcode_signature(opcode: &str, modifiers: &[String]) -> String {
-    if modifiers.is_empty() {
-        opcode.to_string()
-    } else {
-        format!("{}.{}", opcode, modifiers.join("."))
-    }
-}
-
 fn sass_source_format(path: &Path) -> &'static str {
     let name = path
         .file_name()
@@ -811,17 +831,19 @@ fn sass_source_format(path: &Path) -> &'static str {
     }
 }
 
-fn seed_known_opcode_catalog(opcode_catalog: &mut BTreeMap<String, OpcodeCatalogBuilder>) {
+fn seed_known_opcode_catalog(opcode_catalog: &mut BTreeMap<SassOpcode, OpcodeCatalogBuilder>) {
     for known in known_sass_opcodes() {
         append_known_opcode(opcode_catalog, known);
     }
 }
 
 fn append_known_opcode(
-    opcode_catalog: &mut BTreeMap<String, OpcodeCatalogBuilder>,
+    opcode_catalog: &mut BTreeMap<SassOpcode, OpcodeCatalogBuilder>,
     known: &KnownSassOpcode,
 ) {
-    let entry = opcode_catalog.entry(known.opcode.to_string()).or_default();
+    let entry = opcode_catalog
+        .entry(SassOpcode::new(known.opcode))
+        .or_default();
     entry.known = true;
     entry.locally_mapped |= known.locally_mapped;
     entry.classes.insert(known.class.to_string());
@@ -834,11 +856,11 @@ fn append_known_opcode(
 
 fn append_opcode_catalog_lifted_ops(
     lifted: &SassLiftedModule,
-    opcode_catalog: &mut BTreeMap<String, OpcodeCatalogBuilder>,
+    opcode_catalog: &mut BTreeMap<SassOpcode, OpcodeCatalogBuilder>,
 ) {
     for function in &lifted.functions {
         for op in &function.ops {
-            let entry = opcode_catalog.entry(op.opcode.to_string()).or_default();
+            let entry = opcode_catalog.entry(op.opcode.clone()).or_default();
             if op.class.to_string() != "unsupported" {
                 entry.locally_mapped = true;
             }
@@ -850,7 +872,7 @@ fn append_opcode_catalog_lifted_ops(
 
 fn append_opcode_catalog_unsupported(
     project_ir: &KernelIrModule,
-    opcode_catalog: &mut BTreeMap<String, OpcodeCatalogBuilder>,
+    opcode_catalog: &mut BTreeMap<SassOpcode, OpcodeCatalogBuilder>,
 ) {
     for function in &project_ir.functions {
         for op in &function.ops {
@@ -858,7 +880,7 @@ fn append_opcode_catalog_unsupported(
                 continue;
             };
             opcode_catalog
-                .entry(opcode.to_string())
+                .entry(opcode.clone())
                 .or_default()
                 .unsupported_count += 1;
         }
@@ -866,11 +888,11 @@ fn append_opcode_catalog_unsupported(
 }
 
 fn opcode_catalog_entries(
-    opcode_catalog: BTreeMap<String, OpcodeCatalogBuilder>,
+    opcode_catalog: BTreeMap<SassOpcode, OpcodeCatalogBuilder>,
 ) -> Vec<SassOpcodeCatalogEntry> {
     opcode_catalog
         .into_iter()
-        .map(|(opcode, entry)| entry.into_entry(opcode))
+        .map(|(opcode, entry)| entry.into_entry(opcode.to_string()))
         .collect()
 }
 
@@ -1215,6 +1237,26 @@ fn sorted_counts(counts: BTreeMap<String, usize>) -> Vec<SassOpcodeCount> {
     counts
 }
 
+fn sorted_opcode_counts(counts: BTreeMap<SassOpcode, usize>) -> Vec<SassOpcodeCount> {
+    sorted_counts(
+        counts
+            .into_iter()
+            .map(|(opcode, count)| (opcode.to_string(), count))
+            .collect(),
+    )
+}
+
+fn sorted_opcode_signature_counts(
+    counts: BTreeMap<SassOpcodeSignature, usize>,
+) -> Vec<SassOpcodeCount> {
+    sorted_counts(
+        counts
+            .into_iter()
+            .map(|(signature, count)| (signature.to_string(), count))
+            .collect(),
+    )
+}
+
 fn write_coverage_reports(report: &SassCoverageReport) -> Result<(), Box<dyn Error>> {
     fs::write(
         &report.summary_path,
@@ -1413,11 +1455,13 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
     if !report.unsupported_instructions.is_empty() {
         writeln!(out).expect("write to string");
         writeln!(out, "unsupported_by_opcode").expect("write to string");
-        let mut by_opcode = BTreeMap::<String, usize>::new();
+        let mut by_opcode = BTreeMap::<SassOpcode, usize>::new();
         for instruction in &report.unsupported_instructions {
-            *by_opcode.entry(instruction.opcode.clone()).or_default() += 1;
+            *by_opcode
+                .entry(SassOpcode::new(instruction.opcode.clone()))
+                .or_default() += 1;
         }
-        for count in sorted_counts(by_opcode) {
+        for count in sorted_opcode_counts(by_opcode) {
             writeln!(out, "{}\t{}", count.opcode, count.count).expect("write to string");
         }
     }

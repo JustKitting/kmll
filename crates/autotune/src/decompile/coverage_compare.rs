@@ -7,7 +7,8 @@ use std::{
 };
 
 use super::{
-    SassCoverageOptions, SassCoverageReport, SassOpcodeCatalogEntry, run_sass_coverage_scan,
+    SassCoverageOptions, SassCoverageReport, SassOpcode, SassOpcodeCatalogEntry,
+    run_sass_coverage_scan,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,7 +125,7 @@ fn opcode_deltas(
 ) -> Vec<SassCoverageOpcodeDelta> {
     let baseline_catalog = catalog_by_opcode(baseline);
     let candidate_catalog = catalog_by_opcode(candidate);
-    let mut opcodes = BTreeSet::<String>::new();
+    let mut opcodes = BTreeSet::<SassOpcode>::new();
     opcodes.extend(baseline_catalog.keys().cloned());
     opcodes.extend(candidate_catalog.keys().cloned());
 
@@ -135,7 +136,7 @@ fn opcode_deltas(
             let candidate = candidate_catalog.get(&opcode);
             let change = opcode_change(baseline, candidate)?;
             Some(SassCoverageOpcodeDelta {
-                opcode,
+                opcode: opcode.to_string(),
                 change: change.to_string(),
                 baseline_known: catalog_known(baseline),
                 candidate_known: catalog_known(candidate),
@@ -162,7 +163,12 @@ fn resolved_probe_targets(
         .filter(|delta| {
             delta.baseline_known && !delta.baseline_observed && delta.candidate_observed
         })
-        .map(|delta| probe_target_delta(delta, candidate_catalog.get(&delta.opcode)))
+        .map(|delta| {
+            probe_target_delta(
+                delta,
+                candidate_catalog.get(&SassOpcode::new(delta.opcode.clone())),
+            )
+        })
         .collect()
 }
 
@@ -176,7 +182,12 @@ fn new_probe_targets(
         .filter(|delta| {
             delta.candidate_known && !delta.candidate_observed && delta.baseline_observed
         })
-        .map(|delta| probe_target_delta(delta, candidate_catalog.get(&delta.opcode)))
+        .map(|delta| {
+            probe_target_delta(
+                delta,
+                candidate_catalog.get(&SassOpcode::new(delta.opcode.clone())),
+            )
+        })
         .collect()
 }
 
@@ -201,11 +212,11 @@ fn probe_target_delta(
     }
 }
 
-fn catalog_by_opcode(report: &SassCoverageReport) -> BTreeMap<String, &SassOpcodeCatalogEntry> {
+fn catalog_by_opcode(report: &SassCoverageReport) -> BTreeMap<SassOpcode, &SassOpcodeCatalogEntry> {
     report
         .opcode_catalog
         .iter()
-        .map(|entry| (entry.opcode.clone(), entry))
+        .map(|entry| (SassOpcode::new(entry.opcode.clone()), entry))
         .collect()
 }
 
