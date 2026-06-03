@@ -1,13 +1,23 @@
-use std::{cmp::Ordering, collections::HashSet};
+use std::{
+    cmp::Ordering,
+    collections::HashSet,
+    fmt::{self, Write as _},
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use nn_rust_profiling::{
     CudaLaunchSpec, NumericKind, OperationKind, OperationRoute, TensorTypeSpec, TypedOperationSpec,
 };
+use serde_json::{Value, json};
 
-use crate::layout::{
-    ColumnMajor, GemmKernelPlan, MatvecKernelPlan, RowMajor, RowMajorWarpRowMatvecPlan,
-    RowMajorWarpRows2MatvecPlan, RowMajorWarpRows4MatvecPlan, RowMajorWarpRows8MatvecPlan,
-    TiledGemm16Plan,
+use crate::{
+    layout::{
+        ColumnMajor, GemmKernelPlan, MatvecKernelPlan, RowMajor, RowMajorWarpRowMatvecPlan,
+        RowMajorWarpRows2MatvecPlan, RowMajorWarpRows4MatvecPlan, RowMajorWarpRows8MatvecPlan,
+        TiledGemm16Plan,
+    },
+    runtime,
 };
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -182,6 +192,185 @@ impl KernelCandidateMetadata {
             operation,
             score: None,
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum KernelGenerationError {
+    UnsupportedCandidate {
+        family: String,
+        generator: &'static str,
+    },
+    MissingTransform {
+        family: String,
+        transform: &'static str,
+    },
+    Io(io::Error),
+    Json(serde_json::Error),
+}
+
+impl fmt::Display for KernelGenerationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedCandidate { family, generator } => {
+                write!(
+                    f,
+                    "candidate family {family:?} is not supported by generator {generator}"
+                )
+            }
+            Self::MissingTransform { family, transform } => {
+                write!(
+                    f,
+                    "candidate family {family:?} is missing required {transform} transform"
+                )
+            }
+            Self::Io(error) => write!(f, "kernel artifact I/O failed: {error}"),
+            Self::Json(error) => write!(f, "kernel artifact manifest JSON failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for KernelGenerationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Json(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for KernelGenerationError {
+    fn from(value: io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+impl From<serde_json::Error> for KernelGenerationError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Json(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedKernelSource {
+    pub symbol: String,
+    pub source: String,
+}
+
+pub trait KernelSourceGenerator {
+    fn name(&self) -> &'static str;
+    fn source_for(
+        &self,
+        candidate: &KernelCandidateMetadata,
+    ) -> Result<GeneratedKernelSource, KernelGenerationError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelArtifactStore {
+    root: PathBuf,
+}
+
+impl KernelArtifactStore {
+    pub fn managed() -> Self {
+        Self::new(runtime::default_artifact_dir().join("generated"))
+    }
+
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn paths_for(&self, candidate: &KernelCandidateMetadata) -> KernelArtifactPaths {
+        let directory = self
+            .root
+            .join(sanitize_path_component(&candidate.family))
+            .join(candidate.artifact_key().hex());
+        KernelArtifactPaths {
+            directory: directory.clone(),
+            source_path: directory.join("kernel.rs"),
+            manifest_path: directory.join("manifest.json"),
+        }
+    }
+
+    pub fn emit<G>(
+        &self,
+        candidate: &KernelCandidateMetadata,
+        generator: &G,
+    ) -> Result<EmittedKernelArtifact, KernelGenerationError>
+    where
+        G: KernelSourceGenerator,
+    {
+        let generated = generator.source_for(candidate)?;
+        let paths = self.paths_for(candidate);
+        fs::create_dir_all(&paths.directory)?;
+        fs::write(&paths.source_path, generated.source.as_bytes())?;
+        let manifest = generated_kernel_manifest(candidate, generator.name(), &generated);
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+        fs::write(&paths.manifest_path, &manifest_bytes)?;
+        Ok(EmittedKernelArtifact {
+            artifact_key: candidate.artifact_key(),
+            symbol: generated.symbol,
+            paths,
+            source_bytes: generated.source.len(),
+            manifest_bytes: manifest_bytes.len(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelArtifactPaths {
+    pub directory: PathBuf,
+    pub source_path: PathBuf,
+    pub manifest_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmittedKernelArtifact {
+    pub artifact_key: KernelMetadataKey,
+    pub symbol: String,
+    pub paths: KernelArtifactPaths,
+    pub source_bytes: usize,
+    pub manifest_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GemmRustCudaGenerator;
+
+impl KernelSourceGenerator for GemmRustCudaGenerator {
+    fn name(&self) -> &'static str {
+        "gemm-rust-cuda-source-generator"
+    }
+
+    fn source_for(
+        &self,
+        candidate: &KernelCandidateMetadata,
+    ) -> Result<GeneratedKernelSource, KernelGenerationError> {
+        if candidate.family != "gemm-f32-bf16-row-col-row" {
+            return Err(KernelGenerationError::UnsupportedCandidate {
+                family: candidate.family.clone(),
+                generator: self.name(),
+            });
+        }
+        let tile = schedule_gemm_tile(&candidate.schedule).ok_or_else(|| {
+            KernelGenerationError::MissingTransform {
+                family: candidate.family.clone(),
+                transform: "TileGemm",
+            }
+        })?;
+        let symbol = match &candidate.generated.materialization {
+            KernelMaterialization::Existing { symbol } => (*symbol).to_string(),
+            KernelMaterialization::DeferredGenerated { symbol_hint, .. } => {
+                sanitize_identifier(symbol_hint)
+            }
+        };
+        Ok(GeneratedKernelSource {
+            symbol: symbol.clone(),
+            source: render_f32_bf16_gemm_source(&symbol, tile),
+        })
     }
 }
 
@@ -667,6 +856,334 @@ fn schedule_gemm_tile(schedule: &KernelSchedule) -> Option<GemmTileShape> {
         })
 }
 
+fn generated_kernel_manifest(
+    candidate: &KernelCandidateMetadata,
+    generator: &'static str,
+    source: &GeneratedKernelSource,
+) -> Value {
+    json!({
+        "schema_version": 1,
+        "artifact_key": candidate.artifact_key().hex(),
+        "family": &candidate.family,
+        "generator": generator,
+        "source_symbol": &source.symbol,
+        "materialization": materialization_json(&candidate.generated.materialization),
+        "launch": launch_json(&candidate.launch),
+        "operation": operation_json(&candidate.operation),
+        "axes": candidate.axes.iter().map(axis_json).collect::<Vec<_>>(),
+        "schedule": candidate
+            .schedule
+            .transforms
+            .iter()
+            .map(transform_json)
+            .collect::<Vec<_>>(),
+        "score": candidate.score.map(score_json),
+    })
+}
+
+fn materialization_json(materialization: &KernelMaterialization) -> Value {
+    match materialization {
+        KernelMaterialization::Existing { symbol } => {
+            json!({"kind": "existing", "symbol": symbol})
+        }
+        KernelMaterialization::DeferredGenerated {
+            symbol_hint,
+            reason,
+        } => json!({
+            "kind": "deferred-generated",
+            "symbol_hint": symbol_hint,
+            "reason": reason,
+        }),
+    }
+}
+
+fn launch_json(launch: &CudaLaunchSpec) -> Value {
+    json!({
+        "kernel": &launch.kernel,
+        "grid_dim": [launch.grid_dim.x, launch.grid_dim.y, launch.grid_dim.z],
+        "block_dim": [launch.block_dim.x, launch.block_dim.y, launch.block_dim.z],
+        "shared_mem_bytes": launch.shared_mem_bytes,
+    })
+}
+
+fn operation_json(operation: &TypedOperationSpec) -> Value {
+    json!({
+        "name": &operation.name,
+        "kind": operation.kind.label(),
+        "route": operation.route.label(),
+        "inputs": operation.inputs.iter().map(tensor_json).collect::<Vec<_>>(),
+        "outputs": operation.outputs.iter().map(tensor_json).collect::<Vec<_>>(),
+    })
+}
+
+fn tensor_json(tensor: &TensorTypeSpec) -> Value {
+    json!({
+        "dtype": tensor.dtype.label(),
+        "dtype_bits": tensor.dtype.bits(),
+        "accumulator": tensor.accumulator.label(),
+        "accumulator_bits": tensor.accumulator.bits(),
+        "shape": &tensor.shape,
+        "layout": &tensor.layout,
+    })
+}
+
+fn axis_json(axis: &KernelAxis) -> Value {
+    json!({
+        "id": axis.id,
+        "name": axis.name,
+        "extent": axis.extent,
+        "kind": match axis.kind {
+            KernelAxisKind::Spatial => "spatial",
+            KernelAxisKind::Reduction => "reduction",
+        },
+        "stride": axis.stride,
+    })
+}
+
+fn transform_json(transform: &ScheduleTransform) -> Value {
+    match transform {
+        ScheduleTransform::Split { axis, factor } => {
+            json!({"op": "split", "axis": axis, "factor": factor})
+        }
+        ScheduleTransform::Unroll { axis, factor } => {
+            json!({"op": "unroll", "axis": axis, "factor": factor})
+        }
+        ScheduleTransform::LocalTile { axis, factor } => {
+            json!({"op": "local-tile", "axis": axis, "factor": factor})
+        }
+        ScheduleTransform::ThreadGroup { axis, factor } => {
+            json!({"op": "thread-group", "axis": axis, "factor": factor})
+        }
+        ScheduleTransform::TileGemm { m, n, k } => {
+            json!({"op": "tile-gemm", "m": m, "n": n, "k": k})
+        }
+        ScheduleTransform::StrideOrder { axes } => {
+            json!({"op": "stride-order", "axes": axes})
+        }
+    }
+}
+
+fn score_json(score: SearchScore) -> Value {
+    json!({
+        "value": score.value,
+        "source": match score.source {
+            SearchScoreSource::Heuristic => "heuristic",
+            SearchScoreSource::Measured => "measured",
+        },
+    })
+}
+
+fn render_f32_bf16_gemm_source(symbol: &str, tile: GemmTileShape) -> String {
+    let mut source = String::new();
+    writeln!(
+        source,
+        "use cuda_device::{{DisjointSlice, SharedArray, kernel, thread}};"
+    )
+    .expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "use crate::dtypes::{{AccumulateToF32, Bf16}};").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "const TILE_M: usize = {};", tile.m).expect("write to string");
+    writeln!(source, "const TILE_N: usize = {};", tile.n).expect("write to string");
+    writeln!(source, "const TILE_K: usize = {};", tile.k).expect("write to string");
+    writeln!(source, "const TILE_A_ELEMS: usize = TILE_M * TILE_K;").expect("write to string");
+    writeln!(source, "const TILE_B_ELEMS: usize = TILE_K * TILE_N;").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "#[kernel]").expect("write to string");
+    writeln!(source, "pub fn {symbol}(").expect("write to string");
+    writeln!(source, "    a: &[f32],").expect("write to string");
+    writeln!(source, "    b: &[Bf16],").expect("write to string");
+    writeln!(source, "    m: u32,").expect("write to string");
+    writeln!(source, "    n: u32,").expect("write to string");
+    writeln!(source, "    k: u32,").expect("write to string");
+    writeln!(source, "    a_row_stride: u32,").expect("write to string");
+    writeln!(source, "    a_col_stride: u32,").expect("write to string");
+    writeln!(source, "    b_row_stride: u32,").expect("write to string");
+    writeln!(source, "    b_col_stride: u32,").expect("write to string");
+    writeln!(source, "    c_row_stride: u32,").expect("write to string");
+    writeln!(source, "    c_col_stride: u32,").expect("write to string");
+    writeln!(source, "    alpha: f32,").expect("write to string");
+    writeln!(source, "    beta: f32,").expect("write to string");
+    writeln!(source, "    mut c: DisjointSlice<f32>,").expect("write to string");
+    writeln!(source, ") {{").expect("write to string");
+    writeln!(
+        source,
+        "    static mut TILE_A: SharedArray<f32, TILE_A_ELEMS> = SharedArray::UNINIT;"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "    static mut TILE_B: SharedArray<f32, TILE_B_ELEMS> = SharedArray::UNINIT;"
+    )
+    .expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "    let tx = thread::threadIdx_x() as usize;").expect("write to string");
+    writeln!(source, "    let ty = thread::threadIdx_y() as usize;").expect("write to string");
+    writeln!(source, "    if tx >= TILE_N || ty >= TILE_M {{").expect("write to string");
+    writeln!(source, "        return;").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(
+        source,
+        "    let row = thread::blockIdx_y() as usize * TILE_M + ty;"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "    let col = thread::blockIdx_x() as usize * TILE_N + tx;"
+    )
+    .expect("write to string");
+    writeln!(source, "    let tid = ty * TILE_N + tx;").expect("write to string");
+    writeln!(source, "    let thread_count = TILE_M * TILE_N;").expect("write to string");
+    writeln!(source, "    let m = m as usize;").expect("write to string");
+    writeln!(source, "    let n = n as usize;").expect("write to string");
+    writeln!(source, "    let k = k as usize;").expect("write to string");
+    writeln!(source, "    let a_row_stride = a_row_stride as usize;").expect("write to string");
+    writeln!(source, "    let a_col_stride = a_col_stride as usize;").expect("write to string");
+    writeln!(source, "    let b_row_stride = b_row_stride as usize;").expect("write to string");
+    writeln!(source, "    let b_col_stride = b_col_stride as usize;").expect("write to string");
+    writeln!(source, "    let c_row_stride = c_row_stride as usize;").expect("write to string");
+    writeln!(source, "    let c_col_stride = c_col_stride as usize;").expect("write to string");
+    writeln!(source, "    let mut acc = 0.0_f32;").expect("write to string");
+    writeln!(source, "    let mut k_base = 0;").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "    while k_base < k {{").expect("write to string");
+    writeln!(source, "        let mut load = tid;").expect("write to string");
+    writeln!(source, "        while load < TILE_A_ELEMS {{").expect("write to string");
+    writeln!(source, "            let tile_row = load / TILE_K;").expect("write to string");
+    writeln!(source, "            let tile_col = load % TILE_K;").expect("write to string");
+    writeln!(
+        source,
+        "            let global_row = thread::blockIdx_y() as usize * TILE_M + tile_row;"
+    )
+    .expect("write to string");
+    writeln!(source, "            let global_col = k_base + tile_col;").expect("write to string");
+    writeln!(source, "            unsafe {{").expect("write to string");
+    writeln!(
+        source,
+        "                TILE_A[load] = if global_row < m && global_col < k {{"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "                    a[global_row * a_row_stride + global_col * a_col_stride]"
+    )
+    .expect("write to string");
+    writeln!(source, "                }} else {{").expect("write to string");
+    writeln!(source, "                    0.0").expect("write to string");
+    writeln!(source, "                }};").expect("write to string");
+    writeln!(source, "            }}").expect("write to string");
+    writeln!(source, "            load += thread_count;").expect("write to string");
+    writeln!(source, "        }}").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "        load = tid;").expect("write to string");
+    writeln!(source, "        while load < TILE_B_ELEMS {{").expect("write to string");
+    writeln!(source, "            let tile_row = load / TILE_N;").expect("write to string");
+    writeln!(source, "            let tile_col = load % TILE_N;").expect("write to string");
+    writeln!(source, "            let global_row = k_base + tile_row;").expect("write to string");
+    writeln!(
+        source,
+        "            let global_col = thread::blockIdx_x() as usize * TILE_N + tile_col;"
+    )
+    .expect("write to string");
+    writeln!(source, "            unsafe {{").expect("write to string");
+    writeln!(
+        source,
+        "                TILE_B[load] = if global_row < k && global_col < n {{"
+    )
+    .expect("write to string");
+    writeln!(source, "                    b[global_row * b_row_stride + global_col * b_col_stride].to_f32_accumulator()").expect("write to string");
+    writeln!(source, "                }} else {{").expect("write to string");
+    writeln!(source, "                    0.0").expect("write to string");
+    writeln!(source, "                }};").expect("write to string");
+    writeln!(source, "            }}").expect("write to string");
+    writeln!(source, "            load += thread_count;").expect("write to string");
+    writeln!(source, "        }}").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "        thread::sync_threads();").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "        unsafe {{").expect("write to string");
+    writeln!(source, "            let mut kk = 0;").expect("write to string");
+    writeln!(source, "            while kk < TILE_K {{").expect("write to string");
+    writeln!(
+        source,
+        "                acc += TILE_A[ty * TILE_K + kk] * TILE_B[kk * TILE_N + tx];"
+    )
+    .expect("write to string");
+    writeln!(source, "                kk += 1;").expect("write to string");
+    writeln!(source, "            }}").expect("write to string");
+    writeln!(source, "        }}").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "        thread::sync_threads();").expect("write to string");
+    writeln!(source, "        k_base += TILE_K;").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "    if row < m && col < n {{").expect("write to string");
+    writeln!(
+        source,
+        "        let c_offset = row * c_row_stride + col * c_col_stride;"
+    )
+    .expect("write to string");
+    writeln!(source, "        unsafe {{").expect("write to string");
+    writeln!(
+        source,
+        "            let c_elem = c.get_unchecked_mut(c_offset);"
+    )
+    .expect("write to string");
+    writeln!(source, "            let current = *c_elem;").expect("write to string");
+    writeln!(
+        source,
+        "            *c_elem = alpha * acc + beta * current;"
+    )
+    .expect("write to string");
+    writeln!(source, "        }}").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source, "}}").expect("write to string");
+    source
+}
+
+fn sanitize_path_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "kernel".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn sanitize_identifier(value: &str) -> String {
+    let mut sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        sanitized.push_str("kernel");
+    }
+    if sanitized
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_digit())
+    {
+        sanitized.insert_str(0, "k_");
+    }
+    sanitized
+}
+
 fn metadata_key(
     family: &str,
     axes: &[KernelAxis],
@@ -830,6 +1347,114 @@ mod tests {
             KernelMaterialization::DeferredGenerated { .. }
         ));
         assert_eq!(deferred.generated.generator, "tiled-gemm-generator");
+    }
+
+    #[test]
+    fn gemm_generator_renders_tile_specific_source_on_demand() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
+        let generated = GemmRustCudaGenerator
+            .source_for(&candidate)
+            .expect("GEMM generator should render deferred tile source");
+
+        assert_eq!(generated.symbol, "gemm_f32_bf16_tile_16x32x16");
+        assert!(generated.source.contains("#[kernel]"));
+        assert!(
+            generated
+                .source
+                .contains("pub fn gemm_f32_bf16_tile_16x32x16(")
+        );
+        assert!(generated.source.contains("const TILE_M: usize = 16;"));
+        assert!(generated.source.contains("const TILE_N: usize = 32;"));
+        assert!(generated.source.contains("const TILE_K: usize = 16;"));
+        assert!(generated.source.contains("while load < TILE_A_ELEMS"));
+        assert!(generated.source.contains("while load < TILE_B_ELEMS"));
+    }
+
+    #[test]
+    fn artifact_store_writes_source_and_manifest_under_managed_style_root() {
+        let root = runtime::default_artifact_dir()
+            .join("test-generated")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("system clock should be after unix epoch")
+                    .as_nanos()
+            ));
+        let store = KernelArtifactStore::new(&root);
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
+
+        let emitted = store
+            .emit(&candidate, &GemmRustCudaGenerator)
+            .expect("artifact store should write generated source and manifest");
+
+        assert_eq!(emitted.artifact_key, candidate.artifact_key());
+        assert_eq!(emitted.symbol, "gemm_f32_bf16_tile_16x32x16");
+        assert!(emitted.paths.directory.starts_with(store.root()));
+        assert!(emitted.paths.source_path.starts_with(store.root()));
+        assert!(emitted.paths.manifest_path.starts_with(store.root()));
+        assert!(emitted.source_bytes > 0);
+        assert!(emitted.manifest_bytes > 0);
+
+        let source = fs::read_to_string(&emitted.paths.source_path)
+            .expect("generated source should be readable");
+        assert!(source.contains("pub fn gemm_f32_bf16_tile_16x32x16("));
+
+        let manifest_text = fs::read_to_string(&emitted.paths.manifest_path)
+            .expect("generated manifest should be readable");
+        let manifest: Value =
+            serde_json::from_str(&manifest_text).expect("manifest should be valid JSON");
+        let artifact_key = candidate.artifact_key().hex();
+        assert_eq!(
+            manifest["artifact_key"].as_str(),
+            Some(artifact_key.as_str())
+        );
+        assert_eq!(
+            manifest["family"].as_str(),
+            Some("gemm-f32-bf16-row-col-row")
+        );
+        assert_eq!(
+            manifest["source_symbol"].as_str(),
+            Some("gemm_f32_bf16_tile_16x32x16")
+        );
+        assert_eq!(
+            manifest["materialization"]["kind"].as_str(),
+            Some("deferred-generated")
+        );
+        assert_eq!(manifest["schedule"][0]["op"].as_str(), Some("tile-gemm"));
+        assert_eq!(manifest["schedule"][0]["n"].as_u64(), Some(32));
+
+        fs::remove_dir_all(&root)
+            .expect("test-generated kernel artifact directory should clean up");
+    }
+
+    #[test]
+    fn gemm_search_can_rank_deferred_generated_descriptors_when_allowed() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let result = beam_search_metadata(
+            &problem,
+            BeamSearchConfig {
+                beam_width: 1,
+                max_depth: 1,
+                require_launchable: false,
+            },
+        );
+        let best = result
+            .best
+            .expect("GEMM search should keep a generated descriptor when allowed");
+
+        assert_eq!(
+            schedule_gemm_tile(&best.schedule),
+            Some(GemmTileShape::new(16, 32, 16))
+        );
+        assert!(!best.is_launchable());
+        assert!(matches!(
+            best.generated.materialization,
+            KernelMaterialization::DeferredGenerated { .. }
+        ));
     }
 
     #[test]
