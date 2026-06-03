@@ -757,7 +757,7 @@ fn semantic_patterns_recover_bf16_widen_and_warp_reduce() {
             ref src,
             ref dst,
             ..
-        } if src == "R23" && dst == "R23"
+        } if src == &reg("R23") && dst == &reg("R23")
     )));
     assert!(flat.iter().any(|pattern| matches!(
         pattern.kind,
@@ -765,7 +765,7 @@ fn semantic_patterns_recover_bf16_widen_and_warp_reduce() {
             ref mul_dst,
             ref add_dst,
             ..
-        } if mul_dst == "R23" && add_dst == "R22"
+        } if mul_dst == &reg("R23") && add_dst == &reg("R22")
     )));
     assert!(flat.iter().any(|pattern| matches!(
         pattern.kind,
@@ -774,7 +774,9 @@ fn semantic_patterns_recover_bf16_widen_and_warp_reduce() {
             ref output,
             ref offsets,
             ..
-        } if input == "R22" && output == "R7" && offsets == &vec!["0x10".to_string(), "0x8".to_string()]
+        } if input == &scalar("R22")
+            && output == &reg("R7")
+            && offsets.as_slice() == [scalar("0x10"), scalar("0x8")]
     )));
     let text = patterns.to_text();
     assert!(text.contains("bf16-widen-bits"));
@@ -807,12 +809,18 @@ interleaved_lea:
         .filter_map(|pattern| match &pattern.kind {
             SassSemanticPatternKind::AddressPair {
                 low_dst, high_dst, ..
-            } => Some((low_dst.as_str(), high_dst.as_str())),
+            } => Some((low_dst.to_string(), high_dst.to_string())),
             _ => None,
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(address_pairs, [("R4", "R5"), ("R2", "R3")]);
+    assert_eq!(
+        address_pairs,
+        [
+            ("R4".to_string(), "R5".to_string()),
+            ("R2".to_string(), "R3".to_string())
+        ]
+    );
 }
 
 #[test]

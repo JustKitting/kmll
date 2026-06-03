@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, fmt::Write as _};
+use std::{
+    collections::BTreeSet,
+    fmt::{self, Write as _},
+};
 
 use super::{
     ImmediateValue, KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, RegisterRef,
@@ -66,32 +69,32 @@ impl SassSemanticPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum SassSemanticPatternKind {
     Bf16WidenBits {
-        src: String,
-        dst: String,
+        src: RegisterRef,
+        dst: RegisterRef,
         producer: Option<String>,
         consumer: Option<String>,
     },
     F32MulAddPair {
-        mul_dst: String,
-        mul_lhs: String,
-        mul_rhs: String,
-        add_dst: String,
-        add_other: String,
+        mul_dst: RegisterRef,
+        mul_lhs: ScalarOperand,
+        mul_rhs: ScalarOperand,
+        add_dst: RegisterRef,
+        add_other: ScalarOperand,
     },
     AddressPair {
-        low_dst: String,
-        high_dst: String,
-        low_inputs: Vec<String>,
-        high_inputs: Vec<String>,
+        low_dst: RegisterRef,
+        high_dst: RegisterRef,
+        low_inputs: Vec<ScalarOperand>,
+        high_inputs: Vec<ScalarOperand>,
     },
     WarpReduceSum {
-        input: String,
-        output: String,
-        offsets: Vec<String>,
-        mask: Option<String>,
+        input: ScalarOperand,
+        output: RegisterRef,
+        offsets: Vec<ScalarOperand>,
+        mask: Option<ScalarOperand>,
     },
 }
 
@@ -102,6 +105,63 @@ impl SassSemanticPatternKind {
             Self::F32MulAddPair { .. } => "f32-mul-add-pair",
             Self::AddressPair { .. } => "address-pair",
             Self::WarpReduceSum { .. } => "warp-reduce-sum",
+        }
+    }
+}
+
+impl fmt::Debug for SassSemanticPatternKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bf16WidenBits {
+                src,
+                dst,
+                producer,
+                consumer,
+            } => f
+                .debug_struct("Bf16WidenBits")
+                .field("src", &src.to_string())
+                .field("dst", &dst.to_string())
+                .field("producer", producer)
+                .field("consumer", consumer)
+                .finish(),
+            Self::F32MulAddPair {
+                mul_dst,
+                mul_lhs,
+                mul_rhs,
+                add_dst,
+                add_other,
+            } => f
+                .debug_struct("F32MulAddPair")
+                .field("mul_dst", &mul_dst.to_string())
+                .field("mul_lhs", &mul_lhs.to_string())
+                .field("mul_rhs", &mul_rhs.to_string())
+                .field("add_dst", &add_dst.to_string())
+                .field("add_other", &add_other.to_string())
+                .finish(),
+            Self::AddressPair {
+                low_dst,
+                high_dst,
+                low_inputs,
+                high_inputs,
+            } => f
+                .debug_struct("AddressPair")
+                .field("low_dst", &low_dst.to_string())
+                .field("high_dst", &high_dst.to_string())
+                .field("low_inputs", &display_vec(low_inputs))
+                .field("high_inputs", &display_vec(high_inputs))
+                .finish(),
+            Self::WarpReduceSum {
+                input,
+                output,
+                offsets,
+                mask,
+            } => f
+                .debug_struct("WarpReduceSum")
+                .field("input", &input.to_string())
+                .field("output", &output.to_string())
+                .field("offsets", &display_vec(offsets))
+                .field("mask", &mask.as_ref().map(ToString::to_string))
+                .finish(),
         }
     }
 }
@@ -191,8 +251,8 @@ fn recover_bf16_widen_bits(function: &KernelIrFunction, patterns: &mut Vec<SassS
             end_address: op.address,
             source_addresses: vec![op.address],
             kind: SassSemanticPatternKind::Bf16WidenBits {
-                src: a.to_string(),
-                dst: dst.to_string(),
+                src: src_register.clone(),
+                dst: dst.clone(),
                 producer,
                 consumer,
             },
@@ -221,11 +281,11 @@ fn recover_f32_mul_add_pairs(function: &KernelIrFunction, patterns: &mut Vec<Sas
             end_address: add.address,
             source_addresses: vec![op.address, add.address],
             kind: SassSemanticPatternKind::F32MulAddPair {
-                mul_dst: dst.to_string(),
-                mul_lhs: lhs.to_string(),
-                mul_rhs: rhs.to_string(),
-                add_dst: add_dst.to_string(),
-                add_other: add_other.to_string(),
+                mul_dst: dst.clone(),
+                mul_lhs: lhs.clone(),
+                mul_rhs: rhs.clone(),
+                add_dst: add_dst.clone(),
+                add_other,
             },
             confidence: SassPatternConfidence::HeuristicDataflow,
         });
@@ -274,10 +334,10 @@ fn recover_address_pairs(function: &KernelIrFunction, patterns: &mut Vec<SassSem
             end_address: high.address,
             source_addresses: vec![low.address, high.address],
             kind: SassSemanticPatternKind::AddressPair {
-                low_dst: low_dst.to_string(),
-                high_dst: high_dst.to_string(),
-                low_inputs: low_inputs.iter().map(ToString::to_string).collect(),
-                high_inputs: high_inputs.iter().map(ToString::to_string).collect(),
+                low_dst: low_dst.clone(),
+                high_dst: high_dst.clone(),
+                low_inputs: low_inputs.clone(),
+                high_inputs: high_inputs.clone(),
             },
             confidence: SassPatternConfidence::ExactOpcodeSequence,
         });
@@ -422,10 +482,10 @@ fn recover_warp_reduce_sum(function: &KernelIrFunction, patterns: &mut Vec<SassS
     let mask = masks
         .iter()
         .all(|mask| mask == first_mask)
-        .then(|| first_mask.to_string());
+        .then(|| first_mask.clone());
     let offsets = pairs
         .iter()
-        .map(|(_, _, offset)| offset.to_string())
+        .map(|(_, _, offset)| offset.clone())
         .collect::<Vec<_>>();
     let source_addresses = pairs
         .iter()
@@ -437,8 +497,8 @@ fn recover_warp_reduce_sum(function: &KernelIrFunction, patterns: &mut Vec<SassS
         end_address: last_add.address,
         source_addresses,
         kind: SassSemanticPatternKind::WarpReduceSum {
-            input: src.to_string(),
-            output: output.to_string(),
+            input: src.clone(),
+            output: output.clone(),
             offsets,
             mask,
         },
@@ -453,6 +513,10 @@ fn format_addresses(addresses: &[u64]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{body}]")
+}
+
+fn display_vec<T: fmt::Display>(values: &[T]) -> Vec<String> {
+    values.iter().map(ToString::to_string).collect()
 }
 
 fn fadd_consumes<'a>(
