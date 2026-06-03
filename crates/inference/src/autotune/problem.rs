@@ -33,8 +33,44 @@ impl InferenceKernelAutoOptimize {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct CachedInferenceKernelAutoOptimize {
+    pub optimization: InferenceKernelAutoOptimize,
+    pub cache_key: KernelOptimizationCacheKey,
+    pub cache_status: SelectionCacheStatus,
+    pub cache_write: Option<EmittedKernelOptimizationSelection>,
+}
+
+impl CachedInferenceKernelAutoOptimize {
+    pub fn result(&self) -> &AutoOptimizeResult {
+        &self.optimization.result
+    }
+
+    pub fn best_candidate(&self) -> Option<&KernelCandidateMetadata> {
+        self.optimization.best_candidate()
+    }
+
+    pub fn auto_optimization_report(
+        &self,
+        config: AutoOptimizeConfig,
+    ) -> AutoOptimizationSearchReport {
+        self.optimization.auto_optimization_report(config)
+    }
+
+    pub fn render_best_source(&self) -> Result<GeneratedKernelSource, KernelGenerationError> {
+        self.optimization.render_best_source()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct GeneratedInferenceKernelSource {
     pub optimization: InferenceKernelAutoOptimize,
+    pub candidate: KernelCandidateMetadata,
+    pub source: GeneratedKernelSource,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CachedGeneratedInferenceKernelSource {
+    pub optimization: CachedInferenceKernelAutoOptimize,
     pub candidate: KernelCandidateMetadata,
     pub source: GeneratedKernelSource,
 }
@@ -71,6 +107,51 @@ where
     })
 }
 
+pub fn auto_optimize_inference_kernel_with_selection_cache(
+    store: &KernelArtifactStore,
+    operation: &TypedOperationSpec,
+    config: AutoOptimizeConfig,
+    score_namespace: &str,
+) -> Result<CachedInferenceKernelAutoOptimize, KernelGenerationError> {
+    auto_optimize_inference_kernel_with_selection_cache_scorer(
+        store,
+        operation,
+        config,
+        score_namespace,
+        |candidate, problem| problem.score(candidate),
+    )
+}
+
+pub fn auto_optimize_inference_kernel_with_selection_cache_scorer<F>(
+    store: &KernelArtifactStore,
+    operation: &TypedOperationSpec,
+    config: AutoOptimizeConfig,
+    score_namespace: &str,
+    mut score_candidate: F,
+) -> Result<CachedInferenceKernelAutoOptimize, KernelGenerationError>
+where
+    F: FnMut(&KernelCandidateMetadata, &InferenceKernelOptimizationProblem) -> Option<SearchScore>,
+{
+    let problem = InferenceKernelOptimizationProblem::from_operation(operation)?;
+    let cached = auto_optimize_metadata_with_selection_cache(
+        store,
+        &problem,
+        config,
+        score_namespace,
+        |candidate| score_candidate(candidate, &problem),
+    )?;
+    Ok(CachedInferenceKernelAutoOptimize {
+        optimization: InferenceKernelAutoOptimize {
+            operation: operation.clone(),
+            problem,
+            result: cached.result,
+        },
+        cache_key: cached.cache_key,
+        cache_status: cached.cache_status,
+        cache_write: cached.cache_write,
+    })
+}
+
 pub fn generate_inference_kernel_source(
     operation: &TypedOperationSpec,
     config: AutoOptimizeConfig,
@@ -84,6 +165,28 @@ pub fn generate_inference_kernel_source(
     })?;
     let source = InferenceKernelRustCudaGenerator.source_for(&candidate)?;
     Ok(GeneratedInferenceKernelSource {
+        optimization,
+        candidate,
+        source,
+    })
+}
+
+pub fn generate_inference_kernel_source_with_selection_cache(
+    store: &KernelArtifactStore,
+    operation: &TypedOperationSpec,
+    config: AutoOptimizeConfig,
+    score_namespace: &str,
+) -> Result<CachedGeneratedInferenceKernelSource, KernelGenerationError> {
+    let optimization =
+        auto_optimize_inference_kernel_with_selection_cache(store, operation, config, score_namespace)?;
+    let candidate = optimization.best_candidate().cloned().ok_or_else(|| {
+        KernelGenerationError::NoOptimizationCandidate {
+            name: operation.name.clone(),
+            kind: operation.kind,
+        }
+    })?;
+    let source = InferenceKernelRustCudaGenerator.source_for(&candidate)?;
+    Ok(CachedGeneratedInferenceKernelSource {
         optimization,
         candidate,
         source,
