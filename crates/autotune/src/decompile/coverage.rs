@@ -11,11 +11,12 @@ use nn_rust_inference::runtime;
 use super::{
     ControlTarget, KernelIrModule, KernelIrOpKind, KnownSassOpcode, MemoryAddressBase,
     MemoryAddressImmediate, MemorySpace, PredicateCondition, RegisterRef, SassAnalysisModule,
-    SassLiftedModule, SassLiftedOpClass, SassLiftedOpDetail, SassLiftedOpKind, SassLiftedSemantics,
-    SassLiftedValueRef, SassMemoryAccessKind, SassModifier, SassOpcode, SassOpcodeCatalogClass,
-    SassOpcodeCatalogKind, SassOpcodeCatalogSource, SassPatternModule, SassRegionKind,
-    SassRegionPath, SassValueOpKind, analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir,
-    parse_nvidia_sass, recover_sass_patterns, render_sass_file_side_by_side,
+    SassBlockTerminator, SassCfgEdgeKind, SassLiftedModule, SassLiftedOpClass, SassLiftedOpDetail,
+    SassLiftedOpKind, SassLiftedSemantics, SassLiftedValueRef, SassMemoryAccessKind, SassModifier,
+    SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind, SassOpcodeCatalogSource,
+    SassPatternModule, SassRegionKind, SassRegionPath, SassValueOpKind, analyze_sass_ir,
+    known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
+    render_sass_file_side_by_side,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -398,7 +399,7 @@ pub struct SassCoverageBasicBlock {
     pub start_address: u64,
     pub end_address: u64,
     pub instruction_count: usize,
-    pub terminator: String,
+    pub terminator: SassBlockTerminator,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -407,9 +408,9 @@ pub struct SassCoverageCfgEdge {
     pub function: String,
     pub from_block: usize,
     pub to_block: Option<usize>,
-    pub kind: String,
-    pub condition: Option<String>,
-    pub target: Option<String>,
+    pub kind: SassCfgEdgeKind,
+    pub condition: Option<PredicateCondition>,
+    pub target: Option<ControlTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -431,8 +432,8 @@ pub struct SassCoverageNaturalLoop {
     pub latch_block: usize,
     pub reachable: bool,
     pub blocks: Vec<usize>,
-    pub edge_condition: Option<String>,
-    pub edge_target: Option<String>,
+    pub edge_condition: Option<PredicateCondition>,
+    pub edge_target: Option<ControlTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1151,7 +1152,7 @@ fn append_analysis(
                 start_address: block.start_address,
                 end_address: block.end_address,
                 instruction_count: block.instruction_count,
-                terminator: block.terminator.to_string(),
+                terminator: block.terminator,
             });
         }
         for edge in &function.edges {
@@ -1160,9 +1161,9 @@ fn append_analysis(
                 function: function.name.clone(),
                 from_block: edge.from_block,
                 to_block: edge.to_block,
-                kind: edge.kind.to_string(),
-                condition: edge.condition.as_ref().map(ToString::to_string),
-                target: edge.target.as_ref().map(ToString::to_string),
+                kind: edge.kind,
+                condition: edge.condition.clone(),
+                target: edge.target.clone(),
             });
         }
         for dominator in &function.dominators {
@@ -1184,11 +1185,8 @@ fn append_analysis(
                 latch_block: natural_loop.latch_block,
                 reachable: natural_loop.reachable,
                 blocks: natural_loop.blocks.clone(),
-                edge_condition: natural_loop
-                    .edge_condition
-                    .as_ref()
-                    .map(ToString::to_string),
-                edge_target: natural_loop.edge_target.as_ref().map(ToString::to_string),
+                edge_condition: natural_loop.edge_condition.clone(),
+                edge_target: natural_loop.edge_target.clone(),
             });
         }
         for region in &function.regions {
@@ -1715,7 +1713,7 @@ fn render_cfg_blocks_tsv(report: &SassCoverageReport) -> String {
             block.start_address,
             block.end_address,
             block.instruction_count,
-            tsv(&block.terminator),
+            tsv(&block.terminator.to_string()),
         )
         .expect("write to string");
     }
@@ -1739,9 +1737,9 @@ fn render_cfg_edges_tsv(report: &SassCoverageReport) -> String {
             edge.to_block
                 .map(|block| block.to_string())
                 .unwrap_or_default(),
-            tsv(&edge.kind),
-            tsv(edge.condition.as_deref().unwrap_or("")),
-            tsv(edge.target.as_deref().unwrap_or("")),
+            tsv(&edge.kind.to_string()),
+            tsv(&display_optional(edge.condition.as_ref())),
+            tsv(&display_optional(edge.target.as_ref())),
         )
         .expect("write to string");
     }
@@ -1792,8 +1790,8 @@ fn render_natural_loops_tsv(report: &SassCoverageReport) -> String {
             natural_loop.latch_block,
             natural_loop.reachable,
             tsv(&format_blocks(&natural_loop.blocks)),
-            tsv(natural_loop.edge_condition.as_deref().unwrap_or("")),
-            tsv(natural_loop.edge_target.as_deref().unwrap_or("")),
+            tsv(&display_optional(natural_loop.edge_condition.as_ref())),
+            tsv(&display_optional(natural_loop.edge_target.as_ref())),
         )
         .expect("write to string");
     }

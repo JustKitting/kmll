@@ -1605,6 +1605,27 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.dominator_block_count > 0);
     assert!(report.natural_loop_count > 0);
     assert!(report.region_count > 0);
+    assert!(
+        report
+            .cfg_blocks
+            .iter()
+            .any(|block| block.terminator == SassBlockTerminator::Branch)
+    );
+    assert!(report.cfg_edges.iter().any(|edge| {
+        edge.kind == SassCfgEdgeKind::Branch
+            && edge
+                .target
+                .as_ref()
+                .and_then(ControlTarget::label_name)
+                .is_some()
+    }));
+    assert!(report.natural_loops.iter().any(|natural_loop| {
+        natural_loop
+            .edge_target
+            .as_ref()
+            .and_then(ControlTarget::label_name)
+            .is_some()
+    }));
     assert!(report.dataflow_op_count > 0);
     assert!(report.reaching_use_count > 0);
     assert!(report.ssa_value_count > 0);
