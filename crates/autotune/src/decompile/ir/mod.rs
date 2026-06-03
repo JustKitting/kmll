@@ -7,7 +7,8 @@ pub use self::{
     types::{
         AggregateOperand, AggregateOperandKind, ControlTarget, ControlTargetKind, ImmediateValue,
         KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemoryAccessInfo,
-        MemoryAddress, MemoryAddressKind, MemorySpace, PredicateCondition, PredicateConditionKind,
-        RegisterRef, RegisterRefKind, SassMappingConfidence, ScalarOperand, ScalarOperandKind,
+        MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemoryAddressImmediateKind,
+        MemoryAddressKind, MemorySpace, PredicateCondition, PredicateConditionKind, RegisterRef,
+        RegisterRefKind, SassMappingConfidence, ScalarOperand, ScalarOperandKind,
     },
 };

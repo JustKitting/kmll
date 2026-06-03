@@ -425,7 +425,7 @@ memory_address_fixture:
     assert!(ordered_addresses.iter().any(|address| matches!(
         &address.kind,
         MemoryAddressKind::Constant { bank, offset }
-            if bank == "0x0" && offset == "0x37c"
+            if bank.as_integer() == Some(0) && offset.as_integer() == Some(0x37c)
     )));
     assert!(ordered_addresses.iter().any(|address| matches!(
         &address.kind,
@@ -434,14 +434,14 @@ memory_address_fixture:
             address: register,
             address_width: Some(64),
             offset: Some(offset),
-        } if descriptor.to_string() == "UR4" && register.to_string() == "R0" && offset == "0x4"
+        } if descriptor == &reg("UR4") && register == &reg("R0") && offset.as_integer() == Some(0x4)
     )));
     assert!(ordered_addresses.iter().any(|address| matches!(
         &address.kind,
         MemoryAddressKind::Indexed {
             base,
             offset: Some(offset),
-        } if base.to_string() == "R2" && offset == "0x40"
+        } if base == &reg("R2") && offset.as_integer() == Some(0x40)
     )));
 }
 
@@ -461,9 +461,20 @@ fn analysis_recovers_structured_memory_accesses() {
     assert_eq!(first_load.kind, SassMemoryAccessKind::Load);
     assert_eq!(first_load.space, MemorySpace::Descriptor);
     assert_eq!(first_load.value_register, reg("R2"));
-    assert_eq!(first_load.address_expr, "desc[UR4][R0.64]");
+    assert!(matches!(
+        &first_load.memory_address.kind,
+        MemoryAddressKind::Descriptor {
+            descriptor,
+            address,
+            address_width: Some(64),
+            offset: None,
+        } if descriptor == &reg("UR4") && address == &reg("R0")
+    ));
     assert_eq!(first_load.address_registers, [reg("UR4"), reg("R0")]);
-    assert_eq!(first_load.address_base.as_deref(), Some("UR4"));
+    assert!(matches!(
+        &first_load.address_base,
+        Some(MemoryAddressBase::Descriptor(base)) if base == &reg("UR4")
+    ));
     assert_eq!(first_load.offset, None);
 
     let offset_load = function
@@ -471,8 +482,14 @@ fn analysis_recovers_structured_memory_accesses() {
         .iter()
         .find(|access| access.address == 0x20)
         .expect("offset descriptor load should be recovered");
-    assert_eq!(offset_load.address_base.as_deref(), Some("UR6"));
-    assert_eq!(offset_load.offset.as_deref(), Some("0x4"));
+    assert!(matches!(
+        &offset_load.address_base,
+        Some(MemoryAddressBase::Descriptor(base)) if base == &reg("UR6")
+    ));
+    assert!(matches!(
+        &offset_load.offset,
+        Some(offset) if offset.as_integer() == Some(0x4)
+    ));
 
     let store = function
         .memory_accesses

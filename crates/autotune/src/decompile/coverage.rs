@@ -1181,14 +1181,14 @@ fn append_analysis(
                 space: access.space.to_string(),
                 width_bits: access.width_bits,
                 value_register: access.value_register.to_string(),
-                address_expr: access.address_expr.clone(),
+                address_expr: access.memory_address.to_string(),
                 address_registers: access
                     .address_registers
                     .iter()
                     .map(ToString::to_string)
                     .collect(),
-                address_base: access.address_base.clone(),
-                offset: access.offset.clone(),
+                address_base: access.address_base.as_ref().map(ToString::to_string),
+                offset: access.offset.as_ref().map(ToString::to_string),
                 source: access.source.clone(),
             });
         }

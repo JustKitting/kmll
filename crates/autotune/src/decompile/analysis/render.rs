@@ -177,10 +177,18 @@ impl SassAnalysisModule {
                     access.kind,
                     access.space,
                     access.value_register,
-                    access.address_expr,
+                    access.memory_address,
                     format_registers(&access.address_registers),
-                    access.address_base.as_deref().unwrap_or("-"),
-                    access.offset.as_deref().unwrap_or("-"),
+                    access
+                        .address_base
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "-".to_string()),
+                    access
+                        .offset
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "-".to_string()),
                     access
                         .width_bits
                         .map(|bits| bits.to_string())

@@ -1,6 +1,8 @@
 use std::fmt;
 
-use super::super::{MemorySpace, RegisterRef};
+use super::super::{
+    MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemorySpace, RegisterRef,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassAnalysisModule {
@@ -385,10 +387,10 @@ pub struct SassMemoryAccess {
     pub space: MemorySpace,
     pub width_bits: Option<u32>,
     pub value_register: RegisterRef,
-    pub address_expr: String,
+    pub memory_address: MemoryAddress,
     pub address_registers: Vec<RegisterRef>,
-    pub address_base: Option<String>,
-    pub offset: Option<String>,
+    pub address_base: Option<MemoryAddressBase>,
+    pub offset: Option<MemoryAddressImmediate>,
     pub source: String,
 }
 

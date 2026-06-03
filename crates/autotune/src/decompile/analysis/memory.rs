@@ -66,14 +66,14 @@ fn memory_access(
         space,
         width_bits,
         value_register: value_register.clone(),
-        address_expr: address.raw.clone(),
+        memory_address: address.clone(),
         address_registers: address
             .registers()
             .into_iter()
             .filter(|register| !register.is_pseudo())
             .collect(),
-        address_base: address.base().map(str::to_string),
-        offset: address.offset().map(str::to_string),
+        address_base: address.base(),
+        offset: address.offset().cloned(),
         source: op.source.clone(),
     }
 }

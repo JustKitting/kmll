@@ -752,7 +752,10 @@ pub struct MemoryAddress {
 impl MemoryAddress {
     pub fn constant(raw: String, bank: String, offset: String) -> Self {
         Self {
-            kind: MemoryAddressKind::Constant { bank, offset },
+            kind: MemoryAddressKind::Constant {
+                bank: MemoryAddressImmediate::parse(bank),
+                offset: MemoryAddressImmediate::parse(offset),
+            },
             raw,
         }
     }
@@ -769,7 +772,7 @@ impl MemoryAddress {
                 descriptor: RegisterRef::parse(descriptor),
                 address: RegisterRef::parse(address),
                 address_width,
-                offset,
+                offset: offset.map(MemoryAddressImmediate::parse),
             },
             raw,
         }
@@ -779,7 +782,7 @@ impl MemoryAddress {
         Self {
             kind: MemoryAddressKind::Indexed {
                 base: RegisterRef::parse(base),
-                offset,
+                offset: offset.map(MemoryAddressImmediate::parse),
             },
             raw,
         }
@@ -792,20 +795,26 @@ impl MemoryAddress {
         }
     }
 
-    pub fn base(&self) -> Option<&str> {
+    pub fn base(&self) -> Option<MemoryAddressBase> {
         match &self.kind {
-            MemoryAddressKind::Constant { bank, .. } => Some(bank),
-            MemoryAddressKind::Descriptor { descriptor, .. } => Some(descriptor.raw.as_str()),
-            MemoryAddressKind::Indexed { base, .. } => Some(base.raw.as_str()),
+            MemoryAddressKind::Constant { bank, .. } => {
+                Some(MemoryAddressBase::ConstantBank(bank.clone()))
+            }
+            MemoryAddressKind::Descriptor { descriptor, .. } => {
+                Some(MemoryAddressBase::Descriptor(descriptor.clone()))
+            }
+            MemoryAddressKind::Indexed { base, .. } => {
+                Some(MemoryAddressBase::Indexed(base.clone()))
+            }
             MemoryAddressKind::Raw => None,
         }
     }
 
-    pub fn offset(&self) -> Option<&str> {
+    pub fn offset(&self) -> Option<&MemoryAddressImmediate> {
         match &self.kind {
             MemoryAddressKind::Constant { offset, .. } => Some(offset),
             MemoryAddressKind::Descriptor { offset, .. }
-            | MemoryAddressKind::Indexed { offset, .. } => offset.as_deref(),
+            | MemoryAddressKind::Indexed { offset, .. } => offset.as_ref(),
             MemoryAddressKind::Raw => None,
         }
     }
@@ -832,20 +841,72 @@ impl fmt::Display for MemoryAddress {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MemoryAddressKind {
     Constant {
-        bank: String,
-        offset: String,
+        bank: MemoryAddressImmediate,
+        offset: MemoryAddressImmediate,
     },
     Descriptor {
         descriptor: RegisterRef,
         address: RegisterRef,
         address_width: Option<u32>,
-        offset: Option<String>,
+        offset: Option<MemoryAddressImmediate>,
     },
     Indexed {
         base: RegisterRef,
-        offset: Option<String>,
+        offset: Option<MemoryAddressImmediate>,
     },
     Raw,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MemoryAddressImmediate {
+    pub kind: MemoryAddressImmediateKind,
+    pub raw: String,
+}
+
+impl MemoryAddressImmediate {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        let kind = parse_immediate_operand(&raw)
+            .map(MemoryAddressImmediateKind::Immediate)
+            .unwrap_or(MemoryAddressImmediateKind::Raw);
+        Self { kind, raw }
+    }
+
+    pub fn as_integer(&self) -> Option<i128> {
+        match self.kind {
+            MemoryAddressImmediateKind::Immediate(ImmediateValue::Integer(value)) => Some(value),
+            MemoryAddressImmediateKind::Immediate(ImmediateValue::FloatBits(_))
+            | MemoryAddressImmediateKind::Raw => None,
+        }
+    }
+}
+
+impl fmt::Display for MemoryAddressImmediate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MemoryAddressImmediateKind {
+    Immediate(ImmediateValue),
+    Raw,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MemoryAddressBase {
+    ConstantBank(MemoryAddressImmediate),
+    Descriptor(RegisterRef),
+    Indexed(RegisterRef),
+}
+
+impl fmt::Display for MemoryAddressBase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ConstantBank(bank) => write!(f, "{bank}"),
+            Self::Descriptor(register) | Self::Indexed(register) => write!(f, "{register}"),
+        }
+    }
 }
 
 impl MemoryAccessInfo {
