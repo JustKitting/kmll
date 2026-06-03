@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::super::{KernelIrOpKind, MemoryAddress, MemorySpace};
+use super::super::{ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SassLiftedSemantics {
@@ -95,15 +95,15 @@ pub enum SassLiftedSemantics {
         rhs: String,
     },
     Branch {
-        target: Option<String>,
+        target: Option<ControlTarget>,
         condition: Option<String>,
     },
     Call {
-        target: Option<String>,
+        target: Option<ControlTarget>,
         operands: Vec<String>,
     },
     Return {
-        target: Option<String>,
+        target: Option<ControlTarget>,
         operands: Vec<String>,
     },
     Exit {
@@ -262,19 +262,19 @@ impl fmt::Display for SassLiftedSemantics {
             Self::Branch { target, condition } => write!(
                 f,
                 "branch(target={},condition={})",
-                option_str(target.as_deref()),
+                option_display(target.as_ref()),
                 option_str(condition.as_deref())
             ),
             Self::Call { target, operands } => write!(
                 f,
                 "call(target={},operands=[{}])",
-                option_str(target.as_deref()),
+                option_display(target.as_ref()),
                 operands.join(",")
             ),
             Self::Return { target, operands } => write!(
                 f,
                 "return(target={},operands=[{}])",
-                option_str(target.as_deref()),
+                option_display(target.as_ref()),
                 operands.join(",")
             ),
             Self::Exit { condition } => {
@@ -506,6 +506,12 @@ pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
 
 fn option_str(value: Option<&str>) -> &str {
     value.unwrap_or("-")
+}
+
+fn option_display(value: Option<&impl fmt::Display>) -> String {
+    value
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn option_u32(value: Option<u32>) -> String {

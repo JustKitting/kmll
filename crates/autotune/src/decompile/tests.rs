@@ -271,7 +271,7 @@ fn analysis_resolves_cuobjdump_numeric_branch_targets() {
         KernelIrOpKind::Branch {
             target: Some(target),
             condition: None
-        } if target == "0x10"
+        } if matches!(target.kind, ControlTargetKind::Address(0x10)) && target.raw == "0x10"
     ));
 
     let analysis = analyze_sass_ir(&ir);
@@ -603,14 +603,15 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
         KernelIrOpKind::Branch {
             target: Some(ref target),
             condition: Some(ref condition)
-        } if target == ".L_x_1" && condition == "P0"
+        } if matches!(&target.kind, ControlTargetKind::Label(label) if label == ".L_x_1")
+            && condition == "P0"
     )));
     assert!(ops.iter().any(|op| matches!(
         op.kind,
         KernelIrOpKind::Call {
             target: Some(ref target),
             ..
-        } if target == "$helper"
+        } if matches!(&target.kind, ControlTargetKind::Label(label) if label == "$helper")
     )));
     assert!(ops.iter().any(|op| matches!(
         op.kind,
@@ -625,7 +626,7 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
         KernelIrOpKind::Return {
             target: Some(ref target),
             ..
-        } if target == "matvec_bf16_rows17"
+        } if matches!(&target.kind, ControlTargetKind::Label(label) if label == "matvec_bf16_rows17")
     )));
     assert_eq!(ir.unsupported_instruction_count(), 0);
 }

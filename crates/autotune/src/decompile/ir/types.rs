@@ -149,15 +149,15 @@ pub enum KernelIrOpKind {
         rhs: String,
     },
     Branch {
-        target: Option<String>,
+        target: Option<ControlTarget>,
         condition: Option<String>,
     },
     Call {
-        target: Option<String>,
+        target: Option<ControlTarget>,
         operands: Vec<String>,
     },
     Return {
-        target: Option<String>,
+        target: Option<ControlTarget>,
         operands: Vec<String>,
     },
     Exit {
@@ -206,6 +206,65 @@ pub enum MemorySpace {
     Constant,
     Descriptor,
     Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ControlTarget {
+    pub kind: ControlTargetKind,
+    pub raw: String,
+}
+
+impl ControlTarget {
+    pub fn label(raw: String, label: String) -> Self {
+        Self {
+            kind: ControlTargetKind::Label(label),
+            raw,
+        }
+    }
+
+    pub fn address(raw: String, address: u64) -> Self {
+        Self {
+            kind: ControlTargetKind::Address(address),
+            raw,
+        }
+    }
+
+    pub fn raw(raw: String) -> Self {
+        Self {
+            kind: ControlTargetKind::Raw,
+            raw,
+        }
+    }
+
+    pub fn label_name(&self) -> Option<&str> {
+        match &self.kind {
+            ControlTargetKind::Label(label) => Some(label),
+            ControlTargetKind::Address(_) | ControlTargetKind::Raw => None,
+        }
+    }
+
+    pub fn address_value(&self) -> Option<u64> {
+        match self.kind {
+            ControlTargetKind::Address(address) => Some(address),
+            ControlTargetKind::Label(_) | ControlTargetKind::Raw => None,
+        }
+    }
+}
+
+impl fmt::Display for ControlTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.kind {
+            ControlTargetKind::Label(label) => f.write_str(label),
+            ControlTargetKind::Address(_) | ControlTargetKind::Raw => f.write_str(&self.raw),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ControlTargetKind {
+    Label(String),
+    Address(u64),
+    Raw,
 }
 
 impl fmt::Display for MemorySpace {

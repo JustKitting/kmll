@@ -1,7 +1,7 @@
 use super::super::super::sass::{
     RegisterClass, SassInstruction, SassOperandKind, SassPredicate, SassRegister, label_in_text,
 };
-use super::super::types::{KernelIrOpKind, SassMappingConfidence};
+use super::super::types::{ControlTarget, KernelIrOpKind, SassMappingConfidence};
 use super::LiftResult;
 
 pub(super) fn raw_operands(instruction: &SassInstruction) -> Vec<String> {
@@ -107,15 +107,30 @@ pub(super) fn predicate_text(predicate: &SassPredicate) -> String {
     }
 }
 
-pub(super) fn target_operand(instruction: &SassInstruction) -> Option<String> {
+pub(super) fn target_operand(instruction: &SassInstruction) -> Option<ControlTarget> {
     instruction
         .operands
         .iter()
         .find_map(|operand| match &operand.kind {
-            SassOperandKind::Label(label) => Some(label.clone()),
-            SassOperandKind::Immediate(target) => Some(target.clone()),
-            _ => label_in_text(&operand.raw),
+            SassOperandKind::Label(label) => {
+                Some(ControlTarget::label(operand.raw.clone(), label.clone()))
+            }
+            SassOperandKind::Immediate(target) => {
+                let raw = operand.raw.clone();
+                parse_address_target(target)
+                    .map(|address| ControlTarget::address(raw.clone(), address))
+                    .or_else(|| Some(ControlTarget::raw(raw)))
+            }
+            _ => label_in_text(&operand.raw)
+                .map(|label| ControlTarget::label(operand.raw.clone(), label)),
         })
+}
+
+fn parse_address_target(target: &str) -> Option<u64> {
+    target
+        .strip_prefix("0x")
+        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+        .or_else(|| target.parse::<u64>().ok())
 }
 
 pub(super) fn branch_condition_operand(instruction: &SassInstruction) -> Option<String> {

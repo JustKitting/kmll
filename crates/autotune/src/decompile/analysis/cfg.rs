@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use super::{
-    super::{KernelIrFunction, KernelIrOp, KernelIrOpKind},
+    super::{ControlTarget, KernelIrFunction, KernelIrOp, KernelIrOpKind},
     types::{
         SassBasicBlock, SassBlockTerminator, SassCfgEdge, SassCfgEdgeKind, SassDominatorBlock,
         SassNaturalLoop,
@@ -174,7 +174,7 @@ pub(super) fn build_blocks(function: &KernelIrFunction) -> Vec<SassBasicBlock> {
             starts.insert(index + 1);
         }
         if let Some(target) = branch_target(op) {
-            if let Some(target_index) = label_index(function, target) {
+            if let Some(target_index) = target_index(function, target) {
                 starts.insert(target_index);
             }
         }
@@ -217,15 +217,15 @@ pub(super) fn build_edges(
         match &last_op.kind {
             KernelIrOpKind::Branch { target, condition } => {
                 let target_block = target
-                    .as_deref()
-                    .and_then(|target| label_index(function, target))
+                    .as_ref()
+                    .and_then(|target| target_index(function, target))
                     .and_then(|target_index| block_id_for_op_index(blocks, target_index));
                 edges.push(SassCfgEdge {
                     from_block: block.id,
                     to_block: target_block,
                     kind: SassCfgEdgeKind::Branch,
                     condition: condition.clone(),
-                    target: target.clone(),
+                    target: target.as_ref().map(ToString::to_string),
                 });
                 if condition.is_some() {
                     if let Some(next_block) = next_block {
@@ -245,7 +245,7 @@ pub(super) fn build_edges(
                     to_block: None,
                     kind: SassCfgEdgeKind::Call,
                     condition: None,
-                    target: target.clone(),
+                    target: target.as_ref().map(ToString::to_string),
                 });
                 if let Some(next_block) = next_block {
                     edges.push(SassCfgEdge {
@@ -263,7 +263,7 @@ pub(super) fn build_edges(
                     to_block: None,
                     kind: SassCfgEdgeKind::Return,
                     condition: last_op.predicate.clone(),
-                    target: target.clone(),
+                    target: target.as_ref().map(ToString::to_string),
                 });
                 if last_op.predicate.is_some() {
                     if let Some(next_block) = next_block {
@@ -375,7 +375,7 @@ fn terminator_for(op: &KernelIrOp) -> SassBlockTerminator {
     }
 }
 
-fn branch_target(op: &KernelIrOp) -> Option<&str> {
+fn branch_target(op: &KernelIrOp) -> Option<&ControlTarget> {
     match &op.kind {
         KernelIrOpKind::Branch {
             target: Some(target),
@@ -383,6 +383,16 @@ fn branch_target(op: &KernelIrOp) -> Option<&str> {
         } => Some(target),
         _ => None,
     }
+}
+
+fn target_index(function: &KernelIrFunction, target: &ControlTarget) -> Option<usize> {
+    if let Some(label) = target.label_name() {
+        return label_index(function, label);
+    }
+    if let Some(address) = target.address_value() {
+        return function.ops.iter().position(|op| op.address == address);
+    }
+    None
 }
 
 fn label_index(function: &KernelIrFunction, label: &str) -> Option<usize> {
@@ -393,8 +403,7 @@ fn label_index(function: &KernelIrFunction, label: &str) -> Option<usize> {
     if label_match.is_some() {
         return label_match;
     }
-    let address = parse_address_target(label)?;
-    function.ops.iter().position(|op| op.address == address)
+    None
 }
 
 pub(super) fn block_id_for_op_index(blocks: &[SassBasicBlock], op_index: usize) -> Option<usize> {
@@ -402,11 +411,4 @@ pub(super) fn block_id_for_op_index(blocks: &[SassBasicBlock], op_index: usize) 
         .iter()
         .find(|block| block.start_op_index <= op_index && op_index <= block.end_op_index)
         .map(|block| block.id)
-}
-
-fn parse_address_target(target: &str) -> Option<u64> {
-    target
-        .strip_prefix("0x")
-        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
-        .or_else(|| target.parse::<u64>().ok())
 }
