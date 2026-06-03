@@ -375,6 +375,7 @@ pub enum OptimizationActionOp {
     Split,
     Unroll,
     LocalTile,
+    ThreadGroup,
     TileGemm,
     StrideOrder,
     Swap,
@@ -386,6 +387,7 @@ impl OptimizationActionOp {
             Self::Split => "split",
             Self::Unroll => "unroll",
             Self::LocalTile => "local-tile",
+            Self::ThreadGroup => "thread-group",
             Self::TileGemm => "tile-gemm",
             Self::StrideOrder => "stride-order",
             Self::Swap => "swap",
@@ -450,6 +452,15 @@ impl OptimizationActionSpec {
     pub const fn local_tile(axis: u8, factor: u32) -> Self {
         Self {
             op: OptimizationActionOp::LocalTile,
+            axis: Some(axis),
+            arg: OptimizationActionArg::Factor(factor),
+            materialization: OptimizationActionMaterialization::DeferredGenerated,
+        }
+    }
+
+    pub const fn thread_group(axis: u8, factor: u32) -> Self {
+        Self {
+            op: OptimizationActionOp::ThreadGroup,
             axis: Some(axis),
             arg: OptimizationActionArg::Factor(factor),
             materialization: OptimizationActionMaterialization::DeferredGenerated,
@@ -522,6 +533,10 @@ pub enum OptimizationActionSpace {
         axis: u8,
         factors: Vec<u32>,
     },
+    ThreadGroup {
+        axis: u8,
+        factors: Vec<u32>,
+    },
     TileGemm {
         variants: Vec<OptimizationTile3dChoice>,
     },
@@ -539,6 +554,7 @@ impl OptimizationActionSpace {
             Self::Split { variants } => variants.len(),
             Self::Unroll { factors, .. } => factors.len(),
             Self::LocalTile { factors, .. } => factors.len(),
+            Self::ThreadGroup { factors, .. } => factors.len(),
             Self::TileGemm { variants } => variants.len(),
             Self::StrideOrder { orders } => orders.len(),
             Self::Swap { pairs } => pairs.len(),
@@ -2046,6 +2062,18 @@ fn push_optimization_action_space_json(
             push_json_field_usize(out, "action_count", factors.len(), indent + 2, true);
             push_json_field_u32_array(out, "factors", factors, indent + 2, false);
         }
+        OptimizationActionSpace::ThreadGroup { axis, factors } => {
+            push_json_field_string(
+                out,
+                "op",
+                OptimizationActionOp::ThreadGroup.label(),
+                indent + 2,
+                true,
+            );
+            push_json_field_u32(out, "axis", u32::from(*axis), indent + 2, true);
+            push_json_field_usize(out, "action_count", factors.len(), indent + 2, true);
+            push_json_field_u32_array(out, "factors", factors, indent + 2, false);
+        }
         OptimizationActionSpace::TileGemm { variants } => {
             push_json_field_string(
                 out,
@@ -2846,6 +2874,7 @@ mod tests {
             ),
             OptimizationActionSpec::unroll(1, 8),
             OptimizationActionSpec::local_tile(1, 2),
+            OptimizationActionSpec::thread_group(1, 16),
             OptimizationActionSpec::swap(0, 1),
         ])
         .with_score(score);
@@ -2880,6 +2909,10 @@ mod tests {
                 axis: 1,
                 factors: vec![2, 4],
             },
+            OptimizationActionSpace::ThreadGroup {
+                axis: 1,
+                factors: vec![8, 16],
+            },
             OptimizationActionSpace::Swap {
                 pairs: vec![(0, 1)],
             },
@@ -2891,7 +2924,7 @@ mod tests {
         assert!(json.contains("\"beam_width\": 8"));
         assert!(json.contains("\"require_launchable\": false"));
         assert!(json.contains("\"action_space\""));
-        assert!(json.contains("\"total_actions\": 8"));
+        assert!(json.contains("\"total_actions\": 10"));
         assert!(json.contains("\"variants\""));
         assert!(json.contains("\"materialization\": \"existing\""));
         assert!(json.contains("\"factors\": [2, 4, 8]"));
@@ -2901,6 +2934,7 @@ mod tests {
         assert!(json.contains("\"op\": \"split\""));
         assert!(json.contains("\"op\": \"unroll\""));
         assert!(json.contains("\"op\": \"local-tile\""));
+        assert!(json.contains("\"op\": \"thread-group\""));
         assert!(json.contains("\"op\": \"swap\""));
         assert!(json.contains("\"kind\": \"axis-pair\""));
         assert!(json.contains("\"score\""));
