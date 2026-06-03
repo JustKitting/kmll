@@ -43,8 +43,12 @@ pub(crate) fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         .ok_or_else(|| invalid_input("kernel-autotune-gemm did not produce any candidates"))?;
 
     println!(
-        "kernel_autotune_gemm m={m} n={n} k={k} beam_width={} max_depth={} allow_generated={} measure={}",
-        options.beam_width, options.max_depth, options.allow_generated, options.measure
+        "kernel_autotune_gemm m={m} n={n} k={k} beam_width={} max_depth={} min_score_improvement={} allow_generated={} measure={}",
+        options.beam_width,
+        options.max_depth,
+        options.min_score_improvement,
+        options.allow_generated,
+        options.measure
     );
     print_search_result(&cached, policy);
     emit_requested_artifacts(
@@ -81,8 +85,12 @@ pub(crate) fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         .ok_or_else(|| invalid_input("kernel-autotune-matvec did not produce any candidates"))?;
 
     println!(
-        "kernel_autotune_matvec rows={rows} cols={cols} beam_width={} max_depth={} allow_generated={} measure={}",
-        options.beam_width, options.max_depth, options.allow_generated, options.measure
+        "kernel_autotune_matvec rows={rows} cols={cols} beam_width={} max_depth={} min_score_improvement={} allow_generated={} measure={}",
+        options.beam_width,
+        options.max_depth,
+        options.min_score_improvement,
+        options.allow_generated,
+        options.measure
     );
     print_search_result(&cached, policy);
     emit_requested_artifacts(

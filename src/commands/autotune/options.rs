@@ -6,14 +6,15 @@ use nn_rust_inference::autotune::{
 
 use crate::{AppResult, invalid_input, parse_required_flag_value};
 
-pub(super) const GEMM_USAGE: &str = "kernel-autotune-gemm M N K [--allow-generated] [--measure] [--measure-repeat N] [--measure-warmup N] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--max-threads-per-block N|none] [--max-shared-memory-bytes N|none] [--max-accumulator-elements-per-thread N|none] [--max-output-elements-per-thread N|none] [--max-load-elements-per-block N|none] [--artifact-root PATH]";
+pub(super) const GEMM_USAGE: &str = "kernel-autotune-gemm M N K [--allow-generated] [--measure] [--measure-repeat N] [--measure-warmup N] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--min-score-improvement VALUE] [--max-threads-per-block N|none] [--max-shared-memory-bytes N|none] [--max-accumulator-elements-per-thread N|none] [--max-output-elements-per-thread N|none] [--max-load-elements-per-block N|none] [--artifact-root PATH]";
 
-pub(super) const MATVEC_USAGE: &str = "kernel-autotune-matvec ROWS COLS [--allow-generated] [--measure] [--measure-repeat N] [--measure-warmup N] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--max-threads-per-block N|none] [--max-shared-memory-bytes N|none] [--max-accumulator-elements-per-thread N|none] [--max-output-elements-per-thread N|none] [--max-load-elements-per-block N|none] [--artifact-root PATH]";
+pub(super) const MATVEC_USAGE: &str = "kernel-autotune-matvec ROWS COLS [--allow-generated] [--measure] [--measure-repeat N] [--measure-warmup N] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--min-score-improvement VALUE] [--max-threads-per-block N|none] [--max-shared-memory-bytes N|none] [--max-accumulator-elements-per-thread N|none] [--max-output-elements-per-thread N|none] [--max-load-elements-per-block N|none] [--artifact-root PATH]";
 
 #[derive(Debug, Clone)]
 pub(super) struct AutotuneCliOptions {
     pub(super) beam_width: usize,
     pub(super) max_depth: usize,
+    pub(super) min_score_improvement: f64,
     pub(super) allow_generated: bool,
     pub(super) emit: bool,
     pub(super) emit_crate: bool,
@@ -78,6 +79,11 @@ impl AutotuneCliOptions {
                     let value = parse_required_flag_value(args, index, "--max-depth")?;
                     options.max_depth = parse_positive_usize(value, command, "--max-depth")?;
                 }
+                "--min-score-improvement" => {
+                    let value = parse_required_flag_value(args, index, "--min-score-improvement")?;
+                    options.min_score_improvement =
+                        parse_nonnegative_f64(value, command, "--min-score-improvement")?;
+                }
                 "--artifact-root" => {
                     let value = parse_required_flag_value(args, index, "--artifact-root")?;
                     options.artifact_root = Some(PathBuf::from(value));
@@ -98,11 +104,13 @@ impl AutotuneCliOptions {
     }
 
     pub(super) fn config(&self) -> AutoOptimizeConfig {
-        AutoOptimizeConfig::from_beam_search_config(BeamSearchConfig {
+        let mut config = AutoOptimizeConfig::from_beam_search_config(BeamSearchConfig {
             beam_width: self.beam_width,
             max_depth: self.max_depth,
             require_launchable: !self.allow_generated,
-        })
+        });
+        config.min_score_improvement = self.min_score_improvement;
+        config
     }
 
     pub(super) fn policy(&self) -> KernelExpansionPolicy {
@@ -150,6 +158,7 @@ impl Default for AutotuneCliOptions {
         Self {
             beam_width: 4,
             max_depth: 1,
+            min_score_improvement: 0.0,
             allow_generated: false,
             emit: false,
             emit_crate: false,
@@ -273,4 +282,59 @@ fn parse_nonnegative_usize(value: &str, command: &str, flag: &str) -> AppResult<
             "{command} {flag} must be a nonnegative integer, got {value:?}: {error}"
         ))
     })
+}
+
+fn parse_nonnegative_f64(value: &str, command: &str, flag: &str) -> AppResult<f64> {
+    let parsed = value.parse::<f64>().map_err(|error| {
+        invalid_input(format!(
+            "{command} {flag} must be a nonnegative finite number, got {value:?}: {error}"
+        ))
+    })?;
+    if !parsed.is_finite() || parsed < 0.0 {
+        return Err(invalid_input(format!(
+            "{command} {flag} must be a nonnegative finite number, got {value:?}"
+        )));
+    }
+    Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_options(args: &[&str]) -> AppResult<AutotuneCliOptions> {
+        let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        let mut index = 0;
+        AutotuneCliOptions::parse(&args, &mut index, "kernel-autotune-matvec", MATVEC_USAGE)
+    }
+
+    #[test]
+    fn autotune_cli_parses_min_score_improvement() {
+        let options = parse_options(&[
+            "--beam-width",
+            "8",
+            "--max-depth",
+            "3",
+            "--min-score-improvement",
+            "0.25",
+        ])
+        .expect("min-score-improvement should parse");
+        let config = options.config();
+
+        assert_eq!(config.beam_width, 8);
+        assert_eq!(config.max_steps, 3);
+        assert_eq!(config.min_score_improvement, 0.25);
+    }
+
+    #[test]
+    fn autotune_cli_rejects_negative_min_score_improvement() {
+        let error = parse_options(&["--min-score-improvement", "-0.1"])
+            .expect_err("negative min-score-improvement should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("--min-score-improvement must be a nonnegative finite number")
+        );
+    }
 }
