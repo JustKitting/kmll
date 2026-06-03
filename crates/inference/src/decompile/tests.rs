@@ -412,10 +412,41 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
     assert_eq!(entry_r2_range.end_address, 0x30);
     assert_eq!(entry_r2_range.use_addresses.as_slice(), &[0x30]);
 
+    let entry_r2_value = function
+        .ssa_values
+        .iter()
+        .find(|value| value.register == "R2" && value.def_address.is_none())
+        .expect("entry R2 should have an SSA value");
+    assert_eq!(entry_r2_value.use_addresses.as_slice(), &[0x30]);
+
+    let local_r2_value = function
+        .ssa_values
+        .iter()
+        .find(|value| value.register == "R2" && value.def_address == Some(0x20))
+        .expect("local R2 definition should have an SSA value");
+    assert_eq!(local_r2_value.use_addresses.as_slice(), &[0x30]);
+
+    let joined_r2_edges = function
+        .def_use_edges
+        .iter()
+        .filter(|edge| edge.use_address == 0x30 && edge.register == "R2")
+        .collect::<Vec<_>>();
+    assert_eq!(joined_r2_edges.len(), 2);
+    assert!(
+        joined_r2_edges
+            .iter()
+            .any(|edge| edge.value_id == entry_r2_value.value_id && edge.def_address.is_none())
+    );
+    assert!(joined_r2_edges.iter().any(|edge| {
+        edge.value_id == local_r2_value.value_id && edge.def_address == Some(0x20)
+    }));
+
     let text = analysis.to_text();
     assert!(text.contains("b0 -> b2 [branch condition=P0 target=.L_then]"));
     assert!(text.contains("0x0020: def=[R2] use=[R0,R1]"));
     assert!(text.contains("0x0030: R2 <- [entry,0x0020]"));
+    assert!(text.contains("ssa_values"));
+    assert!(text.contains("def_use_edges"));
     assert!(text.contains("R2@entry 0x0030-0x0030 uses=[0x0030]"));
 }
 
@@ -612,6 +643,8 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.natural_loops_path.exists());
     assert!(report.dataflow_path.exists());
     assert!(report.reaching_uses_path.exists());
+    assert!(report.ssa_values_path.exists());
+    assert!(report.def_use_edges_path.exists());
     assert!(report.live_ranges_path.exists());
     assert!(report.memory_accesses_path.exists());
     assert!(report.unsupported_instructions_path.exists());
@@ -621,6 +654,8 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.natural_loop_count > 0);
     assert!(report.dataflow_op_count > 0);
     assert!(report.reaching_use_count > 0);
+    assert!(report.ssa_value_count > 0);
+    assert!(report.def_use_edge_count > 0);
     assert!(report.live_range_count > 0);
     assert!(report.memory_access_count > 0);
     assert!(report.memory_accesses.iter().any(|access| {

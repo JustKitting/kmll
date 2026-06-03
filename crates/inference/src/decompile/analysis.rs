@@ -68,6 +68,20 @@ impl SassAnalysisModule {
             .sum()
     }
 
+    pub fn ssa_value_count(&self) -> usize {
+        self.functions
+            .iter()
+            .map(|function| function.ssa_values.len())
+            .sum()
+    }
+
+    pub fn def_use_edge_count(&self) -> usize {
+        self.functions
+            .iter()
+            .map(|function| function.def_use_edges.len())
+            .sum()
+    }
+
     pub fn to_text(&self) -> String {
         let mut out = String::new();
         if let Some(target) = &self.target {
@@ -154,6 +168,30 @@ impl SassAnalysisModule {
                 )
                 .expect("write to string");
             }
+            writeln!(out, "  ssa_values").expect("write to string");
+            for value in &function.ssa_values {
+                writeln!(
+                    out,
+                    "    v{} {} uses=[{}] <- {}",
+                    value.value_id,
+                    value.name(),
+                    format_addresses(&value.use_addresses),
+                    value.source.as_deref().unwrap_or("entry")
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "  def_use_edges").expect("write to string");
+            for edge in &function.def_use_edges {
+                writeln!(
+                    out,
+                    "    {:#06x}: {} <- v{} {}",
+                    edge.use_address,
+                    edge.register,
+                    edge.value_id,
+                    format_register_definition(&edge.register, edge.def_address)
+                )
+                .expect("write to string");
+            }
             writeln!(out, "  live_ranges").expect("write to string");
             for range in &function.live_ranges {
                 writeln!(
@@ -204,6 +242,8 @@ pub struct SassAnalysisFunction {
     pub natural_loops: Vec<SassNaturalLoop>,
     pub dataflow: Vec<SassDataflowOp>,
     pub reaching_uses: Vec<SassReachingUse>,
+    pub ssa_values: Vec<SassSsaValue>,
+    pub def_use_edges: Vec<SassDefUseEdge>,
     pub live_ranges: Vec<SassLiveRange>,
     pub memory_accesses: Vec<SassMemoryAccess>,
 }
@@ -322,6 +362,30 @@ impl SassReachingUse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassSsaValue {
+    pub value_id: usize,
+    pub register: String,
+    pub def_address: Option<u64>,
+    pub source: Option<String>,
+    pub use_addresses: Vec<u64>,
+}
+
+impl SassSsaValue {
+    pub fn name(&self) -> String {
+        format_register_definition(&self.register, self.def_address)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassDefUseEdge {
+    pub value_id: usize,
+    pub register: String,
+    pub def_address: Option<u64>,
+    pub use_address: u64,
+    pub use_source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassLiveRange {
     pub register: String,
     pub def_address: Option<u64>,
@@ -386,7 +450,8 @@ fn analyze_function(function: &KernelIrFunction) -> SassAnalysisFunction {
         .iter()
         .map(analyze_dataflow)
         .collect::<Vec<_>>();
-    let (reaching_uses, live_ranges) = analyze_reaching_defs(&blocks, &edges, &dataflow);
+    let (reaching_uses, live_ranges, ssa_values, def_use_edges) =
+        analyze_reaching_defs(&blocks, &edges, &dataflow);
     let memory_accesses = analyze_memory_accesses(function);
     SassAnalysisFunction {
         name: function.name.clone(),
@@ -396,6 +461,8 @@ fn analyze_function(function: &KernelIrFunction) -> SassAnalysisFunction {
         natural_loops,
         dataflow,
         reaching_uses,
+        ssa_values,
+        def_use_edges,
         live_ranges,
         memory_accesses,
     }
@@ -829,18 +896,25 @@ fn build_edges(function: &KernelIrFunction, blocks: &[SassBasicBlock]) -> Vec<Sa
 struct ReachingDef {
     register: String,
     address: Option<u64>,
+    source: Option<String>,
 }
 
 fn analyze_reaching_defs(
     blocks: &[SassBasicBlock],
     edges: &[SassCfgEdge],
     dataflow: &[SassDataflowOp],
-) -> (Vec<SassReachingUse>, Vec<SassLiveRange>) {
+) -> (
+    Vec<SassReachingUse>,
+    Vec<SassLiveRange>,
+    Vec<SassSsaValue>,
+    Vec<SassDefUseEdge>,
+) {
     if blocks.is_empty() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     }
 
     let mut definitions = Vec::new();
+    let mut entry_def_by_register = BTreeMap::<String, usize>::new();
     let mut def_by_op_register = BTreeMap::<(usize, String), usize>::new();
     let mut defs_by_register = BTreeMap::<String, BTreeSet<usize>>::new();
     let mut registers = BTreeSet::<String>::new();
@@ -853,7 +927,9 @@ fn analyze_reaching_defs(
         definitions.push(ReachingDef {
             register: register.clone(),
             address: None,
+            source: None,
         });
+        entry_def_by_register.insert(register.clone(), def_id);
         defs_by_register.entry(register).or_default().insert(def_id);
     }
     for (op_index, op) in dataflow.iter().enumerate() {
@@ -862,6 +938,7 @@ fn analyze_reaching_defs(
             definitions.push(ReachingDef {
                 register: register.clone(),
                 address: Some(op.address),
+                source: Some(op.source.clone()),
             });
             def_by_op_register.insert((op_index, register.clone()), def_id);
             defs_by_register
@@ -908,6 +985,10 @@ fn analyze_reaching_defs(
     }
 
     let mut reaching_uses = Vec::new();
+    let mut def_use_edges = Vec::new();
+    let mut ssa_value_uses = (0..definitions.len())
+        .map(|def_id| (def_id, BTreeSet::<u64>::new()))
+        .collect::<BTreeMap<_, _>>();
     let mut live_range_uses = BTreeMap::<(String, Option<u64>), BTreeSet<u64>>::new();
     for definition in &definitions {
         if let Some(address) = definition.address {
@@ -923,6 +1004,15 @@ fn analyze_reaching_defs(
             let op = &dataflow[op_index];
             for register in &op.uses {
                 let reaching = reaching_defs_for_register(&state, &definitions, register);
+                let value_def_ids = if reaching.is_empty() {
+                    entry_def_by_register
+                        .get(register)
+                        .copied()
+                        .into_iter()
+                        .collect::<Vec<_>>()
+                } else {
+                    reaching.clone()
+                };
                 let reaches_entry = reaching.is_empty();
                 let reaches_entry = reaches_entry
                     || reaching
@@ -943,6 +1033,19 @@ fn analyze_reaching_defs(
                         .entry((register.clone(), Some(*address)))
                         .or_default()
                         .insert(op.address);
+                }
+                for def_id in &value_def_ids {
+                    ssa_value_uses
+                        .entry(*def_id)
+                        .or_default()
+                        .insert(op.address);
+                    def_use_edges.push(SassDefUseEdge {
+                        value_id: *def_id,
+                        register: register.clone(),
+                        def_address: definitions[*def_id].address,
+                        use_address: op.address,
+                        use_source: op.source.clone(),
+                    });
                 }
                 reaching_uses.push(SassReachingUse {
                     address: op.address,
@@ -988,7 +1091,29 @@ fn analyze_reaching_defs(
             .cmp(&rhs.address)
             .then_with(|| lhs.register.cmp(&rhs.register))
     });
-    (reaching_uses, live_ranges)
+    let mut ssa_values = definitions
+        .iter()
+        .enumerate()
+        .map(|(value_id, definition)| SassSsaValue {
+            value_id,
+            register: definition.register.clone(),
+            def_address: definition.address,
+            source: definition.source.clone(),
+            use_addresses: ssa_value_uses
+                .remove(&value_id)
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    ssa_values.sort_by_key(|value| value.value_id);
+    def_use_edges.sort_by(|lhs, rhs| {
+        lhs.use_address
+            .cmp(&rhs.use_address)
+            .then_with(|| lhs.register.cmp(&rhs.register))
+            .then_with(|| lhs.value_id.cmp(&rhs.value_id))
+    });
+    (reaching_uses, live_ranges, ssa_values, def_use_edges)
 }
 
 fn predecessors_by_block(block_count: usize, edges: &[SassCfgEdge]) -> Vec<Vec<usize>> {
@@ -1324,4 +1449,10 @@ fn format_block_ids(block_ids: &[usize]) -> String {
         .map(|block_id| format!("b{block_id}"))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn format_register_definition(register: &str, def_address: Option<u64>) -> String {
+    def_address
+        .map(|address| format!("{register}@{address:#06x}"))
+        .unwrap_or_else(|| format!("{register}@entry"))
 }

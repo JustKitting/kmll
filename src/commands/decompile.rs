@@ -53,7 +53,7 @@ pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
 
     let report = run_sass_coverage_scan(&options)?;
     println!(
-        "kernel_decompile_coverage root={} files_seen={} files_parsed={} parse_errors={} parsed_instructions={} cfg_blocks={} cfg_edges={} dominator_blocks={} natural_loops={} dataflow_ops={} reaching_uses={} live_ranges={} memory_accesses={} semantic_patterns={} unsupported_instructions={} summary_path={} files_path={} opcode_frequency_path={} opcode_signature_frequency_path={} cfg_blocks_path={} cfg_edges_path={} dominators_path={} natural_loops_path={} dataflow_path={} reaching_uses_path={} live_ranges_path={} memory_accesses_path={} semantic_patterns_path={} semantic_pattern_frequency_path={} unsupported_instructions_path={}",
+        "kernel_decompile_coverage root={} files_seen={} files_parsed={} parse_errors={} parsed_instructions={} cfg_blocks={} cfg_edges={} dominator_blocks={} natural_loops={} dataflow_ops={} reaching_uses={} ssa_values={} def_use_edges={} live_ranges={} memory_accesses={} semantic_patterns={} unsupported_instructions={} summary_path={} files_path={} opcode_frequency_path={} opcode_signature_frequency_path={} cfg_blocks_path={} cfg_edges_path={} dominators_path={} natural_loops_path={} dataflow_path={} reaching_uses_path={} ssa_values_path={} def_use_edges_path={} live_ranges_path={} memory_accesses_path={} semantic_patterns_path={} semantic_pattern_frequency_path={} unsupported_instructions_path={}",
         report.root.display(),
         report.files.len(),
         report.parsed_file_count,
@@ -65,6 +65,8 @@ pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
         report.natural_loop_count,
         report.dataflow_op_count,
         report.reaching_use_count,
+        report.ssa_value_count,
+        report.def_use_edge_count,
         report.live_range_count,
         report.memory_access_count,
         report.semantic_pattern_count,
@@ -79,6 +81,8 @@ pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
         report.natural_loops_path.display(),
         report.dataflow_path.display(),
         report.reaching_uses_path.display(),
+        report.ssa_values_path.display(),
+        report.def_use_edges_path.display(),
         report.live_ranges_path.display(),
         report.memory_accesses_path.display(),
         report.semantic_patterns_path.display(),
@@ -133,13 +137,15 @@ pub(crate) fn run_kernel_decompile_sass(args: &[String]) -> AppResult<()> {
         output_dir,
     })?;
     println!(
-        "kernel_decompile_sass parsed_instructions={} cfg_blocks={} cfg_edges={} dominator_blocks={} natural_loops={} reaching_uses={} live_ranges={} memory_accesses={} semantic_patterns={} unsupported_instructions={} sass_path={} ir_path={} analysis_path={} pattern_path={} side_by_side_path={}",
+        "kernel_decompile_sass parsed_instructions={} cfg_blocks={} cfg_edges={} dominator_blocks={} natural_loops={} reaching_uses={} ssa_values={} def_use_edges={} live_ranges={} memory_accesses={} semantic_patterns={} unsupported_instructions={} sass_path={} ir_path={} analysis_path={} pattern_path={} side_by_side_path={}",
         report.parsed_instruction_count,
         report.cfg_block_count,
         report.cfg_edge_count,
         report.dominator_block_count,
         report.natural_loop_count,
         report.reaching_use_count,
+        report.ssa_value_count,
+        report.def_use_edge_count,
         report.live_range_count,
         report.memory_access_count,
         report.semantic_pattern_count,
@@ -200,7 +206,7 @@ pub(crate) fn run_kernel_decompile_fixtures(args: &[String]) -> AppResult<()> {
     let reports = run_decompile_fixtures(&options)?;
     for report in reports {
         println!(
-            "kernel_decompile_fixture fixture={} symbol={} parsed_instructions={} cfg_blocks={} cfg_edges={} dominator_blocks={} natural_loops={} reaching_uses={} live_ranges={} memory_accesses={} semantic_patterns={} unsupported_instructions={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} analysis_path={} pattern_path={} side_by_side_path={}",
+            "kernel_decompile_fixture fixture={} symbol={} parsed_instructions={} cfg_blocks={} cfg_edges={} dominator_blocks={} natural_loops={} reaching_uses={} ssa_values={} def_use_edges={} live_ranges={} memory_accesses={} semantic_patterns={} unsupported_instructions={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} analysis_path={} pattern_path={} side_by_side_path={}",
             report.fixture.name(),
             report.symbol,
             report.parsed_instruction_count,
@@ -209,6 +215,8 @@ pub(crate) fn run_kernel_decompile_fixtures(args: &[String]) -> AppResult<()> {
             report.dominator_block_count,
             report.natural_loop_count,
             report.reaching_use_count,
+            report.ssa_value_count,
+            report.def_use_edge_count,
             report.live_range_count,
             report.memory_access_count,
             report.semantic_pattern_count,
