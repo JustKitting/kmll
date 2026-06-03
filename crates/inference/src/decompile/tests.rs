@@ -104,6 +104,24 @@ predicated_write_fixture:
         /*0040*/                   EXIT ;                                        /* 0x0 */
 "#;
 
+const LOOP_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.loop_fixture,"ax",@progbits
+        .global loop_fixture
+loop_fixture:
+.text.loop_fixture:
+        /*0000*/                   MOV R2, RZ ;                                  /* 0x0 */
+.L_loop:
+        /*0010*/                   IADD R2, R2, 0x1 ;                            /* 0x0 */
+        /*0020*/                   ISETP.LT.U32.AND P0, PT, R2, R0, PT ;         /* 0x0 */
+        /*0030*/              @!P0 BRA `(.L_done) ;                              /* 0x0 */
+        /*0040*/                   IADD R3, R2, R1 ;                             /* 0x0 */
+        /*0050*/                   BRA `(.L_loop) ;                              /* 0x0 */
+.L_done:
+        /*0060*/                   EXIT ;                                        /* 0x0 */
+"#;
+
 #[test]
 fn parse_nvdisasm_sass_captures_function_and_operands() {
     let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
@@ -402,6 +420,70 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
 }
 
 #[test]
+fn analysis_recovers_dominators_and_natural_loops() {
+    let module = parse_nvdisasm_sass(LOOP_SASS).expect("loop fixture should parse");
+    let ir = lower_sass_module(&module);
+    let analysis = analyze_sass_ir(&ir);
+    let function = &analysis.functions[0];
+
+    assert_eq!(function.blocks.len(), 4);
+    assert_eq!(function.dominators.len(), function.blocks.len());
+
+    let header = function
+        .blocks
+        .iter()
+        .find(|block| block.label.as_deref() == Some(".L_loop"))
+        .expect("loop header block should exist");
+    let body = function
+        .blocks
+        .iter()
+        .find(|block| block.start_address == 0x40)
+        .expect("loop body block should exist");
+    let done = function
+        .blocks
+        .iter()
+        .find(|block| block.label.as_deref() == Some(".L_done"))
+        .expect("loop exit block should exist");
+
+    let header_dom = function
+        .dominators
+        .iter()
+        .find(|dominator| dominator.block_id == header.id)
+        .expect("header dominator row should exist");
+    assert!(header_dom.reachable);
+    assert_eq!(header_dom.immediate_dominator, Some(0));
+    assert_eq!(header_dom.dominators.as_slice(), &[0, header.id]);
+
+    let body_dom = function
+        .dominators
+        .iter()
+        .find(|dominator| dominator.block_id == body.id)
+        .expect("body dominator row should exist");
+    assert_eq!(body_dom.immediate_dominator, Some(header.id));
+    assert_eq!(body_dom.dominators.as_slice(), &[0, header.id, body.id]);
+
+    let done_dom = function
+        .dominators
+        .iter()
+        .find(|dominator| dominator.block_id == done.id)
+        .expect("done dominator row should exist");
+    assert_eq!(done_dom.immediate_dominator, Some(header.id));
+
+    assert_eq!(function.natural_loops.len(), 1);
+    let natural_loop = &function.natural_loops[0];
+    assert!(natural_loop.reachable);
+    assert_eq!(natural_loop.header_block, header.id);
+    assert_eq!(natural_loop.latch_block, body.id);
+    assert_eq!(natural_loop.blocks.as_slice(), &[header.id, body.id]);
+    assert_eq!(natural_loop.edge_target.as_deref(), Some(".L_loop"));
+
+    let text = analysis.to_text();
+    assert!(text.contains("dominators"));
+    assert!(text.contains("natural_loops"));
+    assert!(text.contains("header=b1 latch=b2 reachable=true blocks=[b1,b2]"));
+}
+
+#[test]
 fn analysis_keeps_fallthrough_after_predicated_exit() {
     let module =
         parse_nvdisasm_sass(PREDICATED_EXIT_SASS).expect("predicated exit fixture should parse");
@@ -526,6 +608,8 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.semantic_pattern_frequency_path.exists());
     assert!(report.cfg_blocks_path.exists());
     assert!(report.cfg_edges_path.exists());
+    assert!(report.dominators_path.exists());
+    assert!(report.natural_loops_path.exists());
     assert!(report.dataflow_path.exists());
     assert!(report.reaching_uses_path.exists());
     assert!(report.live_ranges_path.exists());
@@ -533,6 +617,8 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.unsupported_instructions_path.exists());
     assert!(report.cfg_block_count > 0);
     assert!(report.cfg_edge_count > 0);
+    assert!(report.dominator_block_count > 0);
+    assert!(report.natural_loop_count > 0);
     assert!(report.dataflow_op_count > 0);
     assert!(report.reaching_use_count > 0);
     assert!(report.live_range_count > 0);

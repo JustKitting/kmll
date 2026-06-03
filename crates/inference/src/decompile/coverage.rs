@@ -41,6 +41,8 @@ pub struct SassCoverageReport {
     pub semantic_pattern_frequency_path: PathBuf,
     pub cfg_blocks_path: PathBuf,
     pub cfg_edges_path: PathBuf,
+    pub dominators_path: PathBuf,
+    pub natural_loops_path: PathBuf,
     pub dataflow_path: PathBuf,
     pub reaching_uses_path: PathBuf,
     pub live_ranges_path: PathBuf,
@@ -53,6 +55,8 @@ pub struct SassCoverageReport {
     pub semantic_patterns: Vec<SassCoverageSemanticPattern>,
     pub cfg_blocks: Vec<SassCoverageBasicBlock>,
     pub cfg_edges: Vec<SassCoverageCfgEdge>,
+    pub dominators: Vec<SassCoverageDominatorBlock>,
+    pub natural_loops: Vec<SassCoverageNaturalLoop>,
     pub dataflow: Vec<SassCoverageDataflowOp>,
     pub reaching_uses: Vec<SassCoverageReachingUse>,
     pub live_ranges: Vec<SassCoverageLiveRange>,
@@ -63,6 +67,8 @@ pub struct SassCoverageReport {
     pub parsed_instruction_count: usize,
     pub cfg_block_count: usize,
     pub cfg_edge_count: usize,
+    pub dominator_block_count: usize,
+    pub natural_loop_count: usize,
     pub dataflow_op_count: usize,
     pub reaching_use_count: usize,
     pub live_range_count: usize,
@@ -81,6 +87,8 @@ pub struct SassCoverageFileReport {
     pub parsed_instruction_count: usize,
     pub cfg_block_count: usize,
     pub cfg_edge_count: usize,
+    pub dominator_block_count: usize,
+    pub natural_loop_count: usize,
     pub reaching_use_count: usize,
     pub live_range_count: usize,
     pub memory_access_count: usize,
@@ -137,6 +145,29 @@ pub struct SassCoverageCfgEdge {
     pub kind: String,
     pub condition: Option<String>,
     pub target: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassCoverageDominatorBlock {
+    pub sass_path: PathBuf,
+    pub function: String,
+    pub block_id: usize,
+    pub reachable: bool,
+    pub immediate_dominator: Option<usize>,
+    pub dominators: Vec<usize>,
+    pub dominated_blocks: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassCoverageNaturalLoop {
+    pub sass_path: PathBuf,
+    pub function: String,
+    pub header_block: usize,
+    pub latch_block: usize,
+    pub reachable: bool,
+    pub blocks: Vec<usize>,
+    pub edge_condition: Option<String>,
+    pub edge_target: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +233,8 @@ pub fn run_sass_coverage_scan(
     let mut semantic_patterns = Vec::new();
     let mut cfg_blocks = Vec::new();
     let mut cfg_edges = Vec::new();
+    let mut dominators = Vec::new();
+    let mut natural_loops = Vec::new();
     let mut dataflow = Vec::new();
     let mut reaching_uses = Vec::new();
     let mut live_ranges = Vec::new();
@@ -241,6 +274,8 @@ pub fn run_sass_coverage_scan(
                     &analysis,
                     &mut cfg_blocks,
                     &mut cfg_edges,
+                    &mut dominators,
+                    &mut natural_loops,
                     &mut dataflow,
                     &mut reaching_uses,
                     &mut live_ranges,
@@ -282,6 +317,8 @@ pub fn run_sass_coverage_scan(
                     parsed_instruction_count: parsed.instruction_count(),
                     cfg_block_count: analysis.block_count(),
                     cfg_edge_count: analysis.edge_count(),
+                    dominator_block_count: analysis.dominator_block_count(),
+                    natural_loop_count: analysis.natural_loop_count(),
                     reaching_use_count: analysis.reaching_use_count(),
                     live_range_count: analysis.live_range_count(),
                     memory_access_count: analysis.memory_access_count(),
@@ -300,6 +337,8 @@ pub fn run_sass_coverage_scan(
                     parsed_instruction_count: 0,
                     cfg_block_count: 0,
                     cfg_edge_count: 0,
+                    dominator_block_count: 0,
+                    natural_loop_count: 0,
                     reaching_use_count: 0,
                     live_range_count: 0,
                     memory_access_count: 0,
@@ -322,6 +361,8 @@ pub fn run_sass_coverage_scan(
     let parsed_instruction_count = files.iter().map(|file| file.parsed_instruction_count).sum();
     let cfg_block_count = cfg_blocks.len();
     let cfg_edge_count = cfg_edges.len();
+    let dominator_block_count = dominators.len();
+    let natural_loop_count = natural_loops.len();
     let dataflow_op_count = dataflow.len();
     let reaching_use_count = reaching_uses.len();
     let live_range_count = live_ranges.len();
@@ -337,6 +378,8 @@ pub fn run_sass_coverage_scan(
     let semantic_pattern_frequency_path = options.output_dir.join("semantic-pattern-frequency.tsv");
     let cfg_blocks_path = options.output_dir.join("cfg-blocks.tsv");
     let cfg_edges_path = options.output_dir.join("cfg-edges.tsv");
+    let dominators_path = options.output_dir.join("dominators.tsv");
+    let natural_loops_path = options.output_dir.join("natural-loops.tsv");
     let dataflow_path = options.output_dir.join("dataflow.tsv");
     let reaching_uses_path = options.output_dir.join("reaching-uses.tsv");
     let live_ranges_path = options.output_dir.join("live-ranges.tsv");
@@ -354,6 +397,8 @@ pub fn run_sass_coverage_scan(
         semantic_pattern_frequency_path,
         cfg_blocks_path,
         cfg_edges_path,
+        dominators_path,
+        natural_loops_path,
         dataflow_path,
         reaching_uses_path,
         live_ranges_path,
@@ -366,6 +411,8 @@ pub fn run_sass_coverage_scan(
         semantic_patterns,
         cfg_blocks,
         cfg_edges,
+        dominators,
+        natural_loops,
         dataflow,
         reaching_uses,
         live_ranges,
@@ -376,6 +423,8 @@ pub fn run_sass_coverage_scan(
         parsed_instruction_count,
         cfg_block_count,
         cfg_edge_count,
+        dominator_block_count,
+        natural_loop_count,
         dataflow_op_count,
         reaching_use_count,
         live_range_count,
@@ -488,6 +537,8 @@ fn append_analysis(
     analysis: &SassAnalysisModule,
     cfg_blocks: &mut Vec<SassCoverageBasicBlock>,
     cfg_edges: &mut Vec<SassCoverageCfgEdge>,
+    dominators: &mut Vec<SassCoverageDominatorBlock>,
+    natural_loops: &mut Vec<SassCoverageNaturalLoop>,
     dataflow: &mut Vec<SassCoverageDataflowOp>,
     reaching_uses: &mut Vec<SassCoverageReachingUse>,
     live_ranges: &mut Vec<SassCoverageLiveRange>,
@@ -515,6 +566,29 @@ fn append_analysis(
                 kind: edge.kind.to_string(),
                 condition: edge.condition.clone(),
                 target: edge.target.clone(),
+            });
+        }
+        for dominator in &function.dominators {
+            dominators.push(SassCoverageDominatorBlock {
+                sass_path: sass_path.to_path_buf(),
+                function: function.name.clone(),
+                block_id: dominator.block_id,
+                reachable: dominator.reachable,
+                immediate_dominator: dominator.immediate_dominator,
+                dominators: dominator.dominators.clone(),
+                dominated_blocks: dominator.dominated_blocks.clone(),
+            });
+        }
+        for natural_loop in &function.natural_loops {
+            natural_loops.push(SassCoverageNaturalLoop {
+                sass_path: sass_path.to_path_buf(),
+                function: function.name.clone(),
+                header_block: natural_loop.header_block,
+                latch_block: natural_loop.latch_block,
+                reachable: natural_loop.reachable,
+                blocks: natural_loop.blocks.clone(),
+                edge_condition: natural_loop.edge_condition.clone(),
+                edge_target: natural_loop.edge_target.clone(),
             });
         }
         for op in &function.dataflow {
@@ -612,6 +686,14 @@ fn write_coverage_reports(report: &SassCoverageReport) -> Result<(), Box<dyn Err
         render_cfg_edges_tsv(report).as_bytes(),
     )?;
     fs::write(
+        &report.dominators_path,
+        render_dominators_tsv(report).as_bytes(),
+    )?;
+    fs::write(
+        &report.natural_loops_path,
+        render_natural_loops_tsv(report).as_bytes(),
+    )?;
+    fs::write(
         &report.dataflow_path,
         render_dataflow_tsv(report).as_bytes(),
     )?;
@@ -649,6 +731,8 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
     .expect("write to string");
     writeln!(out, "cfg_blocks={}", report.cfg_block_count).expect("write to string");
     writeln!(out, "cfg_edges={}", report.cfg_edge_count).expect("write to string");
+    writeln!(out, "dominator_blocks={}", report.dominator_block_count).expect("write to string");
+    writeln!(out, "natural_loops={}", report.natural_loop_count).expect("write to string");
     writeln!(out, "dataflow_ops={}", report.dataflow_op_count).expect("write to string");
     writeln!(out, "reaching_uses={}", report.reaching_use_count).expect("write to string");
     writeln!(out, "live_ranges={}", report.live_range_count).expect("write to string");
@@ -697,7 +781,7 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "status\tsass_path\tparsed_instructions\tcfg_blocks\tcfg_edges\treaching_uses\tlive_ranges\tmemory_accesses\tsemantic_patterns\tunsupported_instructions\tir_path\tanalysis_path\tpatterns_path\tside_by_side_path\terror"
+        "status\tsass_path\tparsed_instructions\tcfg_blocks\tcfg_edges\tdominator_blocks\tnatural_loops\treaching_uses\tlive_ranges\tmemory_accesses\tsemantic_patterns\tunsupported_instructions\tir_path\tanalysis_path\tpatterns_path\tside_by_side_path\terror"
     )
     .expect("write to string");
     for file in &report.files {
@@ -708,12 +792,14 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
         };
         writeln!(
             out,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             status,
             tsv(&file.sass_path.display().to_string()),
             file.parsed_instruction_count,
             file.cfg_block_count,
             file.cfg_edge_count,
+            file.dominator_block_count,
+            file.natural_loop_count,
             file.reaching_use_count,
             file.live_range_count,
             file.memory_access_count,
@@ -799,6 +885,58 @@ fn render_cfg_edges_tsv(report: &SassCoverageReport) -> String {
             tsv(&edge.kind),
             tsv(edge.condition.as_deref().unwrap_or("")),
             tsv(edge.target.as_deref().unwrap_or("")),
+        )
+        .expect("write to string");
+    }
+    out
+}
+
+fn render_dominators_tsv(report: &SassCoverageReport) -> String {
+    let mut out = String::new();
+    writeln!(
+        out,
+        "sass_path\tfunction\tblock_id\treachable\timmediate_dominator\tdominators\tdominated_blocks"
+    )
+    .expect("write to string");
+    for dominator in &report.dominators {
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            tsv(&dominator.sass_path.display().to_string()),
+            tsv(&dominator.function),
+            dominator.block_id,
+            dominator.reachable,
+            dominator
+                .immediate_dominator
+                .map(|block| block.to_string())
+                .unwrap_or_default(),
+            tsv(&format_blocks(&dominator.dominators)),
+            tsv(&format_blocks(&dominator.dominated_blocks)),
+        )
+        .expect("write to string");
+    }
+    out
+}
+
+fn render_natural_loops_tsv(report: &SassCoverageReport) -> String {
+    let mut out = String::new();
+    writeln!(
+        out,
+        "sass_path\tfunction\theader_block\tlatch_block\treachable\tblocks\tedge_condition\tedge_target"
+    )
+    .expect("write to string");
+    for natural_loop in &report.natural_loops {
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            tsv(&natural_loop.sass_path.display().to_string()),
+            tsv(&natural_loop.function),
+            natural_loop.header_block,
+            natural_loop.latch_block,
+            natural_loop.reachable,
+            tsv(&format_blocks(&natural_loop.blocks)),
+            tsv(natural_loop.edge_condition.as_deref().unwrap_or("")),
+            tsv(natural_loop.edge_target.as_deref().unwrap_or("")),
         )
         .expect("write to string");
     }
@@ -962,6 +1100,14 @@ fn format_addresses(addresses: &[u64]) -> String {
     addresses
         .iter()
         .map(|address| format!("{address:#06x}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_blocks(blocks: &[usize]) -> String {
+    blocks
+        .iter()
+        .map(|block| block.to_string())
         .collect::<Vec<_>>()
         .join(",")
 }
