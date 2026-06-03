@@ -414,6 +414,15 @@ fn selection_cache_key_tracks_problem_config_and_score_namespace() {
     );
     assert_ne!(
         key,
+        optimization_selection_cache_key_with_policy(
+            &problem,
+            config,
+            KernelExpansionPolicy::for_search_config(false).with_max_threads_per_block(Some(64)),
+            "heuristic"
+        )
+    );
+    assert_ne!(
+        key,
         optimization_selection_cache_key(&MatvecWithoutUnrollSpace(problem), config, "heuristic")
     );
     assert_eq!(key.family, "matvec-bf16-row-major");
@@ -463,6 +472,15 @@ fn auto_selection_cache_key_tracks_auto_config_and_action_space() {
         auto_optimization_selection_cache_key(
             &MatvecWithoutUnrollSpace(problem),
             config,
+            "heuristic"
+        )
+    );
+    assert_ne!(
+        key,
+        auto_optimization_selection_cache_key_with_policy(
+            &problem,
+            config,
+            KernelExpansionPolicy::for_search_config(false).with_max_threads_per_block(Some(64)),
             "heuristic"
         )
     );

@@ -218,6 +218,134 @@ fn metadata_expansion_filters_launchability_and_tracks_duplicates() {
     assert_eq!(duplicate_expansion.duplicates, 36);
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BudgetedSearchProblem;
+
+impl BudgetedSearchProblem {
+    fn candidate(factor: u32, accumulators: u32) -> KernelCandidateMetadata {
+        let launch = CudaLaunchSpec::new(
+            format!("budget_candidate_{factor}"),
+            (1, 1, 1),
+            (1, 1, 1),
+            0,
+        );
+        let operation = TypedOperationSpec::new(
+            format!("budget-candidate-{factor}"),
+            OperationKind::Gemm,
+            OperationRoute::CudaKernel,
+        )
+        .with_launch(launch.clone());
+        let mut candidate = KernelCandidateMetadata::new(
+            "budget-test",
+            vec![KernelAxis::spatial(0, "x", 1, Some(1))],
+            KernelSchedule::new().with_transform(ScheduleTransform::Split { axis: 0, factor }),
+            "budget-generator",
+            KernelMaterialization::DeferredGenerated {
+                symbol_hint: format!("budget_candidate_{factor}"),
+                reason: "test candidate only carries metadata".to_string(),
+            },
+            launch,
+            operation,
+        );
+        candidate.resources = Some(KernelResourceUsage::new(
+            1,
+            0,
+            accumulators,
+            accumulators,
+            1,
+        ));
+        candidate
+    }
+}
+
+impl KernelMetadataSearchProblem for BudgetedSearchProblem {
+    fn seed(&self) -> KernelCandidateMetadata {
+        Self::candidate(0, 1)
+    }
+
+    fn expand(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelCandidateMetadata> {
+        if candidate.schedule.depth() == 1 {
+            vec![Self::candidate(1, 4), Self::candidate(2, 16)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn score(&self, candidate: &KernelCandidateMetadata) -> Option<SearchScore> {
+        let accumulators = candidate.resources?.accumulator_elements_per_thread;
+        if candidate
+            .schedule
+            .transforms
+            .iter()
+            .any(|transform| matches!(transform, ScheduleTransform::Split { axis: 0, factor: 0 }))
+        {
+            SearchScore::measured(20.0)
+        } else if accumulators > 8 {
+            SearchScore::measured(1.0)
+        } else {
+            SearchScore::measured(10.0)
+        }
+    }
+}
+
+#[test]
+fn policy_aware_search_rejects_overbudget_candidates_during_beam_expansion() {
+    let problem = BudgetedSearchProblem;
+    let beam_config = BeamSearchConfig {
+        beam_width: 2,
+        max_depth: 1,
+        require_launchable: false,
+    };
+    let default_policy = KernelExpansionPolicy::for_search_config(false);
+
+    let unconstrained = beam_search_metadata_with_policy(&problem, beam_config, default_policy);
+    let unconstrained_best = unconstrained
+        .best
+        .as_ref()
+        .expect("unconstrained search should find a best candidate");
+
+    assert_eq!(unconstrained.rejected, 0);
+    assert_eq!(
+        unconstrained_best
+            .resources
+            .expect("candidate should carry resource metadata")
+            .accumulator_elements_per_thread,
+        16
+    );
+
+    let capped_policy = default_policy.with_max_accumulator_elements_per_thread(Some(8));
+    let capped = beam_search_metadata_with_policy(&problem, beam_config, capped_policy);
+    let capped_best = capped
+        .best
+        .as_ref()
+        .expect("capped search should still find an admissible candidate");
+
+    assert_eq!(capped.rejected, 1);
+    assert_eq!(
+        capped_best
+            .resources
+            .expect("candidate should carry resource metadata")
+            .accumulator_elements_per_thread,
+        4
+    );
+
+    let auto_config = AutoOptimizeConfig::from_beam_search_config(beam_config);
+    let capped_auto = auto_optimize_metadata_with_policy(&problem, auto_config, capped_policy);
+    let capped_auto_best = capped_auto
+        .best
+        .as_ref()
+        .expect("policy-aware auto optimize should find an admissible best candidate");
+
+    assert_eq!(capped_auto.rejected, 1);
+    assert_eq!(
+        capped_auto_best
+            .resources
+            .expect("candidate should carry resource metadata")
+            .accumulator_elements_per_thread,
+        4
+    );
+}
+
 #[test]
 fn expansion_policy_rejects_overbudget_kernel_resources() {
     let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
