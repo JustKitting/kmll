@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use nn_rust_autotune::decompile::{
-    DecompileFixtureOptions, SassCoverageOptions, SassFileDecompileOptions,
-    SimpleKernelFixtureKind, run_decompile_fixtures, run_sass_coverage_scan,
+    DecompileFixtureCoverageOptions, DecompileFixtureOptions, SassCoverageOptions,
+    SassFileDecompileOptions, SimpleKernelFixtureKind, all_simple_kernel_fixture_kinds,
+    run_decompile_fixture_coverage, run_decompile_fixtures, run_sass_coverage_scan,
     run_sass_file_decompile,
 };
 use nn_rust_inference::runtime;
@@ -11,6 +12,7 @@ use crate::{AppResult, invalid_input, parse_required_flag_value};
 
 const DECOMPILE_FIXTURES_USAGE: &str =
     "kernel-decompile-fixtures [--fixture NAME|all] [--artifact-root PATH] [--compile-arch sm_120]";
+const DECOMPILE_FIXTURE_COVERAGE_USAGE: &str = "kernel-decompile-fixture-coverage [--fixture NAME|all] [--artifact-root PATH] [--compile-arch sm_120] [--out-dir PATH]";
 const DECOMPILE_SASS_USAGE: &str =
     "kernel-decompile-sass SASS_PATH [--source PATH] [--out-dir PATH]";
 const DECOMPILE_COVERAGE_USAGE: &str =
@@ -251,19 +253,99 @@ pub(crate) fn run_kernel_decompile_fixtures(args: &[String]) -> AppResult<()> {
     Ok(())
 }
 
+pub(crate) fn run_kernel_decompile_fixture_coverage(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let mut options = DecompileFixtureCoverageOptions::sm120_all_default();
+    let mut saw_coverage_out_dir = false;
+    let mut saw_fixture_arg = false;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--artifact-root" => {
+                let artifact_root = PathBuf::from(parse_required_flag_value(
+                    args,
+                    &mut index,
+                    "--artifact-root",
+                )?);
+                if !saw_coverage_out_dir {
+                    options.coverage_output_dir = artifact_root.join("coverage");
+                }
+                options.fixture_options.artifact_root = artifact_root;
+            }
+            "--compile-arch" => {
+                options.fixture_options.compile_arch =
+                    parse_required_flag_value(args, &mut index, "--compile-arch")?.to_string();
+            }
+            "--fixture" => {
+                let value = parse_required_flag_value(args, &mut index, "--fixture")?;
+                if !saw_fixture_arg {
+                    options.fixture_options.fixtures.clear();
+                    saw_fixture_arg = true;
+                }
+                push_fixture_arg(value, &mut options.fixture_options.fixtures)?;
+            }
+            "--out-dir" => {
+                options.coverage_output_dir =
+                    PathBuf::from(parse_required_flag_value(args, &mut index, "--out-dir")?);
+                saw_coverage_out_dir = true;
+            }
+            flag if flag.starts_with("--") => {
+                return Err(invalid_input(format!(
+                    "kernel-decompile-fixture-coverage unknown argument {flag:?}; usage: {DECOMPILE_FIXTURE_COVERAGE_USAGE}"
+                )));
+            }
+            value => {
+                if !saw_fixture_arg {
+                    options.fixture_options.fixtures.clear();
+                    saw_fixture_arg = true;
+                }
+                push_fixture_arg(value, &mut options.fixture_options.fixtures)?;
+                index += 1;
+            }
+        }
+    }
+
+    if options.fixture_options.fixtures.is_empty() {
+        options.fixture_options.fixtures = all_simple_kernel_fixture_kinds();
+    }
+
+    let report = run_decompile_fixture_coverage(&options)?;
+    println!(
+        "kernel_decompile_fixture_coverage fixtures={} root={} files_seen={} files_parsed={} parse_errors={} parsed_instructions={} known_opcodes={} locally_mapped_opcodes={} known_unobserved_opcodes={} opcode_probe_targets={} observed_unregistered_opcodes={} observed_unmapped_opcodes={} unsupported_instructions={} summary_path={} files_path={} opcode_catalog_path={} opcode_probe_targets_path={}",
+        report.fixture_reports.len(),
+        report.coverage_report.root.display(),
+        report.coverage_report.files.len(),
+        report.coverage_report.parsed_file_count,
+        report.coverage_report.parse_error_count,
+        report.coverage_report.parsed_instruction_count,
+        report.coverage_report.known_opcode_count,
+        report.coverage_report.locally_mapped_opcode_count,
+        report.coverage_report.known_unobserved_opcode_count,
+        report.coverage_report.opcode_probe_target_count,
+        report.coverage_report.observed_unregistered_opcode_count,
+        report.coverage_report.observed_unmapped_opcode_count,
+        report.coverage_report.unsupported_instruction_count,
+        report.coverage_report.summary_path.display(),
+        report.coverage_report.files_path.display(),
+        report.coverage_report.opcode_catalog_path.display(),
+        report.coverage_report.opcode_probe_targets_path.display(),
+    );
+    for fixture in report.fixture_reports {
+        println!(
+            "kernel_decompile_fixture fixture={} symbol={} parsed_instructions={} unsupported_instructions={} sass_path={}",
+            fixture.fixture.name(),
+            fixture.symbol,
+            fixture.parsed_instruction_count,
+            fixture.unsupported_instruction_count,
+            fixture.sass_path.display(),
+        );
+    }
+    Ok(())
+}
+
 fn push_fixture_arg(value: &str, fixtures: &mut Vec<SimpleKernelFixtureKind>) -> AppResult<()> {
     if value == "all" {
-        for fixture in [
-            SimpleKernelFixtureKind::I32Add,
-            SimpleKernelFixtureKind::F32Add,
-            SimpleKernelFixtureKind::F32Mul,
-            SimpleKernelFixtureKind::F32Fma,
-            SimpleKernelFixtureKind::LoadStore,
-            SimpleKernelFixtureKind::PredicateBranch,
-            SimpleKernelFixtureKind::ThreadIndexRead,
-            SimpleKernelFixtureKind::Bf16ToF32,
-            SimpleKernelFixtureKind::F16Ops,
-        ] {
+        for fixture in all_simple_kernel_fixture_kinds() {
             push_unique_fixture(fixtures, fixture);
         }
         return Ok(());

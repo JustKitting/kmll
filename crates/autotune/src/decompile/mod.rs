@@ -38,7 +38,10 @@ pub use self::{
         SassOpcodeCatalogEntry, SassOpcodeCount, SassOpcodeProbeTarget, SassUnsupportedInstruction,
         run_sass_coverage_scan,
     },
-    fixtures::{SimpleKernelFixture, SimpleKernelFixtureKind, simple_kernel_fixtures},
+    fixtures::{
+        SimpleKernelFixture, SimpleKernelFixtureKind, all_simple_kernel_fixture_kinds,
+        simple_kernel_fixtures,
+    },
     ir::{
         KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemorySpace,
         SassMappingConfidence, lift_sass_module,
@@ -76,6 +79,26 @@ impl DecompileFixtureOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecompileFixtureCoverageOptions {
+    pub fixture_options: DecompileFixtureOptions,
+    pub coverage_output_dir: PathBuf,
+}
+
+impl DecompileFixtureCoverageOptions {
+    pub fn sm120_all_default() -> Self {
+        let artifact_root = runtime::default_artifact_dir().join("decompile-fixtures");
+        Self {
+            fixture_options: DecompileFixtureOptions {
+                artifact_root: artifact_root.clone(),
+                compile_arch: "sm_120".to_string(),
+                fixtures: all_simple_kernel_fixture_kinds(),
+            },
+            coverage_output_dir: artifact_root.join("coverage"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecompileFixtureReport {
     pub fixture: SimpleKernelFixtureKind,
     pub symbol: String,
@@ -103,6 +126,12 @@ pub struct DecompileFixtureReport {
     pub memory_access_count: usize,
     pub semantic_pattern_count: usize,
     pub unsupported_instruction_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecompileFixtureCoverageReport {
+    pub fixture_reports: Vec<DecompileFixtureReport>,
+    pub coverage_report: SassCoverageReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,6 +184,20 @@ pub fn run_decompile_fixtures(
         reports.push(run_decompile_fixture(options, fixture)?);
     }
     Ok(reports)
+}
+
+pub fn run_decompile_fixture_coverage(
+    options: &DecompileFixtureCoverageOptions,
+) -> Result<DecompileFixtureCoverageReport, Box<dyn Error>> {
+    let fixture_reports = run_decompile_fixtures(&options.fixture_options)?;
+    let coverage_report = run_sass_coverage_scan(&SassCoverageOptions {
+        root: options.fixture_options.artifact_root.clone(),
+        output_dir: options.coverage_output_dir.clone(),
+    })?;
+    Ok(DecompileFixtureCoverageReport {
+        fixture_reports,
+        coverage_report,
+    })
 }
 
 pub fn run_sass_file_decompile(

@@ -831,6 +831,36 @@ fn side_by_side_dump_contains_source_sass_and_ir_sections() {
 }
 
 #[test]
+fn all_simple_kernel_fixture_kinds_matches_fixture_definitions() {
+    let fixture_kinds = simple_kernel_fixtures()
+        .into_iter()
+        .map(|fixture| fixture.kind)
+        .collect::<Vec<_>>();
+    let all_kinds = all_simple_kernel_fixture_kinds();
+
+    assert_eq!(all_kinds.len(), fixture_kinds.len());
+    for kind in &all_kinds {
+        assert!(fixture_kinds.contains(kind));
+    }
+}
+
+#[test]
+fn fixture_coverage_default_runs_all_fixtures_under_managed_artifact_root() {
+    let options = DecompileFixtureCoverageOptions::sm120_all_default();
+
+    assert_eq!(
+        options.fixture_options.fixtures,
+        all_simple_kernel_fixture_kinds()
+    );
+    assert_eq!(options.fixture_options.compile_arch, "sm_120");
+    assert!(
+        options
+            .coverage_output_dir
+            .starts_with(&options.fixture_options.artifact_root)
+    );
+}
+
+#[test]
 fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     let root = unique_test_dir("coverage");
     let input = root.join("input");

@@ -109,6 +109,20 @@ pub fn simple_kernel_fixtures() -> Vec<SimpleKernelFixture> {
     ]
 }
 
+pub fn all_simple_kernel_fixture_kinds() -> Vec<SimpleKernelFixtureKind> {
+    vec![
+        SimpleKernelFixtureKind::I32Add,
+        SimpleKernelFixtureKind::F32Add,
+        SimpleKernelFixtureKind::F32Mul,
+        SimpleKernelFixtureKind::F32Fma,
+        SimpleKernelFixtureKind::LoadStore,
+        SimpleKernelFixtureKind::PredicateBranch,
+        SimpleKernelFixtureKind::ThreadIndexRead,
+        SimpleKernelFixtureKind::Bf16ToF32,
+        SimpleKernelFixtureKind::F16Ops,
+    ]
+}
+
 const I32_ADD_SOURCE: &str = r#"use cuda_device::{DisjointSlice, kernel, thread};
 
 #[kernel]
