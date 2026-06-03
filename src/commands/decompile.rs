@@ -53,18 +53,24 @@ pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
 
     let report = run_sass_coverage_scan(&options)?;
     println!(
-        "kernel_decompile_coverage root={} files_seen={} files_parsed={} parse_errors={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} summary_path={} files_path={} opcode_frequency_path={} opcode_signature_frequency_path={} semantic_patterns_path={} semantic_pattern_frequency_path={} unsupported_instructions_path={}",
+        "kernel_decompile_coverage root={} files_seen={} files_parsed={} parse_errors={} parsed_instructions={} cfg_blocks={} cfg_edges={} dataflow_ops={} semantic_patterns={} unsupported_instructions={} summary_path={} files_path={} opcode_frequency_path={} opcode_signature_frequency_path={} cfg_blocks_path={} cfg_edges_path={} dataflow_path={} semantic_patterns_path={} semantic_pattern_frequency_path={} unsupported_instructions_path={}",
         report.root.display(),
         report.files.len(),
         report.parsed_file_count,
         report.parse_error_count,
         report.parsed_instruction_count,
+        report.cfg_block_count,
+        report.cfg_edge_count,
+        report.dataflow_op_count,
         report.semantic_pattern_count,
         report.unsupported_instruction_count,
         report.summary_path.display(),
         report.files_path.display(),
         report.opcode_frequency_path.display(),
         report.opcode_signature_frequency_path.display(),
+        report.cfg_blocks_path.display(),
+        report.cfg_edges_path.display(),
+        report.dataflow_path.display(),
         report.semantic_patterns_path.display(),
         report.semantic_pattern_frequency_path.display(),
         report.unsupported_instructions_path.display(),
@@ -117,12 +123,15 @@ pub(crate) fn run_kernel_decompile_sass(args: &[String]) -> AppResult<()> {
         output_dir,
     })?;
     println!(
-        "kernel_decompile_sass parsed_instructions={} semantic_patterns={} unsupported_instructions={} sass_path={} ir_path={} pattern_path={} side_by_side_path={}",
+        "kernel_decompile_sass parsed_instructions={} cfg_blocks={} cfg_edges={} semantic_patterns={} unsupported_instructions={} sass_path={} ir_path={} analysis_path={} pattern_path={} side_by_side_path={}",
         report.parsed_instruction_count,
+        report.cfg_block_count,
+        report.cfg_edge_count,
         report.semantic_pattern_count,
         report.unsupported_instruction_count,
         report.sass_path.display(),
         report.ir_path.display(),
+        report.analysis_path.display(),
         report.pattern_path.display(),
         report.side_by_side_path.display(),
     );
@@ -176,10 +185,12 @@ pub(crate) fn run_kernel_decompile_fixtures(args: &[String]) -> AppResult<()> {
     let reports = run_decompile_fixtures(&options)?;
     for report in reports {
         println!(
-            "kernel_decompile_fixture fixture={} symbol={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} pattern_path={} side_by_side_path={}",
+            "kernel_decompile_fixture fixture={} symbol={} parsed_instructions={} cfg_blocks={} cfg_edges={} semantic_patterns={} unsupported_instructions={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} analysis_path={} pattern_path={} side_by_side_path={}",
             report.fixture.name(),
             report.symbol,
             report.parsed_instruction_count,
+            report.cfg_block_count,
+            report.cfg_edge_count,
             report.semantic_pattern_count,
             report.unsupported_instruction_count,
             report.source_path.display(),
@@ -187,6 +198,7 @@ pub(crate) fn run_kernel_decompile_fixtures(args: &[String]) -> AppResult<()> {
             report.cubin_path.display(),
             report.sass_path.display(),
             report.ir_path.display(),
+            report.analysis_path.display(),
             report.pattern_path.display(),
             report.side_by_side_path.display(),
         );

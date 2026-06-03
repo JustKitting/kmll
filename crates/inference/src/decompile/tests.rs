@@ -62,6 +62,34 @@ unsupported_fixture:
         /*0010*/                   EXIT ;                                        /* 0x0 */
 "#;
 
+const CFG_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.cfg_fixture,"ax",@progbits
+        .global cfg_fixture
+cfg_fixture:
+.text.cfg_fixture:
+        /*0000*/                   ISETP.GT.U32.AND P0, PT, R0, R1, PT ;        /* 0x0 */
+        /*0010*/               @P0 BRA `(.L_then) ;                              /* 0x0 */
+        /*0020*/                   IADD R2, R0, R1 ;                             /* 0x0 */
+.L_then:
+        /*0030*/                   IADD R3, R2, R1 ;                             /* 0x0 */
+        /*0040*/                   EXIT ;                                        /* 0x0 */
+"#;
+
+const PREDICATED_EXIT_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.predicated_exit_fixture,"ax",@progbits
+        .global predicated_exit_fixture
+predicated_exit_fixture:
+.text.predicated_exit_fixture:
+        /*0000*/                   ISETP.GT.U32.AND P0, PT, R0, R1, PT ;        /* 0x0 */
+        /*0010*/               @P0 EXIT ;                                        /* 0x0 */
+        /*0020*/                   IADD R2, R0, R1 ;                             /* 0x0 */
+        /*0030*/                   EXIT ;                                        /* 0x0 */
+"#;
+
 #[test]
 fn parse_nvdisasm_sass_captures_function_and_operands() {
     let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
@@ -226,6 +254,83 @@ fn semantic_patterns_recover_bf16_widen_and_warp_reduce() {
 }
 
 #[test]
+fn analysis_recovers_cfg_edges_and_register_dataflow() {
+    let module = parse_nvdisasm_sass(CFG_SASS).expect("cfg fixture should parse");
+    let ir = lower_sass_module(&module);
+    let analysis = analyze_sass_ir(&ir);
+    let function = &analysis.functions[0];
+
+    assert_eq!(function.blocks.len(), 3);
+    assert!(function.blocks.iter().any(|block| {
+        block.id == 0
+            && block.start_address == 0x0
+            && block.end_address == 0x10
+            && block.terminator == SassBlockTerminator::Branch
+    }));
+    assert!(function.edges.iter().any(|edge| {
+        edge.from_block == 0
+            && edge.to_block == Some(2)
+            && edge.kind == SassCfgEdgeKind::Branch
+            && edge.condition.as_deref() == Some("P0")
+            && edge.target.as_deref() == Some(".L_then")
+    }));
+    assert!(function.edges.iter().any(|edge| {
+        edge.from_block == 0
+            && edge.to_block == Some(1)
+            && edge.kind == SassCfgEdgeKind::Fallthrough
+    }));
+    assert!(function.edges.iter().any(|edge| {
+        edge.from_block == 1
+            && edge.to_block == Some(2)
+            && edge.kind == SassCfgEdgeKind::Fallthrough
+    }));
+    assert!(function.edges.iter().any(|edge| {
+        edge.from_block == 2 && edge.to_block.is_none() && edge.kind == SassCfgEdgeKind::Exit
+    }));
+
+    let compare = function
+        .dataflow
+        .iter()
+        .find(|op| op.address == 0x0)
+        .expect("compare dataflow should exist");
+    assert_eq!(compare.defines, ["P0"]);
+    assert_eq!(compare.uses, ["R0", "R1"]);
+    let add = function
+        .dataflow
+        .iter()
+        .find(|op| op.address == 0x20)
+        .expect("add dataflow should exist");
+    assert_eq!(add.defines, ["R2"]);
+    assert_eq!(add.uses, ["R0", "R1"]);
+
+    let text = analysis.to_text();
+    assert!(text.contains("b0 -> b2 [branch condition=P0 target=.L_then]"));
+    assert!(text.contains("0x0020: def=[R2] use=[R0,R1]"));
+}
+
+#[test]
+fn analysis_keeps_fallthrough_after_predicated_exit() {
+    let module =
+        parse_nvdisasm_sass(PREDICATED_EXIT_SASS).expect("predicated exit fixture should parse");
+    let ir = lower_sass_module(&module);
+    let analysis = analyze_sass_ir(&ir);
+    let function = &analysis.functions[0];
+
+    assert_eq!(function.blocks.len(), 2);
+    assert!(function.edges.iter().any(|edge| {
+        edge.from_block == 0
+            && edge.to_block.is_none()
+            && edge.kind == SassCfgEdgeKind::Exit
+            && edge.condition.as_deref() == Some("P0")
+    }));
+    assert!(function.edges.iter().any(|edge| {
+        edge.from_block == 0
+            && edge.to_block == Some(1)
+            && edge.kind == SassCfgEdgeKind::Fallthrough
+    }));
+}
+
+#[test]
 fn side_by_side_dump_contains_source_sass_and_ir_sections() {
     let fixture = simple_kernel_fixtures()
         .into_iter()
@@ -281,12 +386,25 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.opcode_signature_frequency_path.exists());
     assert!(report.semantic_patterns_path.exists());
     assert!(report.semantic_pattern_frequency_path.exists());
+    assert!(report.cfg_blocks_path.exists());
+    assert!(report.cfg_edges_path.exists());
+    assert!(report.dataflow_path.exists());
     assert!(report.unsupported_instructions_path.exists());
+    assert!(report.cfg_block_count > 0);
+    assert!(report.cfg_edge_count > 0);
+    assert!(report.dataflow_op_count > 0);
     assert!(
         report
             .files
             .iter()
             .filter_map(|file| file.ir_path.as_ref())
+            .all(|path| path.exists())
+    );
+    assert!(
+        report
+            .files
+            .iter()
+            .filter_map(|file| file.analysis_path.as_ref())
             .all(|path| path.exists())
     );
     assert!(

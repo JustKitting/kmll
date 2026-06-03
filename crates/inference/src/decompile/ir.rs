@@ -48,6 +48,7 @@ pub struct KernelIrFunction {
 pub struct KernelIrOp {
     pub address: u64,
     pub label: Option<String>,
+    pub predicate: Option<String>,
     pub kind: KernelIrOpKind,
     pub confidence: SassMappingConfidence,
     pub source_opcode: String,
@@ -231,6 +232,7 @@ fn lower_instruction(instruction: &SassInstruction) -> KernelIrOp {
     KernelIrOp {
         address: instruction.address,
         label: instruction.label.clone(),
+        predicate: instruction.predicate.as_ref().map(predicate_text),
         kind,
         confidence,
         source_opcode: instruction.opcode.clone(),
