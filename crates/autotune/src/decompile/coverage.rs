@@ -66,7 +66,7 @@ pub struct SassCoverageReport {
     pub opcode_catalog: Vec<SassOpcodeCatalogEntry>,
     pub opcode_probe_targets: Vec<SassOpcodeProbeTarget>,
     pub opcode_counts: Vec<SassOpcodeCount>,
-    pub opcode_signature_counts: Vec<SassOpcodeCount>,
+    pub opcode_signature_counts: Vec<SassOpcodeSignatureCount>,
     pub semantic_pattern_counts: Vec<SassSemanticPatternCount>,
     pub semantic_patterns: Vec<SassCoverageSemanticPattern>,
     pub cfg_blocks: Vec<SassCoverageBasicBlock>,
@@ -138,7 +138,13 @@ pub struct SassCoverageFileReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassOpcodeCount {
-    pub opcode: String,
+    pub opcode: SassOpcode,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassOpcodeSignatureCount {
+    pub signature: SassOpcodeSignature,
     pub count: usize,
 }
 
@@ -315,9 +321,9 @@ impl OpcodeCatalogBuilder {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct SassOpcodeSignature {
-    opcode: SassOpcode,
-    modifiers: Vec<SassModifier>,
+pub struct SassOpcodeSignature {
+    pub opcode: SassOpcode,
+    pub modifiers: Vec<SassModifier>,
 }
 
 impl SassOpcodeSignature {
@@ -1309,7 +1315,7 @@ fn append_analysis(
     }
 }
 
-fn sorted_counts(counts: BTreeMap<String, usize>) -> Vec<SassOpcodeCount> {
+fn sorted_opcode_counts(counts: BTreeMap<SassOpcode, usize>) -> Vec<SassOpcodeCount> {
     let mut counts = counts
         .into_iter()
         .map(|(opcode, count)| SassOpcodeCount { opcode, count })
@@ -1322,24 +1328,19 @@ fn sorted_counts(counts: BTreeMap<String, usize>) -> Vec<SassOpcodeCount> {
     counts
 }
 
-fn sorted_opcode_counts(counts: BTreeMap<SassOpcode, usize>) -> Vec<SassOpcodeCount> {
-    sorted_counts(
-        counts
-            .into_iter()
-            .map(|(opcode, count)| (opcode.to_string(), count))
-            .collect(),
-    )
-}
-
 fn sorted_opcode_signature_counts(
     counts: BTreeMap<SassOpcodeSignature, usize>,
-) -> Vec<SassOpcodeCount> {
-    sorted_counts(
-        counts
-            .into_iter()
-            .map(|(signature, count)| (signature.to_string(), count))
-            .collect(),
-    )
+) -> Vec<SassOpcodeSignatureCount> {
+    let mut counts = counts
+        .into_iter()
+        .map(|(signature, count)| SassOpcodeSignatureCount { signature, count })
+        .collect::<Vec<_>>();
+    counts.sort_by(|lhs, rhs| {
+        rhs.count
+            .cmp(&lhs.count)
+            .then_with(|| lhs.signature.cmp(&rhs.signature))
+    });
+    counts
 }
 
 fn sorted_semantic_pattern_counts(
@@ -1373,11 +1374,11 @@ fn write_coverage_reports(report: &SassCoverageReport) -> Result<(), Box<dyn Err
     )?;
     fs::write(
         &report.opcode_frequency_path,
-        render_counts_tsv("opcode", &report.opcode_counts).as_bytes(),
+        render_opcode_counts_tsv(&report.opcode_counts).as_bytes(),
     )?;
     fs::write(
         &report.opcode_signature_frequency_path,
-        render_counts_tsv("opcode_signature", &report.opcode_signature_counts).as_bytes(),
+        render_opcode_signature_counts_tsv(&report.opcode_signature_counts).as_bytes(),
     )?;
     fs::write(
         &report.semantic_patterns_path,
@@ -2054,11 +2055,27 @@ fn render_memory_accesses_tsv(report: &SassCoverageReport) -> String {
     out
 }
 
-fn render_counts_tsv(header: &str, counts: &[SassOpcodeCount]) -> String {
+fn render_opcode_counts_tsv(counts: &[SassOpcodeCount]) -> String {
     let mut out = String::new();
-    writeln!(out, "{header}\tcount").expect("write to string");
+    writeln!(out, "opcode\tcount").expect("write to string");
     for count in counts {
-        writeln!(out, "{}\t{}", tsv(&count.opcode), count.count).expect("write to string");
+        writeln!(out, "{}\t{}", tsv(&count.opcode.to_string()), count.count)
+            .expect("write to string");
+    }
+    out
+}
+
+fn render_opcode_signature_counts_tsv(counts: &[SassOpcodeSignatureCount]) -> String {
+    let mut out = String::new();
+    writeln!(out, "opcode_signature\tcount").expect("write to string");
+    for count in counts {
+        writeln!(
+            out,
+            "{}\t{}",
+            tsv(&count.signature.to_string()),
+            count.count
+        )
+        .expect("write to string");
     }
     out
 }

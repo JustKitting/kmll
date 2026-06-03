@@ -1469,7 +1469,13 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         report
             .opcode_counts
             .iter()
-            .any(|count| count.opcode == "MYSTERY" && count.count == 1)
+            .any(|count| count.opcode == SassOpcode::new("MYSTERY") && count.count == 1)
+    );
+    assert!(
+        report
+            .opcode_signature_counts
+            .iter()
+            .any(|count| { count.signature.opcode == SassOpcode::new("IADD") && count.count > 0 })
     );
     let mystery_catalog = report
         .opcode_catalog
