@@ -29,22 +29,29 @@ fn gemm_search_expands_tile_metadata_into_reduce_unroll_variants() {
     let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
     let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
     let candidates = problem.expand(&tile_candidate);
-    assert_eq!(candidates.len(), 42);
+    assert_eq!(candidates.len(), 54);
 
-    let m_split = candidates
+    let m_local_tile = candidates
         .iter()
         .find(|candidate| {
             schedule_gemm_tile(&candidate.schedule) == Some(GemmTileShape::new(24, 32, 16))
         })
-        .expect("GEMM search should expose an M-axis split descriptor");
-    assert_eq!(m_split.launch.kernel, "gemm_f32_bf16_tile_24x32x16");
+        .expect("GEMM search should expose an M-axis local-tile descriptor");
+    assert_eq!(m_local_tile.launch.kernel, "gemm_f32_bf16_tile_24x32x16");
     assert_eq!(
-        m_split.action_trace,
-        vec![KernelScheduleAction::split(
-            0,
-            24,
-            KernelActionMaterialization::DeferredGenerated
-        )]
+        m_local_tile.action_trace,
+        vec![KernelScheduleAction::local_tile(0, 24)]
+    );
+
+    let tinygrad_local_tile = candidates
+        .iter()
+        .find(|candidate| {
+            schedule_gemm_tile(&candidate.schedule) == Some(GemmTileShape::new(29, 32, 16))
+        })
+        .expect("GEMM search should expose tinygrad-like local-tile factor 29");
+    assert_eq!(
+        tinygrad_local_tile.launch.kernel,
+        "gemm_f32_bf16_tile_29x32x16"
     );
 
     let unroll7 = candidates

@@ -110,25 +110,69 @@ impl GemmSearchProblem {
 
     pub(in crate::autotune) fn split_factors_for_axis(&self, axis: u8) -> Vec<u32> {
         match axis {
-            0 => bounded_tile_factors(self.m, Self::MAX_TILE_DIM, None),
-            1 => bounded_tile_factors(self.n, Self::MAX_TILE_DIM, None),
-            2 => bounded_tile_factors(self.k, Self::MAX_TILE_DIM, None),
+            0 => self.local_tile_factors_for_axis(axis),
+            1 => self.local_tile_factors_for_axis(axis),
+            2 => self.local_tile_factors_for_axis(axis),
             _ => Vec::new(),
         }
     }
 
-    pub(in crate::autotune) fn split_action_variants(&self) -> Vec<KernelAxisFactorAction> {
-        let mut variants = Vec::new();
-        for axis in 0..=2 {
-            variants.extend(self.split_factors_for_axis(axis).into_iter().map(|factor| {
-                KernelAxisFactorAction::new(
-                    axis,
-                    factor,
-                    KernelActionMaterialization::DeferredGenerated,
-                )
-            }));
+    pub(in crate::autotune) fn local_tile_factors_for_axis(&self, axis: u8) -> Vec<u32> {
+        self.local_tile_factors_for_axis_with_required(axis, None)
+    }
+
+    fn local_tile_factors_for_axis_with_required(
+        &self,
+        axis: u8,
+        required_factor: Option<u32>,
+    ) -> Vec<u32> {
+        let extent = match axis {
+            0 => self.m,
+            1 => self.n,
+            2 => self.k,
+            _ => return Vec::new(),
+        };
+        let upper = extent.min(Self::MAX_TILE_DIM as usize) as u32;
+        let mut factors = KernelScheduleActionTemplate::INFERENCE_DEFAULT
+            .local_tile_factors
+            .iter()
+            .copied()
+            .filter(|factor| *factor <= upper)
+            .collect::<Vec<_>>();
+        if let Some(required) = required_factor {
+            factors.push(required);
         }
-        variants
+        factors.sort_unstable();
+        factors.dedup();
+        factors
+    }
+
+    pub(in crate::autotune) fn local_tile_action_spaces_for_plan(
+        &self,
+        plan: GemmSchedulePlan,
+        exclude_current: bool,
+    ) -> Vec<KernelActionSpace> {
+        let mut spaces = Vec::new();
+        for axis in 0..=2 {
+            let Some(current_factor) = plan.tile.axis_factor(axis) else {
+                continue;
+            };
+            let factors = self
+                .local_tile_factors_for_axis(axis)
+                .into_iter()
+                .filter(|factor| !exclude_current || *factor != current_factor)
+                .filter(|factor| {
+                    plan.tile
+                        .with_axis(axis, *factor)
+                        .map(|tile| Self::plan_within_resource_limits(plan.with_tile(tile)))
+                        .unwrap_or(false)
+                })
+                .collect::<Vec<_>>();
+            if !factors.is_empty() {
+                spaces.push(KernelActionSpace::LocalTile { axis, factors });
+            }
+        }
+        spaces
     }
 
     pub(in crate::autotune) fn split_action_variants_for_plan(
@@ -190,11 +234,11 @@ impl GemmSearchProblem {
 
     pub(in crate::autotune) fn tile_shapes(&self) -> Vec<GemmTileShape> {
         let m_factors =
-            bounded_tile_factors(self.m, Self::MAX_TILE_DIM, Some(Self::EXISTING_TILE.m));
+            self.local_tile_factors_for_axis_with_required(0, Some(Self::EXISTING_TILE.m));
         let n_factors =
-            bounded_tile_factors(self.n, Self::MAX_TILE_DIM, Some(Self::EXISTING_TILE.n));
+            self.local_tile_factors_for_axis_with_required(1, Some(Self::EXISTING_TILE.n));
         let k_factors =
-            bounded_tile_factors(self.k, Self::MAX_TILE_DIM, Some(Self::EXISTING_TILE.k));
+            self.local_tile_factors_for_axis_with_required(2, Some(Self::EXISTING_TILE.k));
         let mut tiles = Vec::new();
         for m in m_factors {
             for n in n_factors.iter().copied() {

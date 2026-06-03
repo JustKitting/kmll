@@ -23,7 +23,7 @@ fn gemm_search_can_rank_generated_descriptors_when_allowed() {
     assert!(matches!(
         best.action_trace.as_slice(),
         [KernelScheduleAction {
-            op: KernelScheduleActionOp::Split,
+            op: KernelScheduleActionOp::LocalTile,
             ..
         }]
     ));
@@ -151,8 +151,8 @@ fn gemm_default_search_keeps_only_currently_launchable_tile() {
     let best = result
         .best
         .expect("GEMM search should keep the existing tile");
-    assert_eq!(result.explored, 41);
-    assert_eq!(result.rejected, 40);
+    assert_eq!(result.explored, 53);
+    assert_eq!(result.rejected, 52);
     assert_eq!(
         schedule_gemm_tile(&best.schedule),
         Some(GemmTileShape::new(16, 16, 16))

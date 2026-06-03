@@ -11,19 +11,37 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     let spaces = problem.action_spaces(&upcast_candidate);
     let actions = spaces.actions();
 
-    assert_eq!(spaces.spaces.len(), 8);
-    let KernelActionSpace::Split { variants } = &spaces.spaces[0] else {
-        panic!("upcast GEMM should still expose one-axis retile split metadata");
+    assert_eq!(spaces.spaces.len(), 10);
+    let KernelActionSpace::LocalTile {
+        axis: m_tile_axis,
+        factors: m_tile_factors,
+    } = &spaces.spaces[0]
+    else {
+        panic!("upcast GEMM should expose M-axis local-tile metadata");
     };
-    assert_eq!(variants.len(), 12);
-    assert!(variants.contains(&KernelAxisFactorAction::new(
-        0,
-        24,
-        KernelActionMaterialization::DeferredGenerated
-    )));
+    assert_eq!(*m_tile_axis, 0);
+    assert_eq!(m_tile_factors, &[2, 3, 4, 8, 13, 24, 29, 32]);
+    let KernelActionSpace::LocalTile {
+        axis: n_tile_axis,
+        factors: n_tile_factors,
+    } = &spaces.spaces[1]
+    else {
+        panic!("upcast GEMM should expose N-axis local-tile metadata");
+    };
+    assert_eq!(*n_tile_axis, 1);
+    assert_eq!(n_tile_factors, &[2, 3, 4, 8, 13, 16, 24, 29]);
+    let KernelActionSpace::LocalTile {
+        axis: k_tile_axis,
+        factors: k_tile_factors,
+    } = &spaces.spaces[2]
+    else {
+        panic!("upcast GEMM should expose K-axis local-tile metadata");
+    };
+    assert_eq!(*k_tile_axis, 2);
+    assert_eq!(k_tile_factors, &[2, 3, 4, 8, 13, 24, 29, 32]);
     let KernelActionSpace::Unroll {
         axis: reduce_axis, ..
-    } = &spaces.spaces[1]
+    } = &spaces.spaces[3]
     else {
         panic!("upcast GEMM should still expose reduce unroll metadata");
     };
@@ -31,7 +49,7 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     let KernelActionSpace::Unroll {
         axis: a_load_axis,
         factors: a_load_factors,
-    } = &spaces.spaces[2]
+    } = &spaces.spaces[4]
     else {
         panic!("upcast GEMM should expose A shared-load unroll metadata");
     };
@@ -40,7 +58,7 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     let KernelActionSpace::Unroll {
         axis: b_load_axis,
         factors: b_load_factors,
-    } = &spaces.spaces[3]
+    } = &spaces.spaces[5]
     else {
         panic!("upcast GEMM should expose B shared-load unroll metadata");
     };
@@ -49,7 +67,7 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     let KernelActionSpace::Group {
         axis: a_load_thread_axis,
         factors: a_load_thread_factors,
-    } = &spaces.spaces[4]
+    } = &spaces.spaces[6]
     else {
         panic!("upcast GEMM should expose A shared-load group metadata");
     };
@@ -58,23 +76,22 @@ fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
     let KernelActionSpace::Group {
         axis: b_load_thread_axis,
         factors: b_load_thread_factors,
-    } = &spaces.spaces[5]
+    } = &spaces.spaces[7]
     else {
         panic!("upcast GEMM should expose B shared-load group metadata");
     };
     assert_eq!(*b_load_thread_axis, 4);
     assert_eq!(b_load_thread_factors, &[32, 64]);
-    assert!(matches!(spaces.spaces[6], KernelActionSpace::Swap { .. }));
+    assert!(matches!(spaces.spaces[8], KernelActionSpace::Swap { .. }));
     assert!(matches!(
-        spaces.spaces[7],
+        spaces.spaces[9],
         KernelActionSpace::StrideOrder { .. }
     ));
 
-    assert!(actions.contains(&KernelScheduleAction::split(
-        0,
-        24,
-        KernelActionMaterialization::DeferredGenerated
-    )));
+    assert_eq!(actions.len(), 50);
+    assert!(actions.contains(&KernelScheduleAction::local_tile(0, 24)));
+    assert!(actions.contains(&KernelScheduleAction::local_tile(1, 16)));
+    assert!(actions.contains(&KernelScheduleAction::local_tile(2, 32)));
     assert!(actions.contains(&KernelScheduleAction::unroll(3, 2)));
     assert!(!actions.contains(&KernelScheduleAction::unroll(3, 3)));
     assert!(actions.contains(&KernelScheduleAction::unroll(4, 4)));

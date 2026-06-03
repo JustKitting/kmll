@@ -7,7 +7,6 @@ use super::{
 
 impl KernelActionSearchProblem for GemmSearchProblem {
     fn search_space(&self) -> KernelActionSpaceSet {
-        let split_variants = self.split_action_variants();
         let unroll_factors = self.reduce_unroll_factors();
         let m_per_thread_factors = self.m_per_thread_factors();
         let n_per_thread_factors = self.n_per_thread_factors();
@@ -17,26 +16,23 @@ impl KernelActionSearchProblem for GemmSearchProblem {
         let b_load_thread_group_factors = self.b_load_thread_group_factors();
         let stride_orders =
             Self::stride_orders_for_plan(GemmSchedulePlan::new(Self::EXISTING_TILE));
-        let mut spaces = vec![
-            KernelActionSpace::Split {
-                variants: split_variants,
-            },
-            KernelActionSpace::TileGemm {
-                variants: Self::seed_tile_action_variants(),
-            },
-            KernelActionSpace::Unroll {
-                axis: 2,
-                factors: unroll_factors,
-            },
-            KernelActionSpace::Upcast {
-                axis: 0,
-                factors: m_per_thread_factors,
-            },
-            KernelActionSpace::Upcast {
-                axis: 1,
-                factors: n_per_thread_factors,
-            },
-        ];
+        let mut spaces = self
+            .local_tile_action_spaces_for_plan(GemmSchedulePlan::new(Self::EXISTING_TILE), false);
+        spaces.push(KernelActionSpace::TileGemm {
+            variants: Self::seed_tile_action_variants(),
+        });
+        spaces.push(KernelActionSpace::Unroll {
+            axis: 2,
+            factors: unroll_factors,
+        });
+        spaces.push(KernelActionSpace::Upcast {
+            axis: 0,
+            factors: m_per_thread_factors,
+        });
+        spaces.push(KernelActionSpace::Upcast {
+            axis: 1,
+            factors: n_per_thread_factors,
+        });
         if !a_load_unroll_factors.is_empty() {
             spaces.push(KernelActionSpace::Unroll {
                 axis: 3,
@@ -75,25 +71,18 @@ impl KernelActionSearchProblem for GemmSearchProblem {
             if !candidate.schedule.transforms.is_empty() {
                 return KernelActionSpaceSet::default();
             }
-            let split_variants =
-                self.split_action_variants_for_plan(GemmSchedulePlan::new(Self::EXISTING_TILE));
-            return KernelActionSpaceSet::new(vec![
-                KernelActionSpace::Split {
-                    variants: split_variants,
-                },
-                KernelActionSpace::TileGemm {
-                    variants: Self::seed_tile_action_variants(),
-                },
-            ]);
+            let mut spaces = self.local_tile_action_spaces_for_plan(
+                GemmSchedulePlan::new(Self::EXISTING_TILE),
+                true,
+            );
+            spaces.push(KernelActionSpace::TileGemm {
+                variants: Self::seed_tile_action_variants(),
+            });
+            return KernelActionSpaceSet::new(spaces);
         };
 
         let mut spaces = Vec::new();
-        let split_variants = self.split_action_variants_for_plan(plan);
-        if !split_variants.is_empty() {
-            spaces.push(KernelActionSpace::Split {
-                variants: split_variants,
-            });
-        }
+        spaces.extend(self.local_tile_action_spaces_for_plan(plan, true));
         if plan.reduce_unroll == 1 {
             let factors = Self::reduce_unroll_factors_for_tile(plan.tile)
                 .into_iter()
@@ -237,6 +226,35 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                     *factor,
                     *materialization,
                 )) {
+                    return None;
+                }
+                let next_tile = plan.tile.with_axis(*axis, *factor)?;
+                self.candidate_for_checked_plan(candidate, action, plan.with_tile(next_tile))
+            }
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::LocalTile,
+                axis: Some(axis @ 0..=2),
+                arg: KernelScheduleActionArg::Factor(factor),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                let plan = match schedule_gemm_plan(&candidate.schedule) {
+                    Some(plan) => plan,
+                    None if candidate.schedule.transforms.is_empty() => {
+                        GemmSchedulePlan::new(Self::EXISTING_TILE)
+                    }
+                    None => return None,
+                };
+                let factors = self
+                    .local_tile_action_spaces_for_plan(plan, true)
+                    .into_iter()
+                    .find_map(|space| match space {
+                        KernelActionSpace::LocalTile {
+                            axis: space_axis,
+                            factors,
+                        } if space_axis == *axis => Some(factors),
+                        _ => None,
+                    })?;
+                if !factors.contains(factor) {
                     return None;
                 }
                 let next_tile = plan.tile.with_axis(*axis, *factor)?;

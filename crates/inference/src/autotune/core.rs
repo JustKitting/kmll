@@ -103,18 +103,6 @@ pub(super) fn bounded_unroll_factors(
     )
 }
 
-pub(super) fn bounded_tile_factors(
-    extent: usize,
-    max_factor: u32,
-    required_factor: Option<u32>,
-) -> Vec<u32> {
-    KernelScheduleActionTemplate::INFERENCE_DEFAULT.bounded_split_factors(
-        extent,
-        max_factor,
-        required_factor,
-    )
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KernelAxisKind {
     Spatial,
