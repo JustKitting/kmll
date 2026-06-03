@@ -510,6 +510,159 @@ pub trait KernelActionSearchProblem: KernelMetadataSearchProblem {
     ) -> Option<KernelCandidateMetadata>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KernelExpansionPolicy {
+    pub require_launchable: bool,
+    pub max_threads_per_block: Option<u32>,
+    pub max_shared_memory_bytes: Option<u32>,
+    pub max_accumulator_elements_per_thread: Option<u32>,
+    pub max_output_elements_per_thread: Option<u32>,
+    pub max_load_elements_per_block: Option<u32>,
+}
+
+impl KernelExpansionPolicy {
+    pub const DEFAULT_MAX_THREADS_PER_BLOCK: u32 = 1024;
+    pub const DEFAULT_MAX_SHARED_MEMORY_BYTES: u32 = 48 * 1024;
+
+    pub const fn new() -> Self {
+        Self {
+            require_launchable: false,
+            max_threads_per_block: Some(Self::DEFAULT_MAX_THREADS_PER_BLOCK),
+            max_shared_memory_bytes: Some(Self::DEFAULT_MAX_SHARED_MEMORY_BYTES),
+            max_accumulator_elements_per_thread: None,
+            max_output_elements_per_thread: None,
+            max_load_elements_per_block: None,
+        }
+    }
+
+    pub const fn for_search_config(require_launchable: bool) -> Self {
+        Self {
+            require_launchable,
+            ..Self::new()
+        }
+    }
+
+    pub const fn with_require_launchable(mut self, require_launchable: bool) -> Self {
+        self.require_launchable = require_launchable;
+        self
+    }
+
+    pub const fn with_max_threads_per_block(mut self, max: Option<u32>) -> Self {
+        self.max_threads_per_block = max;
+        self
+    }
+
+    pub const fn with_max_shared_memory_bytes(mut self, max: Option<u32>) -> Self {
+        self.max_shared_memory_bytes = max;
+        self
+    }
+
+    pub const fn with_max_accumulator_elements_per_thread(mut self, max: Option<u32>) -> Self {
+        self.max_accumulator_elements_per_thread = max;
+        self
+    }
+
+    pub const fn with_max_output_elements_per_thread(mut self, max: Option<u32>) -> Self {
+        self.max_output_elements_per_thread = max;
+        self
+    }
+
+    pub const fn with_max_load_elements_per_block(mut self, max: Option<u32>) -> Self {
+        self.max_load_elements_per_block = max;
+        self
+    }
+
+    pub fn allows(
+        self,
+        candidate: &KernelCandidateMetadata,
+    ) -> Result<(), KernelCandidateRejectReason> {
+        if self.require_launchable && !candidate.is_launchable() {
+            return Err(KernelCandidateRejectReason::DeferredGenerated);
+        }
+        let threads_per_block = launch_threads_per_block(&candidate.launch);
+        if let Some(max) = self.max_threads_per_block
+            && threads_per_block > max
+        {
+            return Err(KernelCandidateRejectReason::ThreadsPerBlock {
+                actual: threads_per_block,
+                max,
+            });
+        }
+        let shared_memory_bytes = candidate
+            .resources
+            .map(|resources| resources.shared_memory_bytes)
+            .unwrap_or(candidate.launch.shared_mem_bytes)
+            .max(candidate.launch.shared_mem_bytes);
+        if let Some(max) = self.max_shared_memory_bytes
+            && shared_memory_bytes > max
+        {
+            return Err(KernelCandidateRejectReason::SharedMemoryBytes {
+                actual: shared_memory_bytes,
+                max,
+            });
+        }
+        let Some(resources) = candidate.resources else {
+            return Ok(());
+        };
+        if let Some(max) = self.max_accumulator_elements_per_thread
+            && resources.accumulator_elements_per_thread > max
+        {
+            return Err(KernelCandidateRejectReason::AccumulatorElementsPerThread {
+                actual: resources.accumulator_elements_per_thread,
+                max,
+            });
+        }
+        if let Some(max) = self.max_output_elements_per_thread
+            && resources.output_elements_per_thread > max
+        {
+            return Err(KernelCandidateRejectReason::OutputElementsPerThread {
+                actual: resources.output_elements_per_thread,
+                max,
+            });
+        }
+        if let Some(max) = self.max_load_elements_per_block
+            && resources.load_elements_per_block > max
+        {
+            return Err(KernelCandidateRejectReason::LoadElementsPerBlock {
+                actual: resources.load_elements_per_block,
+                max,
+            });
+        }
+        Ok(())
+    }
+}
+
+impl Default for KernelExpansionPolicy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KernelCandidateRejectReason {
+    DeferredGenerated,
+    ThreadsPerBlock { actual: u32, max: u32 },
+    SharedMemoryBytes { actual: u32, max: u32 },
+    AccumulatorElementsPerThread { actual: u32, max: u32 },
+    OutputElementsPerThread { actual: u32, max: u32 },
+    LoadElementsPerBlock { actual: u32, max: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct KernelCandidateExpansion {
+    pub candidates: Vec<KernelCandidateMetadata>,
+    pub accepted: usize,
+    pub rejected: usize,
+    pub duplicates: usize,
+    pub last_reject_reason: Option<KernelCandidateRejectReason>,
+}
+
+impl KernelCandidateExpansion {
+    pub fn explored(&self) -> usize {
+        self.accepted + self.rejected
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KernelActionReplayError {
     InvalidAction {
@@ -584,6 +737,50 @@ where
         .collect()
 }
 
+pub fn expand_metadata_candidates<P>(
+    problem: &P,
+    candidate: &KernelCandidateMetadata,
+    policy: KernelExpansionPolicy,
+    seen: &mut HashSet<KernelMetadataKey>,
+) -> KernelCandidateExpansion
+where
+    P: KernelMetadataSearchProblem,
+{
+    let mut candidates = Vec::new();
+    let mut rejected = 0;
+    let mut duplicates = 0;
+    let mut last_reject_reason = None;
+
+    for next in problem.expand(candidate) {
+        if !seen.insert(next.artifact_key()) {
+            duplicates += 1;
+            continue;
+        }
+        match policy.allows(&next) {
+            Ok(()) => candidates.push(next),
+            Err(reason) => {
+                rejected += 1;
+                last_reject_reason = Some(reason);
+            }
+        }
+    }
+
+    KernelCandidateExpansion {
+        accepted: candidates.len(),
+        candidates,
+        rejected,
+        duplicates,
+        last_reject_reason,
+    }
+}
+
+fn launch_threads_per_block(launch: &CudaLaunchSpec) -> u32 {
+    let threads = u64::from(launch.block_dim.x)
+        .saturating_mul(u64::from(launch.block_dim.y))
+        .saturating_mul(u64::from(launch.block_dim.z));
+    threads.min(u64::from(u32::MAX)) as u32
+}
+
 pub fn replay_schedule_actions<P>(
     problem: &P,
     actions: &[KernelScheduleAction],
@@ -652,19 +849,16 @@ where
     let mut beam = vec![seed];
     let mut explored = 0;
     let mut rejected = 0;
+    let expansion_policy = KernelExpansionPolicy::for_search_config(config.require_launchable);
 
     for _ in 0..config.max_depth {
         let mut candidates = Vec::new();
         for candidate in &beam {
-            for mut next in problem.expand(candidate) {
-                if !seen.insert(next.artifact_key()) {
-                    continue;
-                }
-                explored += 1;
-                if config.require_launchable && !next.is_launchable() {
-                    rejected += 1;
-                    continue;
-                }
+            let expansion =
+                expand_metadata_candidates(problem, candidate, expansion_policy, &mut seen);
+            explored += expansion.explored();
+            rejected += expansion.rejected;
+            for mut next in expansion.candidates {
                 match score_candidate(&next) {
                     Some(score) => {
                         next.score = Some(score);
@@ -723,6 +917,7 @@ where
     let mut rejected = 0;
     let mut steps = Vec::new();
     let mut exit_reason = AutoOptimizeExitReason::MaxSteps;
+    let expansion_policy = KernelExpansionPolicy::for_search_config(config.require_launchable);
 
     for depth in 0..config.max_steps {
         let input_beam_len = beam.len();
@@ -732,17 +927,13 @@ where
         let mut step_rejected = 0;
 
         for candidate in &beam {
-            for mut next in problem.expand(candidate) {
-                if !seen.insert(next.artifact_key()) {
-                    continue;
-                }
-                explored += 1;
-                generated += 1;
-                if config.require_launchable && !next.is_launchable() {
-                    rejected += 1;
-                    step_rejected += 1;
-                    continue;
-                }
+            let expansion =
+                expand_metadata_candidates(problem, candidate, expansion_policy, &mut seen);
+            explored += expansion.explored();
+            generated += expansion.explored();
+            rejected += expansion.rejected;
+            step_rejected += expansion.rejected;
+            for mut next in expansion.candidates {
                 match score_candidate(&next) {
                     Some(score) => {
                         next.score = Some(score);

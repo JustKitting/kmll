@@ -134,3 +134,78 @@
             Err(KernelActionReplayError::InvalidAction { index: 0, action })
         );
     }
+
+    #[test]
+    fn metadata_expansion_filters_launchability_and_tracks_duplicates() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let seed = problem.seed();
+        let mut seen = HashSet::new();
+        seen.insert(seed.artifact_key());
+
+        let expansion = expand_metadata_candidates(
+            &problem,
+            &seed,
+            KernelExpansionPolicy::for_search_config(true),
+            &mut seen,
+        );
+
+        assert_eq!(expansion.accepted, 4);
+        assert_eq!(expansion.rejected, 32);
+        assert_eq!(expansion.explored(), 36);
+        assert_eq!(expansion.duplicates, 0);
+        assert_eq!(
+            expansion.last_reject_reason,
+            Some(KernelCandidateRejectReason::DeferredGenerated)
+        );
+        assert!(expansion.candidates.iter().all(|candidate| candidate.is_launchable()));
+
+        let duplicate_expansion = expand_metadata_candidates(
+            &problem,
+            &seed,
+            KernelExpansionPolicy::for_search_config(true),
+            &mut seen,
+        );
+        assert_eq!(duplicate_expansion.accepted, 0);
+        assert_eq!(duplicate_expansion.rejected, 0);
+        assert_eq!(duplicate_expansion.explored(), 0);
+        assert_eq!(duplicate_expansion.duplicates, 36);
+    }
+
+    #[test]
+    fn expansion_policy_rejects_overbudget_kernel_resources() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let overbudget =
+            problem.candidate_for_plan(GemmSchedulePlan::new(GemmTileShape::new(128, 128, 64)));
+
+        assert_eq!(
+            KernelExpansionPolicy::default().allows(&overbudget),
+            Err(KernelCandidateRejectReason::ThreadsPerBlock {
+                actual: 16_384,
+                max: 1024
+            })
+        );
+        assert_eq!(
+            KernelExpansionPolicy::default()
+                .with_max_threads_per_block(None)
+                .allows(&overbudget),
+            Err(KernelCandidateRejectReason::SharedMemoryBytes {
+                actual: 65_536,
+                max: 48 * 1024
+            })
+        );
+
+        let register_heavy = problem.candidate_for_plan(
+            GemmSchedulePlan::new(GemmTileShape::new(16, 16, 16))
+                .with_m_per_thread(4)
+                .with_n_per_thread(4),
+        );
+        assert_eq!(
+            KernelExpansionPolicy::default()
+                .with_max_accumulator_elements_per_thread(Some(8))
+                .allows(&register_heavy),
+            Err(KernelCandidateRejectReason::AccumulatorElementsPerThread {
+                actual: 16,
+                max: 8
+            })
+        );
+    }
