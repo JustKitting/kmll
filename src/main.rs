@@ -468,6 +468,7 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         "heuristic".to_string()
     };
     let cached = if measure {
+        store.remove_compile_scratch()?;
         let (stream, module) = cuda_handles()?;
         let options = KernelAutotuneMeasureOptions {
             repeat_count: measure_repeat_count,
@@ -600,6 +601,7 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
                     &output_dir,
                     &emitted_crate.package_name,
                     compile_arch.as_deref(),
+                    None,
                 )?;
                 println!(
                     "compiled_crate crate_dir={} output_dir={} ptx_path={} stdout_bytes={} stderr_bytes={}",
@@ -734,6 +736,7 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         "heuristic".to_string()
     };
     let cached = if measure {
+        store.remove_compile_scratch()?;
         let (stream, module) = cuda_handles()?;
         let options = KernelAutotuneMeasureOptions {
             repeat_count: measure_repeat_count,
@@ -866,6 +869,7 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
                     &output_dir,
                     &emitted_crate.package_name,
                     compile_arch.as_deref(),
+                    None,
                 )?;
                 println!(
                     "compiled_crate crate_dir={} output_dir={} ptx_path={} stdout_bytes={} stderr_bytes={}",
@@ -1439,8 +1443,7 @@ where
 {
     let scratch = ScratchKernelBuild::new(
         store
-            .root()
-            .join("compile-scratch")
+            .compile_scratch_root()
             .join(candidate.artifact_key().hex()),
     )?;
 
@@ -1455,6 +1458,7 @@ where
         &output_dir,
         &emitted.package_name,
         None,
+        Some(&store.standalone_target_root()),
     )?;
     let compile_duration = timer.elapsed();
 
@@ -1600,6 +1604,7 @@ fn compile_standalone_kernel_crate(
     output_dir: &Path,
     ptx_stem: &str,
     arch: Option<&str>,
+    target_dir: Option<&Path>,
 ) -> AppResult<CompiledStandaloneKernelCrate> {
     fs::create_dir_all(output_dir)?;
     let crate_dir = crate_dir.canonicalize()?;
@@ -1610,6 +1615,10 @@ fn compile_standalone_kernel_crate(
         .arg("build")
         .current_dir(&crate_dir)
         .env("CUDA_OXIDE_PTX_DIR", &output_dir);
+    if let Some(target_dir) = target_dir {
+        fs::create_dir_all(target_dir)?;
+        command.env("CARGO_TARGET_DIR", target_dir.canonicalize()?);
+    }
     if let Some(arch) = arch {
         command.arg("--arch").arg(arch);
     }

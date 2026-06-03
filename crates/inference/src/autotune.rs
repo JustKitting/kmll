@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::HashSet,
+    env,
     fmt::{self, Write as _},
     fs, io,
     path::{Path, PathBuf},
@@ -360,6 +361,22 @@ impl KernelArtifactStore {
     ) -> StandaloneKernelCratePaths {
         let crate_dir = self.paths_for(candidate).directory.join("standalone-crate");
         standalone_crate_paths(crate_dir)
+    }
+
+    pub fn compile_scratch_root(&self) -> PathBuf {
+        self.root.join("compile-scratch")
+    }
+
+    pub fn standalone_target_root(&self) -> PathBuf {
+        self.root.join("standalone-target")
+    }
+
+    pub fn remove_compile_scratch(&self) -> Result<(), KernelGenerationError> {
+        match fs::remove_dir_all(self.compile_scratch_root()) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     pub fn search_report_path_for(&self, report: &OptimizationSearchReport) -> PathBuf {
@@ -3617,6 +3634,7 @@ fn standalone_package_name(candidate: &KernelCandidateMetadata) -> String {
 
 fn standalone_cargo_toml(package_name: &str) -> String {
     let mut manifest = String::new();
+    let cuda_oxide_root = standalone_cuda_oxide_checkout_root();
     writeln!(manifest, "[package]").expect("write to string");
     writeln!(manifest, "name = \"{package_name}\"").expect("write to string");
     writeln!(manifest, "version = \"0.1.0\"").expect("write to string");
@@ -3625,17 +3643,82 @@ fn standalone_cargo_toml(package_name: &str) -> String {
     writeln!(manifest, "[workspace]").expect("write to string");
     writeln!(manifest).expect("write to string");
     writeln!(manifest, "[dependencies]").expect("write to string");
-    writeln!(
-        manifest,
-        "cuda-device = {{ git = \"https://github.com/NVlabs/cuda-oxide.git\", tag = \"v0.1.0\" }}"
-    )
-    .expect("write to string");
-    writeln!(
-        manifest,
-        "cuda-host = {{ git = \"https://github.com/NVlabs/cuda-oxide.git\", tag = \"v0.1.0\" }}"
-    )
-    .expect("write to string");
+    write_cuda_oxide_dependency(&mut manifest, "cuda-device", cuda_oxide_root.as_deref());
+    write_cuda_oxide_dependency(&mut manifest, "cuda-host", cuda_oxide_root.as_deref());
     manifest
+}
+
+fn write_cuda_oxide_dependency(manifest: &mut String, crate_name: &str, root: Option<&Path>) {
+    if let Some(root) = root {
+        let path = root.join("crates").join(crate_name);
+        writeln!(
+            manifest,
+            "{crate_name} = {{ path = \"{}\" }}",
+            toml_string(&path.to_string_lossy())
+        )
+        .expect("write to string");
+    } else {
+        writeln!(
+            manifest,
+            "{crate_name} = {{ git = \"https://github.com/NVlabs/cuda-oxide.git\", tag = \"v0.1.0\" }}"
+        )
+        .expect("write to string");
+    }
+}
+
+fn standalone_cuda_oxide_checkout_root() -> Option<PathBuf> {
+    let configured = env::var_os("NN_RUST_CUDA_OXIDE_ROOT")
+        .map(PathBuf::from)
+        .filter(|path| cuda_oxide_checkout_has_kernel_crates(path));
+    if configured.is_some() {
+        return configured;
+    }
+
+    let cargo_home = env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))?;
+    let checkouts = cargo_home.join("git").join("checkouts");
+    let mut candidates = Vec::new();
+    let entries = fs::read_dir(checkouts).ok()?;
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("cuda-oxide-") {
+            continue;
+        }
+        let Ok(revisions) = fs::read_dir(entry.path()) else {
+            continue;
+        };
+        for revision in revisions.flatten() {
+            let path = revision.path();
+            if cuda_oxide_checkout_has_kernel_crates(&path) {
+                candidates.push(path);
+            }
+        }
+    }
+    candidates.sort();
+    candidates.pop()
+}
+
+fn cuda_oxide_checkout_has_kernel_crates(path: &Path) -> bool {
+    path.join("crates")
+        .join("cuda-device")
+        .join("Cargo.toml")
+        .is_file()
+        && path
+            .join("crates")
+            .join("cuda-host")
+            .join("Cargo.toml")
+            .is_file()
+}
+
+fn toml_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn standalone_main_source(kernel_source: &str) -> String {
@@ -5938,6 +6021,52 @@ mod tests {
     }
 
     #[test]
+    fn artifact_store_removes_stale_compile_scratch_root() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+        let stale_source_path = store
+            .compile_scratch_root()
+            .join("stale-candidate")
+            .join("standalone-crate")
+            .join("src")
+            .join("main.rs");
+        fs::create_dir_all(
+            stale_source_path
+                .parent()
+                .expect("stale scratch path should have a parent"),
+        )
+        .expect("stale scratch directory should be creatable");
+        fs::write(&stale_source_path, "fn main() {}\n")
+            .expect("stale scratch source should be writable");
+
+        store
+            .remove_compile_scratch()
+            .expect("stale compile scratch root should be removable");
+
+        assert!(!store.compile_scratch_root().exists());
+        assert_eq!(
+            store.standalone_target_root(),
+            root.join("standalone-target")
+        );
+        assert!(root.exists());
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn artifact_store_compile_scratch_cleanup_is_idempotent() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+
+        store
+            .remove_compile_scratch()
+            .expect("missing compile scratch root should be accepted");
+
+        fs::create_dir_all(&root).expect("test root should be creatable");
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
     fn artifact_store_writes_standalone_crate_for_generated_kernel() {
         let root = test_generated_root();
         let store = KernelArtifactStore::new(&root);
@@ -5966,6 +6095,56 @@ mod tests {
         assert!(source.contains("pub fn gemm_f32_bf16_tile_16x32x16("));
         assert!(source.contains("pub struct Bf16(u16);"));
         assert!(source.contains("fn main() {}"));
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn standalone_manifest_can_render_cuda_oxide_path_dependencies() {
+        let mut manifest = String::new();
+
+        write_cuda_oxide_dependency(
+            &mut manifest,
+            "cuda-device",
+            Some(Path::new("/tmp/cuda oxide/root")),
+        );
+        write_cuda_oxide_dependency(&mut manifest, "cuda-host", None);
+
+        assert!(
+            manifest
+                .contains("cuda-device = { path = \"/tmp/cuda oxide/root/crates/cuda-device\" }")
+        );
+        assert!(manifest.contains(
+            "cuda-host = { git = \"https://github.com/NVlabs/cuda-oxide.git\", tag = \"v0.1.0\" }"
+        ));
+    }
+
+    #[test]
+    fn cuda_oxide_checkout_detection_requires_kernel_crates() {
+        let root = test_generated_root();
+        let checkout = root.join("cuda-oxide");
+        fs::create_dir_all(checkout.join("crates").join("cuda-device"))
+            .expect("cuda-device directory should be creatable");
+        fs::write(
+            checkout
+                .join("crates")
+                .join("cuda-device")
+                .join("Cargo.toml"),
+            "[package]\nname = \"cuda-device\"\n",
+        )
+        .expect("cuda-device manifest should be writable");
+
+        assert!(!cuda_oxide_checkout_has_kernel_crates(&checkout));
+
+        fs::create_dir_all(checkout.join("crates").join("cuda-host"))
+            .expect("cuda-host directory should be creatable");
+        fs::write(
+            checkout.join("crates").join("cuda-host").join("Cargo.toml"),
+            "[package]\nname = \"cuda-host\"\n",
+        )
+        .expect("cuda-host manifest should be writable");
+
+        assert!(cuda_oxide_checkout_has_kernel_crates(&checkout));
 
         remove_test_generated_root(&root);
     }
