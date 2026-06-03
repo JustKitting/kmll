@@ -82,6 +82,13 @@ impl SassAnalysisModule {
             .sum()
     }
 
+    pub fn value_op_count(&self) -> usize {
+        self.functions
+            .iter()
+            .map(|function| function.value_ops.len())
+            .sum()
+    }
+
     pub fn to_text(&self) -> String {
         let mut out = String::new();
         if let Some(target) = &self.target {
@@ -192,6 +199,21 @@ impl SassAnalysisModule {
                 )
                 .expect("write to string");
             }
+            writeln!(out, "  value_ops").expect("write to string");
+            for op in &function.value_ops {
+                writeln!(
+                    out,
+                    "    {:#06x}: block={} opcode={} in=[{}] out=[{}] predicate={} <- {}",
+                    op.address,
+                    format_block_id(op.block_id),
+                    op.opcode,
+                    format_value_ids(&op.input_value_ids),
+                    format_value_ids(&op.output_value_ids),
+                    op.predicate.as_deref().unwrap_or("-"),
+                    op.source
+                )
+                .expect("write to string");
+            }
             writeln!(out, "  live_ranges").expect("write to string");
             for range in &function.live_ranges {
                 writeln!(
@@ -244,6 +266,7 @@ pub struct SassAnalysisFunction {
     pub reaching_uses: Vec<SassReachingUse>,
     pub ssa_values: Vec<SassSsaValue>,
     pub def_use_edges: Vec<SassDefUseEdge>,
+    pub value_ops: Vec<SassValueOp>,
     pub live_ranges: Vec<SassLiveRange>,
     pub memory_accesses: Vec<SassMemoryAccess>,
 }
@@ -386,6 +409,20 @@ pub struct SassDefUseEdge {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassValueOp {
+    pub address: u64,
+    pub block_id: Option<usize>,
+    pub predicate: Option<String>,
+    pub opcode: String,
+    pub kind: String,
+    pub input_registers: Vec<String>,
+    pub output_registers: Vec<String>,
+    pub input_value_ids: Vec<usize>,
+    pub output_value_ids: Vec<usize>,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassLiveRange {
     pub register: String,
     pub def_address: Option<u64>,
@@ -452,6 +489,7 @@ fn analyze_function(function: &KernelIrFunction) -> SassAnalysisFunction {
         .collect::<Vec<_>>();
     let (reaching_uses, live_ranges, ssa_values, def_use_edges) =
         analyze_reaching_defs(&blocks, &edges, &dataflow);
+    let value_ops = build_value_ops(function, &blocks, &dataflow, &ssa_values, &def_use_edges);
     let memory_accesses = analyze_memory_accesses(function);
     SassAnalysisFunction {
         name: function.name.clone(),
@@ -463,9 +501,68 @@ fn analyze_function(function: &KernelIrFunction) -> SassAnalysisFunction {
         reaching_uses,
         ssa_values,
         def_use_edges,
+        value_ops,
         live_ranges,
         memory_accesses,
     }
+}
+
+fn build_value_ops(
+    function: &KernelIrFunction,
+    blocks: &[SassBasicBlock],
+    dataflow: &[SassDataflowOp],
+    ssa_values: &[SassSsaValue],
+    def_use_edges: &[SassDefUseEdge],
+) -> Vec<SassValueOp> {
+    let mut values_by_definition = BTreeMap::<(String, Option<u64>), Vec<usize>>::new();
+    for value in ssa_values {
+        values_by_definition
+            .entry((value.register.clone(), value.def_address))
+            .or_default()
+            .push(value.value_id);
+    }
+
+    let mut input_values_by_address = BTreeMap::<u64, BTreeSet<usize>>::new();
+    for edge in def_use_edges {
+        input_values_by_address
+            .entry(edge.use_address)
+            .or_default()
+            .insert(edge.value_id);
+    }
+
+    function
+        .ops
+        .iter()
+        .enumerate()
+        .map(|(op_index, op)| {
+            let dataflow = &dataflow[op_index];
+            let output_value_ids = dataflow
+                .defines
+                .iter()
+                .filter_map(|register| {
+                    values_by_definition.get(&(register.clone(), Some(op.address)))
+                })
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            let input_value_ids = input_values_by_address
+                .get(&op.address)
+                .map(|values| values.iter().copied().collect())
+                .unwrap_or_default();
+            SassValueOp {
+                address: op.address,
+                block_id: block_id_for_op_index(blocks, op_index),
+                predicate: op.predicate.clone(),
+                opcode: op.source_opcode.clone(),
+                kind: format!("{:?}", op.kind),
+                input_registers: dataflow.uses.clone(),
+                output_registers: dataflow.defines.clone(),
+                input_value_ids,
+                output_value_ids,
+                source: op.source.clone(),
+            }
+        })
+        .collect()
 }
 
 fn analyze_control_structure(
@@ -1447,6 +1544,14 @@ fn format_block_ids(block_ids: &[usize]) -> String {
     block_ids
         .iter()
         .map(|block_id| format!("b{block_id}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_value_ids(value_ids: &[usize]) -> String {
+    value_ids
+        .iter()
+        .map(|value_id| format!("v{value_id}"))
         .collect::<Vec<_>>()
         .join(",")
 }
