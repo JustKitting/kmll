@@ -75,6 +75,82 @@ pub enum ScheduleTransform {
     StrideOrder { axes: Vec<u8> },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KernelScheduleActionOp {
+    Split,
+    Unroll,
+    TileGemm,
+    StrideOrder,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KernelActionMaterialization {
+    Existing,
+    DeferredGenerated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KernelScheduleActionArg {
+    Factor(u32),
+    Tile3d { m: u32, n: u32, k: u32 },
+    AxisOrder(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct KernelScheduleAction {
+    pub op: KernelScheduleActionOp,
+    pub axis: Option<u8>,
+    pub arg: KernelScheduleActionArg,
+    pub materialization: KernelActionMaterialization,
+}
+
+impl KernelScheduleAction {
+    pub const fn split(
+        axis: u8,
+        factor: u32,
+        materialization: KernelActionMaterialization,
+    ) -> Self {
+        Self {
+            op: KernelScheduleActionOp::Split,
+            axis: Some(axis),
+            arg: KernelScheduleActionArg::Factor(factor),
+            materialization,
+        }
+    }
+
+    pub const fn unroll(axis: u8, factor: u32) -> Self {
+        Self {
+            op: KernelScheduleActionOp::Unroll,
+            axis: Some(axis),
+            arg: KernelScheduleActionArg::Factor(factor),
+            materialization: KernelActionMaterialization::DeferredGenerated,
+        }
+    }
+
+    pub const fn tile_gemm(
+        m: u32,
+        n: u32,
+        k: u32,
+        materialization: KernelActionMaterialization,
+    ) -> Self {
+        Self {
+            op: KernelScheduleActionOp::TileGemm,
+            axis: None,
+            arg: KernelScheduleActionArg::Tile3d { m, n, k },
+            materialization,
+        }
+    }
+
+    pub fn stride_order(axes: Vec<u8>) -> Self {
+        Self {
+            op: KernelScheduleActionOp::StrideOrder,
+            axis: None,
+            arg: KernelScheduleActionArg::AxisOrder(axes),
+            materialization: KernelActionMaterialization::DeferredGenerated,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct KernelSchedule {
     pub transforms: Vec<ScheduleTransform>,
@@ -506,6 +582,30 @@ pub trait KernelMetadataSearchProblem {
     fn score(&self, candidate: &KernelCandidateMetadata) -> Option<SearchScore>;
 }
 
+pub trait KernelActionSearchProblem: KernelMetadataSearchProblem {
+    fn schedule_actions(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelScheduleAction>;
+
+    fn apply_schedule_action(
+        &self,
+        candidate: &KernelCandidateMetadata,
+        action: &KernelScheduleAction,
+    ) -> Option<KernelCandidateMetadata>;
+}
+
+pub fn expand_with_schedule_actions<P>(
+    problem: &P,
+    candidate: &KernelCandidateMetadata,
+) -> Vec<KernelCandidateMetadata>
+where
+    P: KernelActionSearchProblem,
+{
+    problem
+        .schedule_actions(candidate)
+        .into_iter()
+        .filter_map(|action| problem.apply_schedule_action(candidate, &action))
+        .collect()
+}
+
 pub fn beam_search_metadata<P>(problem: &P, config: BeamSearchConfig) -> BeamSearchResult
 where
     P: KernelMetadataSearchProblem,
@@ -581,6 +681,12 @@ pub enum RowMajorWarpRows {
 
 impl RowMajorWarpRows {
     pub const ALL: [Self; 4] = [Self::Rows1, Self::Rows2, Self::Rows4, Self::Rows8];
+
+    pub fn from_rows_per_block(rows_per_block: u32) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|plan| plan.rows_per_block() == rows_per_block)
+    }
 
     pub fn rows_per_block(self) -> u32 {
         match self {
@@ -721,6 +827,59 @@ impl MatvecSearchProblem {
     }
 }
 
+impl KernelActionSearchProblem for MatvecSearchProblem {
+    fn schedule_actions(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelScheduleAction> {
+        if candidate.schedule.depth() > 0 {
+            return Vec::new();
+        }
+        RowMajorWarpRows::ALL
+            .into_iter()
+            .flat_map(|plan| {
+                let rows_per_block = plan.rows_per_block();
+                [
+                    KernelScheduleAction::split(
+                        0,
+                        rows_per_block,
+                        KernelActionMaterialization::Existing,
+                    ),
+                    KernelScheduleAction::split(
+                        0,
+                        rows_per_block,
+                        KernelActionMaterialization::DeferredGenerated,
+                    ),
+                ]
+            })
+            .collect()
+    }
+
+    fn apply_schedule_action(
+        &self,
+        candidate: &KernelCandidateMetadata,
+        action: &KernelScheduleAction,
+    ) -> Option<KernelCandidateMetadata> {
+        if candidate.schedule.depth() > 0 {
+            return None;
+        }
+        let KernelScheduleAction {
+            op: KernelScheduleActionOp::Split,
+            axis: Some(0),
+            arg: KernelScheduleActionArg::Factor(rows_per_block),
+            materialization,
+        } = action
+        else {
+            return None;
+        };
+        let plan = RowMajorWarpRows::from_rows_per_block(*rows_per_block)?;
+
+        match materialization {
+            KernelActionMaterialization::Existing => Some(self.candidate_for_rows(plan)),
+            KernelActionMaterialization::DeferredGenerated => {
+                Some(self.generated_candidate_for_rows(plan))
+            }
+        }
+    }
+}
+
 impl KernelMetadataSearchProblem for MatvecSearchProblem {
     fn seed(&self) -> KernelCandidateMetadata {
         let launch = CudaLaunchSpec::new("matvec_bf16_kernel", (1, 1, 1), (32, 1, 1), 0);
@@ -757,18 +916,7 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
     }
 
     fn expand(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelCandidateMetadata> {
-        if candidate.schedule.depth() > 0 {
-            return Vec::new();
-        }
-        RowMajorWarpRows::ALL
-            .into_iter()
-            .flat_map(|plan| {
-                [
-                    self.candidate_for_rows(plan),
-                    self.generated_candidate_for_rows(plan),
-                ]
-            })
-            .collect()
+        expand_with_schedule_actions(self, candidate)
     }
 
     fn score(&self, candidate: &KernelCandidateMetadata) -> Option<SearchScore> {
@@ -855,6 +1003,21 @@ impl GemmBTileLoadOrder {
             Self::KContiguous => "_bk",
         }
     }
+
+    pub fn action_axes(self) -> Vec<u8> {
+        match self {
+            Self::TileLinear => vec![1, 2],
+            Self::KContiguous => vec![2, 1],
+        }
+    }
+
+    pub fn from_action_axes(axes: &[u8]) -> Option<Self> {
+        match axes {
+            [1, 2] => Some(Self::TileLinear),
+            [2, 1] => Some(Self::KContiguous),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -897,9 +1060,7 @@ impl GemmSearchProblem {
     pub fn candidate_for_plan(&self, plan: GemmSchedulePlan) -> KernelCandidateMetadata {
         let plan = plan.normalized();
         let tile = plan.tile;
-        let existing_tile = tile == GemmTileShape::new(16, 16, 16)
-            && plan.reduce_unroll == 1
-            && plan.b_load_order == GemmBTileLoadOrder::TileLinear;
+        let existing_tile = Self::is_existing_plan(plan);
         let b_order_suffix = plan.b_load_order.symbol_suffix();
         let symbol_hint = if plan.reduce_unroll == 1 {
             format!(
@@ -994,6 +1155,117 @@ impl GemmSearchProblem {
             KernelAxis::reduction(2, "k", self.k, Some(1)),
         ]
     }
+
+    fn is_existing_plan(plan: GemmSchedulePlan) -> bool {
+        let plan = plan.normalized();
+        plan.tile == GemmTileShape::new(16, 16, 16)
+            && plan.reduce_unroll == 1
+            && plan.b_load_order == GemmBTileLoadOrder::TileLinear
+    }
+
+    fn action_materialization_for_plan(plan: GemmSchedulePlan) -> KernelActionMaterialization {
+        if Self::is_existing_plan(plan) {
+            KernelActionMaterialization::Existing
+        } else {
+            KernelActionMaterialization::DeferredGenerated
+        }
+    }
+}
+
+impl KernelActionSearchProblem for GemmSearchProblem {
+    fn schedule_actions(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelScheduleAction> {
+        let Some(plan) = schedule_gemm_plan(&candidate.schedule) else {
+            return Self::TILE_SHAPES
+                .into_iter()
+                .map(|tile| {
+                    KernelScheduleAction::tile_gemm(
+                        tile.m,
+                        tile.n,
+                        tile.k,
+                        Self::action_materialization_for_plan(GemmSchedulePlan::new(tile)),
+                    )
+                })
+                .collect();
+        };
+
+        if plan.reduce_unroll == 1 {
+            let mut actions = Self::REDUCE_UNROLL_FACTORS
+                .into_iter()
+                .filter(|factor| *factor <= plan.tile.k && plan.tile.k % *factor == 0)
+                .map(|factor| KernelScheduleAction::unroll(2, factor))
+                .collect::<Vec<_>>();
+            if plan.b_load_order == GemmBTileLoadOrder::TileLinear {
+                actions.extend(
+                    Self::B_LOAD_ORDERS
+                        .into_iter()
+                        .map(|order| KernelScheduleAction::stride_order(order.action_axes())),
+                );
+            }
+            return actions;
+        }
+
+        if plan.b_load_order == GemmBTileLoadOrder::TileLinear {
+            return Self::B_LOAD_ORDERS
+                .into_iter()
+                .map(|order| KernelScheduleAction::stride_order(order.action_axes()))
+                .collect();
+        }
+
+        Vec::new()
+    }
+
+    fn apply_schedule_action(
+        &self,
+        candidate: &KernelCandidateMetadata,
+        action: &KernelScheduleAction,
+    ) -> Option<KernelCandidateMetadata> {
+        match action {
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::TileGemm,
+                axis: None,
+                arg: KernelScheduleActionArg::Tile3d { m, n, k },
+                materialization,
+            } => {
+                if schedule_gemm_plan(&candidate.schedule).is_some() {
+                    return None;
+                }
+                let plan = GemmSchedulePlan::new(GemmTileShape::new(*m, *n, *k));
+                if *materialization != Self::action_materialization_for_plan(plan) {
+                    return None;
+                }
+                Some(self.candidate_for_plan(plan))
+            }
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::Unroll,
+                axis: Some(2),
+                arg: KernelScheduleActionArg::Factor(factor),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                let plan = schedule_gemm_plan(&candidate.schedule)?;
+                if plan.reduce_unroll != 1 || *factor > plan.tile.k || plan.tile.k % *factor != 0 {
+                    return None;
+                }
+                Some(self.candidate_for_plan(plan.with_reduce_unroll(*factor)))
+            }
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::StrideOrder,
+                axis: None,
+                arg: KernelScheduleActionArg::AxisOrder(axes),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                let plan = schedule_gemm_plan(&candidate.schedule)?;
+                if plan.b_load_order != GemmBTileLoadOrder::TileLinear {
+                    return None;
+                }
+                let order = GemmBTileLoadOrder::from_action_axes(axes)?;
+                if order == GemmBTileLoadOrder::TileLinear {
+                    return None;
+                }
+                Some(self.candidate_for_plan(plan.with_b_load_order(order)))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl KernelMetadataSearchProblem for GemmSearchProblem {
@@ -1037,34 +1309,7 @@ impl KernelMetadataSearchProblem for GemmSearchProblem {
     }
 
     fn expand(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelCandidateMetadata> {
-        let Some(plan) = schedule_gemm_plan(&candidate.schedule) else {
-            return Self::TILE_SHAPES
-                .into_iter()
-                .map(|tile| self.candidate_for_tile(tile))
-                .collect();
-        };
-        if plan.reduce_unroll == 1 {
-            let mut candidates = Self::REDUCE_UNROLL_FACTORS
-                .into_iter()
-                .filter(|factor| *factor <= plan.tile.k && plan.tile.k % *factor == 0)
-                .map(|factor| self.candidate_for_plan(plan.with_reduce_unroll(factor)))
-                .collect::<Vec<_>>();
-            if plan.b_load_order == GemmBTileLoadOrder::TileLinear {
-                candidates.extend(
-                    Self::B_LOAD_ORDERS
-                        .into_iter()
-                        .map(|order| self.candidate_for_plan(plan.with_b_load_order(order))),
-                );
-            }
-            return candidates;
-        }
-        if plan.b_load_order == GemmBTileLoadOrder::TileLinear {
-            return Self::B_LOAD_ORDERS
-                .into_iter()
-                .map(|order| self.candidate_for_plan(plan.with_b_load_order(order)))
-                .collect();
-        }
-        Vec::new()
+        expand_with_schedule_actions(self, candidate)
     }
 
     fn score(&self, candidate: &KernelCandidateMetadata) -> Option<SearchScore> {
@@ -1849,6 +2094,38 @@ mod tests {
     }
 
     #[test]
+    fn matvec_action_space_exposes_existing_and_deferred_row_splits() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let seed = problem.seed();
+        let actions = problem.schedule_actions(&seed);
+
+        assert_eq!(actions.len(), 8);
+        assert!(actions.contains(&KernelScheduleAction::split(
+            0,
+            8,
+            KernelActionMaterialization::Existing
+        )));
+        assert!(actions.contains(&KernelScheduleAction::split(
+            0,
+            8,
+            KernelActionMaterialization::DeferredGenerated
+        )));
+
+        let generated = problem
+            .apply_schedule_action(
+                &seed,
+                &KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+            )
+            .expect("row split action should produce candidate metadata");
+        assert_eq!(generated.launch.kernel, "matvec_bf16_rows8");
+        assert_eq!(schedule_rows_per_block(&generated.schedule), Some(8));
+        assert!(matches!(
+            generated.generated.materialization,
+            KernelMaterialization::DeferredGenerated { .. }
+        ));
+    }
+
+    #[test]
     fn matvec_generator_renders_rows_per_block_source_on_demand() {
         let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
         let candidate = problem.generated_candidate_for_rows(RowMajorWarpRows::Rows8);
@@ -1933,6 +2210,52 @@ mod tests {
             KernelMaterialization::DeferredGenerated { .. }
         ));
         assert_eq!(deferred.generated.generator, "tiled-gemm-generator");
+    }
+
+    #[test]
+    fn gemm_action_space_exposes_tile_unroll_and_stride_metadata() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let seed = problem.seed();
+        let tile_actions = problem.schedule_actions(&seed);
+
+        assert_eq!(tile_actions.len(), 4);
+        assert!(tile_actions.contains(&KernelScheduleAction::tile_gemm(
+            16,
+            16,
+            16,
+            KernelActionMaterialization::Existing
+        )));
+        assert!(tile_actions.contains(&KernelScheduleAction::tile_gemm(
+            16,
+            32,
+            16,
+            KernelActionMaterialization::DeferredGenerated
+        )));
+
+        let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
+        let schedule_actions = problem.schedule_actions(&tile_candidate);
+        assert_eq!(schedule_actions.len(), 4);
+        assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 4)));
+        assert!(schedule_actions.contains(&KernelScheduleAction::stride_order(vec![2, 1])));
+
+        let unrolled = problem
+            .apply_schedule_action(&tile_candidate, &KernelScheduleAction::unroll(2, 4))
+            .expect("unroll action should produce candidate metadata");
+        let unrolled_plan =
+            schedule_gemm_plan(&unrolled.schedule).expect("unrolled candidate should have plan");
+        assert_eq!(unrolled_plan.reduce_unroll, 4);
+        assert_eq!(unrolled.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u4");
+
+        let reordered = problem
+            .apply_schedule_action(
+                &tile_candidate,
+                &KernelScheduleAction::stride_order(vec![2, 1]),
+            )
+            .expect("stride-order action should produce candidate metadata");
+        let reordered_plan =
+            schedule_gemm_plan(&reordered.schedule).expect("reordered candidate should have plan");
+        assert_eq!(reordered_plan.b_load_order, GemmBTileLoadOrder::KContiguous);
+        assert_eq!(reordered.launch.kernel, "gemm_f32_bf16_tile_16x32x16_bk");
     }
 
     #[test]
