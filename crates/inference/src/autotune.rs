@@ -413,7 +413,7 @@ impl KernelSourceGenerator for MatvecRustCudaGenerator {
                 generator: self.name(),
             });
         }
-        let rows_per_block = schedule_rows_per_block(&candidate.schedule).ok_or_else(|| {
+        let plan = schedule_matvec_plan(&candidate.schedule).ok_or_else(|| {
             KernelGenerationError::MissingTransform {
                 family: candidate.family.clone(),
                 transform: "Split",
@@ -427,7 +427,7 @@ impl KernelSourceGenerator for MatvecRustCudaGenerator {
         };
         Ok(GeneratedKernelSource {
             symbol: symbol.clone(),
-            source: render_bf16_matvec_source(&symbol, rows_per_block),
+            source: render_bf16_matvec_source(&symbol, plan),
         })
     }
 }
@@ -643,6 +643,32 @@ impl RowMajorWarpRows {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MatvecSchedulePlan {
+    pub rows: RowMajorWarpRows,
+    pub reduce_unroll: u32,
+}
+
+impl MatvecSchedulePlan {
+    pub const DEFAULT_REDUCE_UNROLL: u32 = 4;
+
+    pub const fn new(rows: RowMajorWarpRows) -> Self {
+        Self {
+            rows,
+            reduce_unroll: Self::DEFAULT_REDUCE_UNROLL,
+        }
+    }
+
+    pub const fn with_reduce_unroll(mut self, factor: u32) -> Self {
+        self.reduce_unroll = if factor == 0 { 1 } else { factor };
+        self
+    }
+
+    pub const fn normalized(self) -> Self {
+        self.with_reduce_unroll(self.reduce_unroll)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatvecSearchProblem {
     pub rows: usize,
@@ -653,6 +679,8 @@ pub struct MatvecSearchProblem {
 }
 
 impl MatvecSearchProblem {
+    const REDUCE_UNROLL_FACTORS: [u32; 3] = [1, 2, 8];
+
     pub const fn bf16_row_major(rows: usize, cols: usize) -> Self {
         Self {
             rows,
@@ -664,8 +692,8 @@ impl MatvecSearchProblem {
     }
 
     pub fn candidate_for_rows(&self, plan: RowMajorWarpRows) -> KernelCandidateMetadata {
-        self.candidate_for_rows_with_materialization(
-            plan,
+        self.candidate_for_plan_with_materialization(
+            MatvecSchedulePlan::new(plan),
             "matvec_bf16_kernel".to_string(),
             KernelMaterialization::Existing {
                 symbol: "matvec_bf16_kernel",
@@ -674,8 +702,16 @@ impl MatvecSearchProblem {
     }
 
     pub fn generated_candidate_for_rows(&self, plan: RowMajorWarpRows) -> KernelCandidateMetadata {
-        let symbol_hint = format!("matvec_bf16_rows{}", plan.rows_per_block());
-        self.candidate_for_rows_with_materialization(
+        self.generated_candidate_for_plan(MatvecSchedulePlan::new(plan))
+    }
+
+    pub fn generated_candidate_for_plan(
+        &self,
+        plan: MatvecSchedulePlan,
+    ) -> KernelCandidateMetadata {
+        let plan = plan.normalized();
+        let symbol_hint = matvec_symbol_hint(plan);
+        self.candidate_for_plan_with_materialization(
             plan,
             symbol_hint.clone(),
             KernelMaterialization::DeferredGenerated {
@@ -685,30 +721,38 @@ impl MatvecSearchProblem {
         )
     }
 
-    fn candidate_for_rows_with_materialization(
+    fn candidate_for_plan_with_materialization(
         &self,
-        plan: RowMajorWarpRows,
+        plan: MatvecSchedulePlan,
         launch_kernel: String,
         materialization: KernelMaterialization,
     ) -> KernelCandidateMetadata {
-        let rows_per_block = plan.rows_per_block();
-        let schedule = KernelSchedule::new()
+        let plan = plan.normalized();
+        let rows = plan.rows;
+        let rows_per_block = rows.rows_per_block();
+        let mut schedule = KernelSchedule::new()
             .with_transform(ScheduleTransform::Split {
                 axis: 0,
                 factor: rows_per_block,
             })
             .with_transform(ScheduleTransform::ThreadGroup {
                 axis: 0,
-                factor: plan.block_threads(),
+                factor: rows.block_threads(),
             });
+        if plan.reduce_unroll != MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
+            schedule = schedule.with_transform(ScheduleTransform::Unroll {
+                axis: 1,
+                factor: plan.reduce_unroll,
+            });
+        }
         let launch = CudaLaunchSpec::new(
             launch_kernel,
-            (plan.grid_rows(self.rows), 1, 1),
-            (plan.block_threads(), 1, 1),
+            (rows.grid_rows(self.rows), 1, 1),
+            (rows.block_threads(), 1, 1),
             0,
         );
         let operation = TypedOperationSpec::new(
-            format!("{}::bf16", plan.plan_name()),
+            matvec_operation_name(plan),
             OperationKind::Matvec,
             OperationRoute::CudaKernel,
         )
@@ -747,26 +791,41 @@ impl MatvecSearchProblem {
 
 impl KernelActionSearchProblem for MatvecSearchProblem {
     fn schedule_actions(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelScheduleAction> {
-        if candidate.schedule.depth() > 0 {
+        if candidate.family != "matvec-bf16-row-major" {
             return Vec::new();
         }
-        RowMajorWarpRows::ALL
+        if candidate.schedule.depth() == 0 {
+            return RowMajorWarpRows::ALL
+                .into_iter()
+                .flat_map(|plan| {
+                    let rows_per_block = plan.rows_per_block();
+                    [
+                        KernelScheduleAction::split(
+                            0,
+                            rows_per_block,
+                            KernelActionMaterialization::Existing,
+                        ),
+                        KernelScheduleAction::split(
+                            0,
+                            rows_per_block,
+                            KernelActionMaterialization::DeferredGenerated,
+                        ),
+                    ]
+                })
+                .collect();
+        }
+        let Some(plan) = schedule_matvec_plan(&candidate.schedule) else {
+            return Vec::new();
+        };
+        if candidate.is_launchable()
+            || plan.reduce_unroll != MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL
+        {
+            return Vec::new();
+        }
+        Self::REDUCE_UNROLL_FACTORS
             .into_iter()
-            .flat_map(|plan| {
-                let rows_per_block = plan.rows_per_block();
-                [
-                    KernelScheduleAction::split(
-                        0,
-                        rows_per_block,
-                        KernelActionMaterialization::Existing,
-                    ),
-                    KernelScheduleAction::split(
-                        0,
-                        rows_per_block,
-                        KernelActionMaterialization::DeferredGenerated,
-                    ),
-                ]
-            })
+            .filter(|factor| *factor <= self.cols as u32)
+            .map(|factor| KernelScheduleAction::unroll(1, factor))
             .collect()
     }
 
@@ -775,27 +834,46 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
         candidate: &KernelCandidateMetadata,
         action: &KernelScheduleAction,
     ) -> Option<KernelCandidateMetadata> {
-        if candidate.schedule.depth() > 0 {
+        if candidate.family != "matvec-bf16-row-major" {
             return None;
         }
-        let KernelScheduleAction {
-            op: KernelScheduleActionOp::Split,
-            axis: Some(0),
-            arg: KernelScheduleActionArg::Factor(rows_per_block),
-            materialization,
-        } = action
-        else {
-            return None;
-        };
-        let plan = RowMajorWarpRows::from_rows_per_block(*rows_per_block)?;
-
-        let next = match materialization {
-            KernelActionMaterialization::Existing => self.candidate_for_rows(plan),
-            KernelActionMaterialization::DeferredGenerated => {
-                self.generated_candidate_for_rows(plan)
+        match action {
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::Split,
+                axis: Some(0),
+                arg: KernelScheduleActionArg::Factor(rows_per_block),
+                materialization,
+            } => {
+                if candidate.schedule.depth() > 0 {
+                    return None;
+                }
+                let rows = RowMajorWarpRows::from_rows_per_block(*rows_per_block)?;
+                let next = match materialization {
+                    KernelActionMaterialization::Existing => self.candidate_for_rows(rows),
+                    KernelActionMaterialization::DeferredGenerated => {
+                        self.generated_candidate_for_rows(rows)
+                    }
+                };
+                Some(candidate_with_action_trace(candidate, action, next))
             }
-        };
-        Some(candidate_with_action_trace(candidate, action, next))
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::Unroll,
+                axis: Some(1),
+                arg: KernelScheduleActionArg::Factor(factor),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                if candidate.is_launchable() || *factor == 0 || *factor > self.cols as u32 {
+                    return None;
+                }
+                let plan = schedule_matvec_plan(&candidate.schedule)?;
+                if plan.reduce_unroll != MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
+                    return None;
+                }
+                let next = self.generated_candidate_for_plan(plan.with_reduce_unroll(*factor));
+                Some(candidate_with_action_trace(candidate, action, next))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -839,20 +917,29 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
     }
 
     fn score(&self, candidate: &KernelCandidateMetadata) -> Option<SearchScore> {
-        let rows_per_block = schedule_rows_per_block(&candidate.schedule)? as usize;
+        let plan = schedule_matvec_plan(&candidate.schedule)?;
+        let rows_per_block = plan.rows.rows_per_block() as usize;
         let blocks = self.rows.div_ceil(rows_per_block);
         let padded_rows = blocks * rows_per_block;
         let useful_fma_ops = self.rows.checked_mul(self.cols)?.checked_mul(2)? as f64;
         let wasted_rows = padded_rows.saturating_sub(self.rows);
         let wasted_fma_ops = wasted_rows.checked_mul(self.cols)?.checked_mul(2)? as f64;
         let block_overhead = blocks as f64 * 2048.0;
+        let unroll = f64::from(plan.reduce_unroll.max(1));
+        let loop_overhead = blocks as f64 * (self.cols as f64 / 32.0).ceil() * 64.0 / unroll;
+        let register_pressure = blocks as f64 * (unroll - 1.0).max(0.0) * 32.0;
         let generic_runtime_penalty = if candidate.is_launchable() {
             blocks as f64 * 64.0
         } else {
             0.0
         };
         SearchScore::heuristic(
-            useful_fma_ops + wasted_fma_ops * 8.0 + block_overhead + generic_runtime_penalty,
+            useful_fma_ops
+                + wasted_fma_ops * 8.0
+                + block_overhead
+                + loop_overhead
+                + register_pressure
+                + generic_runtime_penalty,
         )
     }
 }
@@ -1290,6 +1377,45 @@ fn schedule_rows_per_block(schedule: &KernelSchedule) -> Option<u32> {
         })
 }
 
+fn schedule_matvec_reduce_unroll(schedule: &KernelSchedule) -> Option<u32> {
+    schedule
+        .transforms
+        .iter()
+        .find_map(|transform| match transform {
+            ScheduleTransform::Unroll { axis: 1, factor } => Some(*factor),
+            _ => None,
+        })
+}
+
+fn schedule_matvec_plan(schedule: &KernelSchedule) -> Option<MatvecSchedulePlan> {
+    let rows_per_block = schedule_rows_per_block(schedule)?;
+    let rows = RowMajorWarpRows::from_rows_per_block(rows_per_block)?;
+    Some(MatvecSchedulePlan {
+        rows,
+        reduce_unroll: schedule_matvec_reduce_unroll(schedule)
+            .unwrap_or(MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL),
+    })
+}
+
+fn matvec_symbol_hint(plan: MatvecSchedulePlan) -> String {
+    let plan = plan.normalized();
+    let base = format!("matvec_bf16_rows{}", plan.rows.rows_per_block());
+    if plan.reduce_unroll == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
+        base
+    } else {
+        format!("{base}_u{}", plan.reduce_unroll)
+    }
+}
+
+fn matvec_operation_name(plan: MatvecSchedulePlan) -> String {
+    let plan = plan.normalized();
+    if plan.reduce_unroll == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
+        format!("{}::bf16", plan.rows.plan_name())
+    } else {
+        format!("{}::bf16-u{}", plan.rows.plan_name(), plan.reduce_unroll)
+    }
+}
+
 fn schedule_gemm_tile(schedule: &KernelSchedule) -> Option<GemmTileShape> {
     schedule
         .transforms
@@ -1486,8 +1612,10 @@ fn timing_json(timing: OptimizationTiming) -> Value {
     })
 }
 
-fn render_bf16_matvec_source(symbol: &str, rows_per_block: u32) -> String {
-    let rows_per_block = rows_per_block.max(1);
+fn render_bf16_matvec_source(symbol: &str, plan: MatvecSchedulePlan) -> String {
+    let plan = plan.normalized();
+    let rows_per_block = plan.rows.rows_per_block().max(1);
+    let reduce_unroll = plan.reduce_unroll.max(1);
     let mut source = String::new();
     writeln!(
         source,
@@ -1508,6 +1636,7 @@ fn render_bf16_matvec_source(symbol: &str, rows_per_block: u32) -> String {
     writeln!(source).expect("write to string");
     writeln!(source, "const LANES_PER_ROW: u32 = 32;").expect("write to string");
     writeln!(source, "const ROWS_PER_BLOCK: u32 = {rows_per_block};").expect("write to string");
+    writeln!(source, "const REDUCE_UNROLL: u32 = {reduce_unroll};").expect("write to string");
     writeln!(source).expect("write to string");
     writeln!(source, "#[inline(always)]").expect("write to string");
     writeln!(source, "fn warp_reduce_sum(mut acc: f32) -> f32 {{").expect("write to string");
@@ -1553,34 +1682,29 @@ fn render_bf16_matvec_source(symbol: &str, rows_per_block: u32) -> String {
     writeln!(source, "    let mut acc = 0.0_f32;").expect("write to string");
     writeln!(source, "    let mut col = lane as usize;").expect("write to string");
     writeln!(source).expect("write to string");
-    writeln!(source, "    while col + 96 < cols {{").expect("write to string");
-    writeln!(source, "        let col0 = col;").expect("write to string");
-    writeln!(source, "        let col1 = col + 32;").expect("write to string");
-    writeln!(source, "        let col2 = col + 64;").expect("write to string");
-    writeln!(source, "        let col3 = col + 96;").expect("write to string");
-    writeln!(
-        source,
-        "        acc += weight[row_base + col0 * col_stride].to_f32() * input[col0];"
-    )
-    .expect("write to string");
-    writeln!(
-        source,
-        "        acc += weight[row_base + col1 * col_stride].to_f32() * input[col1];"
-    )
-    .expect("write to string");
-    writeln!(
-        source,
-        "        acc += weight[row_base + col2 * col_stride].to_f32() * input[col2];"
-    )
-    .expect("write to string");
-    writeln!(
-        source,
-        "        acc += weight[row_base + col3 * col_stride].to_f32() * input[col3];"
-    )
-    .expect("write to string");
-    writeln!(source, "        col += 128;").expect("write to string");
-    writeln!(source, "    }}").expect("write to string");
-    writeln!(source).expect("write to string");
+    if reduce_unroll > 1 {
+        let last_offset = (reduce_unroll - 1) * 32;
+        let stride = reduce_unroll * 32;
+        writeln!(source, "    while col + {last_offset} < cols {{").expect("write to string");
+        for offset in 0..reduce_unroll {
+            let col_expr = if offset == 0 {
+                "col".to_string()
+            } else {
+                format!("col + {}", offset * 32)
+            };
+            writeln!(source, "        let col{offset} = {col_expr};").expect("write to string");
+        }
+        for offset in 0..reduce_unroll {
+            writeln!(
+                source,
+                "        acc += weight[row_base + col{offset} * col_stride].to_f32() * input[col{offset}];"
+            )
+            .expect("write to string");
+        }
+        writeln!(source, "        col += {stride};").expect("write to string");
+        writeln!(source, "    }}").expect("write to string");
+        writeln!(source).expect("write to string");
+    }
     writeln!(source, "    while col < cols {{").expect("write to string");
     writeln!(
         source,
@@ -2107,6 +2231,75 @@ mod tests {
     }
 
     #[test]
+    fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let seed = problem.seed();
+        let rows8 = problem
+            .apply_schedule_action(
+                &seed,
+                &KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+            )
+            .expect("row split action should produce generated candidate metadata");
+        let actions = problem.schedule_actions(&rows8);
+
+        assert_eq!(actions.len(), 3);
+        assert!(actions.contains(&KernelScheduleAction::unroll(1, 1)));
+        assert!(actions.contains(&KernelScheduleAction::unroll(1, 2)));
+        assert!(actions.contains(&KernelScheduleAction::unroll(1, 8)));
+
+        let unrolled = problem
+            .apply_schedule_action(&rows8, &KernelScheduleAction::unroll(1, 8))
+            .expect("reduce unroll action should produce generated candidate metadata");
+        assert_eq!(unrolled.launch.kernel, "matvec_bf16_rows8_u8");
+        assert_eq!(schedule_matvec_reduce_unroll(&unrolled.schedule), Some(8));
+        assert_eq!(
+            unrolled.action_trace,
+            vec![
+                KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+                KernelScheduleAction::unroll(1, 8),
+            ]
+        );
+        assert_ne!(rows8.artifact_key(), unrolled.artifact_key());
+    }
+
+    #[test]
+    fn matvec_search_can_rank_reduce_unroll_variants_when_allowed() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let result = beam_search_metadata_with_scorer(
+            &problem,
+            BeamSearchConfig {
+                beam_width: 8,
+                max_depth: 2,
+                require_launchable: false,
+            },
+            |candidate| {
+                let plan = schedule_matvec_plan(&candidate.schedule)?;
+                if plan.rows == RowMajorWarpRows::Rows8 && plan.reduce_unroll == 8 {
+                    SearchScore::measured(0.0)
+                } else {
+                    SearchScore::measured(
+                        100.0
+                            + f64::from(plan.rows.rows_per_block())
+                            + f64::from(plan.reduce_unroll),
+                    )
+                }
+            },
+        );
+        let best = result
+            .best
+            .expect("matvec search should produce an unrolled generated candidate");
+        let plan = schedule_matvec_plan(&best.schedule).expect("best candidate should have plan");
+
+        assert_eq!(plan.rows, RowMajorWarpRows::Rows8);
+        assert_eq!(plan.reduce_unroll, 8);
+        assert_eq!(best.launch.kernel, "matvec_bf16_rows8_u8");
+        assert_eq!(
+            best.score.map(|score| score.source),
+            Some(SearchScoreSource::Measured)
+        );
+    }
+
+    #[test]
     fn candidate_projects_to_profiling_optimization_spec() {
         let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
         let seed = problem.seed();
@@ -2142,6 +2335,7 @@ mod tests {
         assert!(generated.source.contains("pub fn matvec_bf16_rows8("));
         assert!(generated.source.contains("pub struct Bf16(u16);"));
         assert!(generated.source.contains("const ROWS_PER_BLOCK: u32 = 8;"));
+        assert!(generated.source.contains("const REDUCE_UNROLL: u32 = 4;"));
         assert!(
             generated
                 .source
@@ -2149,6 +2343,29 @@ mod tests {
         );
         assert!(generated.source.contains("while col + 96 < cols"));
         assert!(generated.source.contains("warp::shuffle_down_f32(acc, 16)"));
+    }
+
+    #[test]
+    fn matvec_generator_renders_reduce_unroll_source_on_demand() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let candidate = problem.generated_candidate_for_plan(
+            MatvecSchedulePlan::new(RowMajorWarpRows::Rows8).with_reduce_unroll(8),
+        );
+        let generated = MatvecRustCudaGenerator
+            .source_for(&candidate)
+            .expect("matvec generator should render reduce-unrolled source");
+
+        assert_eq!(generated.symbol, "matvec_bf16_rows8_u8");
+        assert!(generated.source.contains("const ROWS_PER_BLOCK: u32 = 8;"));
+        assert!(generated.source.contains("const REDUCE_UNROLL: u32 = 8;"));
+        assert!(generated.source.contains("while col + 224 < cols"));
+        assert!(generated.source.contains("let col7 = col + 224;"));
+        assert!(
+            generated
+                .source
+                .contains("acc += weight[row_base + col7 * col_stride].to_f32() * input[col7];")
+        );
+        assert!(generated.source.contains("col += 256;"));
     }
 
     #[test]
