@@ -54,9 +54,9 @@ pub use self::{
         KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemoryAccessInfo,
         MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemoryAddressImmediateKind,
         MemoryAddressKind, MemorySpace, PredicateCondition, PredicateConditionKind, RegisterRef,
-        RegisterRefKind, SassCompareDType, SassComparisonKind, SassMappingConfidence, SassOpcode,
-        SassSyncKind, SassTensorElementType, SassTensorScope, SassWarpShuffleMode, ScalarOperand,
-        ScalarOperandKind, lift_sass_module,
+        RegisterRefKind, SassCompareDType, SassComparisonKind, SassMappingConfidence,
+        SassMemoryModifier, SassOpcode, SassSyncKind, SassTensorElementType, SassTensorScope,
+        SassWarpShuffleMode, ScalarOperand, ScalarOperandKind, lift_sass_module,
     },
     known_opcodes::{KnownSassOpcode, known_sass_opcodes},
     lifted::{

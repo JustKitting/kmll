@@ -357,7 +357,7 @@ fn lift_simple_sass_maps_observed_core_ops() {
             access,
             ..
         } if access.width_bits.is_none()
-            && access.modifiers.as_slice() == ["E"]
+            && access.modifiers.as_slice() == [SassMemoryModifier::E]
             && matches!(
                 &address.kind,
                 MemoryAddressKind::Descriptor {
@@ -384,7 +384,7 @@ fn lift_simple_sass_maps_observed_core_ops() {
             access,
             ..
         } if access.width_bits.is_none()
-            && access.modifiers.as_slice() == ["E"]
+            && access.modifiers.as_slice() == [SassMemoryModifier::E]
             && matches!(
                 &address.kind,
                 MemoryAddressKind::Descriptor {
@@ -557,7 +557,7 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
             modifiers
         } if dst == &reg("R2") && address.raw == "desc[UR4][R0.64]"
             && width_bits.is_none()
-            && modifiers.as_slice() == ["E"]
+            && modifiers.as_slice() == [SassMemoryModifier::E]
     ));
     assert!(load.outputs.iter().any(|value| value.register == reg("R2")));
 
@@ -597,7 +597,7 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
             modifiers
         } if address.raw == "desc[UR8][R0.64]" && value == &reg("R4")
             && width_bits.is_none()
-            && modifiers.as_slice() == ["E"]
+            && modifiers.as_slice() == [SassMemoryModifier::E]
     ));
     assert!(store.inputs.iter().any(|value| value.register == reg("R4")));
     assert!(store.outputs.is_empty());
@@ -657,7 +657,8 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
             access: ref memory_access,
             ..
         } if memory_access.width_bits == Some(16)
-            && memory_access.modifiers.as_slice() == ["E", "U16"]
+            && memory_access.modifiers.as_slice()
+                == [SassMemoryModifier::E, SassMemoryModifier::Unsigned(16)]
     )));
     assert!(ops.iter().any(|op| matches!(
         op.kind,

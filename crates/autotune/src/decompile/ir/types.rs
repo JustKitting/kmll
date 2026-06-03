@@ -1038,7 +1038,53 @@ impl fmt::Display for MemorySpace {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryAccessInfo {
     pub width_bits: Option<u32>,
-    pub modifiers: Vec<String>,
+    pub modifiers: Vec<SassMemoryModifier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassMemoryModifier {
+    E,
+    Unsigned(u32),
+    Signed(u32),
+    Width(u32),
+    Raw(String),
+}
+
+impl SassMemoryModifier {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        if raw == "E" {
+            return Self::E;
+        }
+        if let Some(bits) = raw.strip_prefix('U').and_then(|bits| bits.parse().ok()) {
+            return Self::Unsigned(bits);
+        }
+        if let Some(bits) = raw.strip_prefix('S').and_then(|bits| bits.parse().ok()) {
+            return Self::Signed(bits);
+        }
+        raw.parse::<u32>()
+            .map(Self::Width)
+            .unwrap_or(Self::Raw(raw))
+    }
+
+    pub fn width_bits(&self) -> Option<u32> {
+        match self {
+            Self::Unsigned(bits) | Self::Signed(bits) | Self::Width(bits) => Some(*bits),
+            Self::E | Self::Raw(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for SassMemoryModifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::E => f.write_str("E"),
+            Self::Unsigned(bits) => write!(f, "U{bits}"),
+            Self::Signed(bits) => write!(f, "S{bits}"),
+            Self::Width(bits) => write!(f, "{bits}"),
+            Self::Raw(raw) => f.write_str(raw),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1208,7 +1254,7 @@ impl fmt::Display for MemoryAddressBase {
 }
 
 impl MemoryAccessInfo {
-    pub fn new(width_bits: Option<u32>, modifiers: Vec<String>) -> Self {
+    pub fn new(width_bits: Option<u32>, modifiers: Vec<SassMemoryModifier>) -> Self {
         Self {
             width_bits,
             modifiers,

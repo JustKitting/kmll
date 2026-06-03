@@ -2,8 +2,9 @@ use std::fmt;
 
 use super::super::{
     AggregateOperand, ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace,
-    PredicateCondition, RegisterRef, SassCompareDType, SassComparisonKind, SassOpcode,
-    SassSyncKind, SassTensorElementType, SassTensorScope, SassWarpShuffleMode, ScalarOperand,
+    PredicateCondition, RegisterRef, SassCompareDType, SassComparisonKind, SassMemoryModifier,
+    SassOpcode, SassSyncKind, SassTensorElementType, SassTensorScope, SassWarpShuffleMode,
+    ScalarOperand,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,14 +26,14 @@ pub enum SassLiftedSemantics {
         dst: RegisterRef,
         address: MemoryAddress,
         width_bits: Option<u32>,
-        modifiers: Vec<String>,
+        modifiers: Vec<SassMemoryModifier>,
     },
     Store {
         space: MemorySpace,
         address: MemoryAddress,
         value: RegisterRef,
         width_bits: Option<u32>,
-        modifiers: Vec<String>,
+        modifiers: Vec<SassMemoryModifier>,
     },
     IntegerAdd {
         dst: RegisterRef,
@@ -168,7 +169,7 @@ impl fmt::Display for SassLiftedSemantics {
                 f,
                 "load(space={space},dst={dst},address={address},width={},modifiers=[{}])",
                 option_u32(*width_bits),
-                modifiers.join(",")
+                format_display_list(modifiers)
             ),
             Self::Store {
                 space,
@@ -180,7 +181,7 @@ impl fmt::Display for SassLiftedSemantics {
                 f,
                 "store(space={space},address={address},value={value},width={},modifiers=[{}])",
                 option_u32(*width_bits),
-                modifiers.join(",")
+                format_display_list(modifiers)
             ),
             Self::IntegerAdd {
                 dst,

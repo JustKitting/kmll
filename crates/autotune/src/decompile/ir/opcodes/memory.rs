@@ -1,7 +1,7 @@
 use super::super::super::sass::{SassInstruction, SassOperand, SassOperandKind};
 use super::super::types::{
     KernelIrOpKind, MemoryAccessInfo, MemoryAddress, MemoryAddressKind, MemorySpace, RegisterRef,
-    SassMappingConfidence, SassOpcode,
+    SassMappingConfidence, SassMemoryModifier, SassOpcode,
 };
 use super::LiftResult;
 
@@ -110,18 +110,11 @@ fn memory_space(opcode: &str, address: &MemoryAddress) -> MemorySpace {
 }
 
 fn memory_access_info(instruction: &SassInstruction) -> MemoryAccessInfo {
-    MemoryAccessInfo::new(
-        memory_width_bits(&instruction.modifiers),
-        instruction.modifiers.clone(),
-    )
-}
-
-fn memory_width_bits(modifiers: &[String]) -> Option<u32> {
-    modifiers.iter().find_map(|modifier| {
-        modifier
-            .strip_prefix('U')
-            .or_else(|| modifier.strip_prefix('S'))
-            .and_then(|bits| bits.parse::<u32>().ok())
-            .or_else(|| modifier.parse::<u32>().ok())
-    })
+    let modifiers = instruction
+        .modifiers
+        .iter()
+        .map(|modifier| SassMemoryModifier::parse(modifier.as_str()))
+        .collect::<Vec<_>>();
+    let width_bits = modifiers.iter().find_map(SassMemoryModifier::width_bits);
+    MemoryAccessInfo::new(width_bits, modifiers)
 }
