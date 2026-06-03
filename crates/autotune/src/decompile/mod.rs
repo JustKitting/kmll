@@ -67,7 +67,7 @@ pub use self::{
     },
     sass::{
         RegisterClass, SassFunction, SassInstruction, SassModule, SassOperand, SassOperandKind,
-        SassParseError, SassPredicate, SassRegister, parse_nvidia_sass,
+        SassParseError, SassPredicate, SassRegister, SassSourcePosition, parse_nvidia_sass,
     },
 };
 

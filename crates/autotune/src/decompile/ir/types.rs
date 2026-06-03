@@ -1,5 +1,7 @@
 use std::fmt::{self, Write as _};
 
+use super::super::sass::SassSourcePosition;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelIrModule {
     pub target: Option<String>,
@@ -45,6 +47,7 @@ pub struct KernelIrFunction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelIrOp {
     pub address: u64,
+    pub source_position: SassSourcePosition,
     pub label: Option<String>,
     pub predicate: Option<String>,
     pub kind: KernelIrOpKind,

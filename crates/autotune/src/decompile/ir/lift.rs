@@ -27,6 +27,7 @@ fn lift_instruction(instruction: &SassInstruction) -> KernelIrOp {
     let (kind, confidence) = lift_kind(instruction);
     KernelIrOp {
         address: instruction.address,
+        source_position: instruction.source_position,
         label: instruction.label.clone(),
         predicate: instruction.predicate.as_ref().map(predicate_text),
         kind,

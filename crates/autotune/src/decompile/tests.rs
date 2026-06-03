@@ -188,6 +188,18 @@ fn parse_nvidia_sass_captures_nvdisasm_function_and_operands() {
     let function = &module.functions[0];
     assert_eq!(function.name, "sass_fixture_i32_add");
     assert_eq!(function.instructions.len(), 8);
+    assert!(
+        function
+            .instructions
+            .windows(2)
+            .all(|pair| pair[0].source_position < pair[1].source_position)
+    );
+    let ordered_positions = function
+        .instructions
+        .iter()
+        .map(|instruction| instruction.source_position)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(ordered_positions.len(), function.instructions.len());
     assert_eq!(function.instructions[0].opcode, "S2R");
     assert_eq!(function.instructions[2].modifiers, ["E"]);
     assert_eq!(
@@ -200,6 +212,12 @@ fn parse_nvidia_sass_captures_nvdisasm_function_and_operands() {
         }
     );
     assert_eq!(function.instructions[7].label.as_deref(), Some(".L_x_0"));
+
+    let ir = lift_sass_module(&module);
+    assert_eq!(
+        ir.functions[0].ops[0].source_position,
+        function.instructions[0].source_position
+    );
 }
 
 #[test]

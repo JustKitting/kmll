@@ -25,12 +25,28 @@ pub struct SassFunction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassInstruction {
     pub address: u64,
+    pub source_position: SassSourcePosition,
     pub label: Option<String>,
     pub predicate: Option<SassPredicate>,
     pub opcode: String,
     pub modifiers: Vec<String>,
     pub operands: Vec<SassOperand>,
     pub raw: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SassSourcePosition {
+    pub line: usize,
+    pub instruction_ordinal: usize,
+}
+
+impl SassSourcePosition {
+    pub fn new(line: usize, instruction_ordinal: usize) -> Self {
+        Self {
+            line,
+            instruction_ordinal,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,8 +133,9 @@ pub fn parse_nvidia_sass(input: &str) -> Result<SassModule, SassParseError> {
     let mut pending_global = None::<String>;
     let mut pending_section = None::<String>;
     let mut pending_label = None::<String>;
+    let mut instruction_ordinal = 0usize;
 
-    for line in input.lines() {
+    for (line_index, line) in input.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
@@ -168,9 +185,14 @@ pub fn parse_nvidia_sass(input: &str) -> Result<SassModule, SassParseError> {
             continue;
         }
 
-        let Some(mut instruction) = parse_instruction_line(trimmed)? else {
+        let Some(mut instruction) = parse_instruction_line(
+            trimmed,
+            SassSourcePosition::new(line_index + 1, instruction_ordinal),
+        )?
+        else {
             continue;
         };
+        instruction_ordinal += 1;
         instruction.label = pending_label.take();
         if current.is_none() {
             if let Some(name) = pending_global.clone() {
@@ -225,7 +247,10 @@ fn is_label_line(line: &str) -> bool {
         && !line.starts_with(".size")
 }
 
-fn parse_instruction_line(line: &str) -> Result<Option<SassInstruction>, SassParseError> {
+fn parse_instruction_line(
+    line: &str,
+    source_position: SassSourcePosition,
+) -> Result<Option<SassInstruction>, SassParseError> {
     let Some(rest) = line.strip_prefix("/*") else {
         return Ok(None);
     };
@@ -272,6 +297,7 @@ fn parse_instruction_line(line: &str) -> Result<Option<SassInstruction>, SassPar
 
     Ok(Some(SassInstruction {
         address,
+        source_position,
         label: None,
         predicate,
         opcode,
