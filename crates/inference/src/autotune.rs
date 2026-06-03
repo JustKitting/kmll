@@ -45,6 +45,25 @@ fn bounded_unroll_factors(
         .collect()
 }
 
+fn bounded_tile_factors(extent: usize, max_factor: u32, required_factor: Option<u32>) -> Vec<u32> {
+    const FACTORS: [u32; 5] = [8, 13, 16, 24, 32];
+
+    let upper = extent.min(max_factor as usize) as u32;
+    let mut factors = FACTORS
+        .into_iter()
+        .filter(|factor| *factor <= upper)
+        .collect::<Vec<_>>();
+    if upper > 0 {
+        factors.push(upper);
+    }
+    if let Some(required) = required_factor {
+        factors.push(required);
+    }
+    factors.sort_unstable();
+    factors.dedup();
+    factors
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KernelAxisKind {
     Spatial,
@@ -2010,6 +2029,14 @@ impl GemmTileShape {
         Self { m, n, k }
     }
 
+    pub const fn thread_count(self) -> u32 {
+        self.m * self.n
+    }
+
+    pub const fn is_launchable_shape(self) -> bool {
+        self.m > 0 && self.n > 0 && self.k > 0 && self.thread_count() <= 1024
+    }
+
     pub fn block_dim(self) -> (u32, u32, u32) {
         (self.n, self.m, 1)
     }
@@ -2098,12 +2125,8 @@ pub struct GemmSearchProblem {
 }
 
 impl GemmSearchProblem {
-    const TILE_SHAPES: [GemmTileShape; 4] = [
-        GemmTileShape::new(8, 16, 16),
-        GemmTileShape::new(16, 16, 16),
-        GemmTileShape::new(16, 32, 16),
-        GemmTileShape::new(32, 16, 16),
-    ];
+    const EXISTING_TILE: GemmTileShape = GemmTileShape::new(16, 16, 16);
+    const MAX_TILE_DIM: u32 = 32;
     const MAX_REDUCE_UNROLL_FACTOR: u32 = 32;
     const B_LOAD_ORDERS: [GemmBTileLoadOrder; 1] = [GemmBTileLoadOrder::KContiguous];
 
@@ -2224,7 +2247,7 @@ impl GemmSearchProblem {
 
     fn is_existing_plan(plan: GemmSchedulePlan) -> bool {
         let plan = plan.normalized();
-        plan.tile == GemmTileShape::new(16, 16, 16)
+        plan.tile == Self::EXISTING_TILE
             && plan.reduce_unroll == 1
             && plan.b_load_order == GemmBTileLoadOrder::TileLinear
     }
@@ -2239,7 +2262,7 @@ impl GemmSearchProblem {
 
     fn reduce_unroll_factors(&self) -> Vec<u32> {
         let mut factors = Vec::new();
-        for tile in Self::TILE_SHAPES {
+        for tile in self.tile_shapes() {
             factors.extend(Self::reduce_unroll_factors_for_tile(tile));
         }
         factors.sort_unstable();
@@ -2250,11 +2273,32 @@ impl GemmSearchProblem {
     fn reduce_unroll_factors_for_tile(tile: GemmTileShape) -> Vec<u32> {
         bounded_unroll_factors(tile.k as usize, Self::MAX_REDUCE_UNROLL_FACTOR, Some(1))
     }
-}
 
-impl KernelActionSearchProblem for GemmSearchProblem {
-    fn search_space(&self) -> KernelActionSpaceSet {
-        let tile_variants = Self::TILE_SHAPES
+    fn tile_shapes(&self) -> Vec<GemmTileShape> {
+        let m_factors =
+            bounded_tile_factors(self.m, Self::MAX_TILE_DIM, Some(Self::EXISTING_TILE.m));
+        let n_factors =
+            bounded_tile_factors(self.n, Self::MAX_TILE_DIM, Some(Self::EXISTING_TILE.n));
+        let k_factors =
+            bounded_tile_factors(self.k, Self::MAX_TILE_DIM, Some(Self::EXISTING_TILE.k));
+        let mut tiles = Vec::new();
+        for m in m_factors {
+            for n in n_factors.iter().copied() {
+                for k in k_factors.iter().copied() {
+                    let tile = GemmTileShape::new(m, n, k);
+                    if tile.is_launchable_shape() {
+                        tiles.push(tile);
+                    }
+                }
+            }
+        }
+        tiles.sort_unstable_by_key(|tile| (tile.m, tile.n, tile.k));
+        tiles.dedup();
+        tiles
+    }
+
+    fn tile_action_variants(&self) -> Vec<KernelTile3dAction> {
+        self.tile_shapes()
             .into_iter()
             .map(|tile| {
                 KernelTile3dAction::new(
@@ -2262,7 +2306,13 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                     Self::action_materialization_for_plan(GemmSchedulePlan::new(tile)),
                 )
             })
-            .collect();
+            .collect()
+    }
+}
+
+impl KernelActionSearchProblem for GemmSearchProblem {
+    fn search_space(&self) -> KernelActionSpaceSet {
+        let tile_variants = self.tile_action_variants();
         let unroll_factors = self.reduce_unroll_factors();
         let stride_orders = Self::B_LOAD_ORDERS
             .into_iter()
@@ -2284,16 +2334,9 @@ impl KernelActionSearchProblem for GemmSearchProblem {
 
     fn action_spaces(&self, candidate: &KernelCandidateMetadata) -> KernelActionSpaceSet {
         let Some(plan) = schedule_gemm_plan(&candidate.schedule) else {
-            let variants = Self::TILE_SHAPES
-                .into_iter()
-                .map(|tile| {
-                    KernelTile3dAction::new(
-                        tile.into(),
-                        Self::action_materialization_for_plan(GemmSchedulePlan::new(tile)),
-                    )
-                })
-                .collect();
-            return KernelActionSpaceSet::new(vec![KernelActionSpace::TileGemm { variants }]);
+            return KernelActionSpaceSet::new(vec![KernelActionSpace::TileGemm {
+                variants: self.tile_action_variants(),
+            }]);
         };
 
         if plan.reduce_unroll == 1 {
@@ -2336,7 +2379,11 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 if schedule_gemm_plan(&candidate.schedule).is_some() {
                     return None;
                 }
-                let plan = GemmSchedulePlan::new(GemmTileShape::new(*m, *n, *k));
+                let tile = GemmTileShape::new(*m, *n, *k);
+                if !self.tile_shapes().contains(&tile) {
+                    return None;
+                }
+                let plan = GemmSchedulePlan::new(tile);
                 if *materialization != Self::action_materialization_for_plan(plan) {
                     return None;
                 }
@@ -4298,14 +4345,15 @@ mod tests {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let seed = problem.seed();
         let candidates = problem.expand(&seed);
-        assert_eq!(candidates.len(), 4);
+        assert_eq!(candidates.len(), 125);
         let deferred = candidates
             .iter()
             .find(|candidate| {
-                schedule_gemm_tile(&candidate.schedule) == Some(GemmTileShape::new(16, 32, 16))
+                schedule_gemm_tile(&candidate.schedule) == Some(GemmTileShape::new(13, 24, 13))
             })
-            .expect("GEMM search should expose deferred generated tile metadata");
+            .expect("GEMM search should expose arbitrary deferred generated tile metadata");
         assert!(!deferred.is_launchable());
+        assert_eq!(deferred.launch.kernel, "gemm_f32_bf16_tile_13x24x13");
         assert!(matches!(
             deferred.generated.materialization,
             KernelMaterialization::DeferredGenerated { .. }
@@ -4335,9 +4383,9 @@ mod tests {
         let tile_spaces = problem.action_spaces(&seed);
         let tile_actions = problem.schedule_actions(&seed);
         let tile_action = KernelScheduleAction::tile_gemm(
-            16,
-            32,
-            16,
+            13,
+            24,
+            13,
             KernelActionMaterialization::DeferredGenerated,
         );
 
@@ -4346,16 +4394,20 @@ mod tests {
         let KernelActionSpace::TileGemm { variants } = &tile_spaces.spaces[0] else {
             panic!("GEMM seed should expose tile action-space metadata");
         };
-        assert_eq!(variants.len(), 4);
+        assert_eq!(variants.len(), 125);
         assert!(variants.contains(&KernelTile3dAction::new(
             KernelTile3d::new(16, 16, 16),
             KernelActionMaterialization::Existing
         )));
         assert!(variants.contains(&KernelTile3dAction::new(
-            KernelTile3d::new(16, 32, 16),
+            KernelTile3d::new(13, 24, 13),
             KernelActionMaterialization::DeferredGenerated
         )));
-        assert_eq!(tile_actions.len(), 4);
+        assert!(variants.contains(&KernelTile3dAction::new(
+            KernelTile3d::new(32, 32, 32),
+            KernelActionMaterialization::DeferredGenerated
+        )));
+        assert_eq!(tile_actions.len(), 125);
         assert!(tile_actions.contains(&KernelScheduleAction::tile_gemm(
             16,
             16,
@@ -4401,7 +4453,14 @@ mod tests {
             traced_unrolled.action_trace,
             vec![tile_action, KernelScheduleAction::unroll(2, 7)]
         );
-        assert_eq!(traced_unrolled.artifact_key(), unrolled.artifact_key());
+        let traced_unrolled_plan = schedule_gemm_plan(&traced_unrolled.schedule)
+            .expect("traced unrolled candidate should have plan");
+        assert_eq!(traced_unrolled_plan.tile, GemmTileShape::new(13, 24, 13));
+        assert_eq!(traced_unrolled_plan.reduce_unroll, 7);
+        assert_eq!(
+            traced_unrolled.launch.kernel,
+            "gemm_f32_bf16_tile_13x24x13_u7"
+        );
 
         let reordered = problem
             .apply_schedule_action(
@@ -4418,23 +4477,23 @@ mod tests {
     #[test]
     fn gemm_generator_renders_tile_specific_source_on_demand() {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
-        let candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
+        let candidate = problem.candidate_for_tile(GemmTileShape::new(13, 24, 13));
         let generated = GemmRustCudaGenerator
             .source_for(&candidate)
             .expect("GEMM generator should render deferred tile source");
 
-        assert_eq!(generated.symbol, "gemm_f32_bf16_tile_16x32x16");
+        assert_eq!(generated.symbol, "gemm_f32_bf16_tile_13x24x13");
         assert!(generated.source.contains("#[kernel]"));
         assert!(
             generated
                 .source
-                .contains("pub fn gemm_f32_bf16_tile_16x32x16(")
+                .contains("pub fn gemm_f32_bf16_tile_13x24x13(")
         );
         assert!(generated.source.contains("pub struct Bf16(u16);"));
         assert!(generated.source.contains(".to_f32()"));
-        assert!(generated.source.contains("const TILE_M: usize = 16;"));
-        assert!(generated.source.contains("const TILE_N: usize = 32;"));
-        assert!(generated.source.contains("const TILE_K: usize = 16;"));
+        assert!(generated.source.contains("const TILE_M: usize = 13;"));
+        assert!(generated.source.contains("const TILE_N: usize = 24;"));
+        assert!(generated.source.contains("const TILE_K: usize = 13;"));
         assert!(generated.source.contains("while load < TILE_A_ELEMS"));
         assert!(generated.source.contains("while load < TILE_B_ELEMS"));
     }
@@ -5404,7 +5463,7 @@ mod tests {
 
         assert_eq!(
             schedule_gemm_tile(&best.schedule),
-            Some(GemmTileShape::new(16, 32, 16))
+            Some(GemmTileShape::new(32, 32, 32))
         );
         assert!(!best.is_launchable());
         assert!(matches!(
@@ -5419,20 +5478,22 @@ mod tests {
         let result = beam_search_metadata_with_scorer(
             &problem,
             BeamSearchConfig {
-                beam_width: 4,
+                beam_width: 125,
                 max_depth: 2,
                 require_launchable: false,
             },
             |candidate| {
                 let plan = schedule_gemm_plan(&candidate.schedule)?;
-                let score =
-                    if plan.tile == GemmTileShape::new(16, 32, 16) && plan.reduce_unroll == 7 {
-                        0.0
-                    } else {
-                        1000.0
-                            + f64::from(plan.tile.m + plan.tile.n + plan.tile.k)
-                            + f64::from(plan.reduce_unroll)
-                    };
+                let target = GemmTileShape::new(13, 24, 13);
+                let score = if plan.tile == target && plan.reduce_unroll == 7 {
+                    0.0
+                } else if plan.tile == target {
+                    10.0
+                } else {
+                    1000.0
+                        + f64::from(plan.tile.m + plan.tile.n + plan.tile.k)
+                        + f64::from(plan.reduce_unroll)
+                };
                 SearchScore::measured(score)
             },
         );
@@ -5441,7 +5502,7 @@ mod tests {
             .expect("GEMM search should keep the externally best unroll descriptor");
         let plan = schedule_gemm_plan(&best.schedule).expect("best candidate should have a plan");
 
-        assert_eq!(plan.tile, GemmTileShape::new(16, 32, 16));
+        assert_eq!(plan.tile, GemmTileShape::new(13, 24, 13));
         assert_eq!(plan.reduce_unroll, 7);
         assert_eq!(
             best.score.map(|score| score.source),
@@ -5455,22 +5516,25 @@ mod tests {
         let result = beam_search_metadata_with_scorer(
             &problem,
             BeamSearchConfig {
-                beam_width: 4,
+                beam_width: 125,
                 max_depth: 3,
                 require_launchable: false,
             },
             |candidate| {
                 let plan = schedule_gemm_plan(&candidate.schedule)?;
-                let score = if plan.tile == GemmTileShape::new(16, 32, 16)
+                let target = GemmTileShape::new(13, 24, 13);
+                let score = if plan.tile == target
                     && plan.reduce_unroll == 7
                     && plan.b_load_order == GemmBTileLoadOrder::KContiguous
                 {
                     0.0
-                } else if plan.tile == GemmTileShape::new(16, 32, 16)
+                } else if plan.tile == target
                     && (plan.reduce_unroll == 7
                         || plan.b_load_order == GemmBTileLoadOrder::KContiguous)
                 {
                     10.0
+                } else if plan.tile == target {
+                    20.0
                 } else {
                     1000.0
                         + f64::from(plan.tile.m + plan.tile.n + plan.tile.k)
@@ -5484,10 +5548,10 @@ mod tests {
             .expect("GEMM search should keep the externally best stride-order descriptor");
         let plan = schedule_gemm_plan(&best.schedule).expect("best candidate should have a plan");
 
-        assert_eq!(plan.tile, GemmTileShape::new(16, 32, 16));
+        assert_eq!(plan.tile, GemmTileShape::new(13, 24, 13));
         assert_eq!(plan.reduce_unroll, 7);
         assert_eq!(plan.b_load_order, GemmBTileLoadOrder::KContiguous);
-        assert_eq!(best.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u7_bk");
+        assert_eq!(best.launch.kernel, "gemm_f32_bf16_tile_13x24x13_u7_bk");
     }
 
     #[test]
@@ -5502,7 +5566,11 @@ mod tests {
             },
             |candidate| {
                 let tile = schedule_gemm_tile(&candidate.schedule)?;
-                SearchScore::measured((tile.m + tile.n + tile.k) as f64)
+                if tile == GemmTileShape::new(13, 24, 13) {
+                    SearchScore::measured(0.0)
+                } else {
+                    SearchScore::measured((tile.m + tile.n + tile.k) as f64)
+                }
             },
         );
         let best = result
@@ -5511,7 +5579,7 @@ mod tests {
 
         assert_eq!(
             schedule_gemm_tile(&best.schedule),
-            Some(GemmTileShape::new(8, 16, 16))
+            Some(GemmTileShape::new(13, 24, 13))
         );
         assert_eq!(
             best.score.map(|score| score.source),
@@ -5526,8 +5594,8 @@ mod tests {
         let best = result
             .best
             .expect("GEMM search should keep the existing tile");
-        assert_eq!(result.explored, 20);
-        assert_eq!(result.rejected, 19);
+        assert_eq!(result.explored, 141);
+        assert_eq!(result.rejected, 140);
         assert_eq!(
             schedule_gemm_tile(&best.schedule),
             Some(GemmTileShape::new(16, 16, 16))
