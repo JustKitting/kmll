@@ -1049,8 +1049,13 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         .iter()
         .find(|target| target.opcode == "HMMA")
         .expect("known unobserved HMMA should be a probe target");
+    assert_eq!(hmma_probe.priority, 90);
     assert!(hmma_probe.locally_mapped);
     assert_eq!(hmma_probe.recommended_action, "generate-sass-artifact");
+    assert_eq!(
+        hmma_probe.reason,
+        "tensor-core opcode is mapped but unobserved in generated SASS artifacts"
+    );
     assert!(
         hmma_probe
             .architectures
@@ -1095,6 +1100,9 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.live_ranges_path.exists());
     assert!(report.memory_accesses_path.exists());
     assert!(report.unsupported_instructions_path.exists());
+    let summary = fs::read_to_string(&report.summary_path).expect("coverage summary should read");
+    assert!(summary.contains("top_opcode_probe_targets"));
+    assert!(summary.contains("HMMA\t90\tgenerate-sass-artifact"));
     assert!(report.cfg_block_count > 0);
     assert!(report.cfg_edge_count > 0);
     assert!(report.dominator_block_count > 0);
@@ -1155,9 +1163,10 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     let opcode_probe_targets_tsv = fs::read_to_string(&report.opcode_probe_targets_path)
         .expect("opcode probe target TSV should read");
     assert!(opcode_probe_targets_tsv.starts_with(
-        "opcode\tlocally_mapped\tarchitectures\tclasses\tkinds\tknown_sources\trecommended_action"
+        "opcode\tpriority\tlocally_mapped\tarchitectures\tclasses\tkinds\tknown_sources\trecommended_action\treason"
     ));
     assert!(opcode_probe_targets_tsv.contains("HMMA"));
+    assert!(opcode_probe_targets_tsv.contains("tensor-core opcode is mapped"));
     assert!(opcode_probe_targets_tsv.contains("generate-sass-artifact"));
     let regions_tsv = fs::read_to_string(&report.regions_path).expect("regions TSV should read");
     assert!(regions_tsv.starts_with(

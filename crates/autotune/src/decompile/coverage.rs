@@ -139,12 +139,14 @@ pub struct SassOpcodeCount {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassOpcodeProbeTarget {
     pub opcode: String,
+    pub priority: u8,
     pub architectures: Vec<String>,
     pub classes: Vec<String>,
     pub kinds: Vec<String>,
     pub known_sources: Vec<String>,
     pub locally_mapped: bool,
     pub recommended_action: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -873,11 +875,12 @@ fn opcode_catalog_entries(
 }
 
 fn opcode_probe_targets(opcode_catalog: &[SassOpcodeCatalogEntry]) -> Vec<SassOpcodeProbeTarget> {
-    opcode_catalog
+    let mut targets = opcode_catalog
         .iter()
         .filter(|entry| entry.known && !entry.observed)
         .map(|entry| SassOpcodeProbeTarget {
             opcode: entry.opcode.clone(),
+            priority: opcode_probe_priority(entry),
             architectures: entry.architectures.clone(),
             classes: entry.classes.clone(),
             kinds: entry.kinds.clone(),
@@ -889,8 +892,57 @@ fn opcode_probe_targets(opcode_catalog: &[SassOpcodeCatalogEntry]) -> Vec<SassOp
                 "add-lifter-mapping"
             }
             .to_string(),
+            reason: opcode_probe_reason(entry),
         })
-        .collect()
+        .collect::<Vec<_>>();
+    targets.sort_by(|left, right| {
+        right
+            .priority
+            .cmp(&left.priority)
+            .then_with(|| left.opcode.cmp(&right.opcode))
+    });
+    targets
+}
+
+fn opcode_probe_priority(entry: &SassOpcodeCatalogEntry) -> u8 {
+    if !entry.locally_mapped {
+        100
+    } else if opcode_has_class(entry, "tensor-core")
+        || opcode_has_class(entry, "tensor-memory")
+        || opcode_has_class(entry, "warpgroup")
+    {
+        90
+    } else if !entry.architectures.is_empty() {
+        70
+    } else {
+        50
+    }
+}
+
+fn opcode_probe_reason(entry: &SassOpcodeCatalogEntry) -> String {
+    if !entry.locally_mapped {
+        return "known opcode has no local lifter mapping".to_string();
+    }
+    if opcode_has_class(entry, "tensor-core") {
+        return "tensor-core opcode is mapped but unobserved in generated SASS artifacts"
+            .to_string();
+    }
+    if opcode_has_class(entry, "tensor-memory") {
+        return "tensor-memory opcode is mapped but unobserved in generated SASS artifacts"
+            .to_string();
+    }
+    if opcode_has_class(entry, "warpgroup") {
+        return "warpgroup opcode is mapped but unobserved in generated SASS artifacts".to_string();
+    }
+    if !entry.architectures.is_empty() {
+        return "architecture-specific opcode is mapped but unobserved in generated SASS artifacts"
+            .to_string();
+    }
+    "mapped scalar opcode is unobserved in generated SASS artifacts".to_string()
+}
+
+fn opcode_has_class(entry: &SassOpcodeCatalogEntry, class: &str) -> bool {
+    entry.classes.iter().any(|candidate| candidate == class)
 }
 
 fn append_unsupported(
@@ -1330,6 +1382,19 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
             writeln!(out, "{}\t{}", count.opcode, count.count).expect("write to string");
         }
     }
+    if !report.opcode_probe_targets.is_empty() {
+        writeln!(out).expect("write to string");
+        writeln!(out, "top_opcode_probe_targets").expect("write to string");
+        writeln!(out, "opcode\tpriority\trecommended_action\treason").expect("write to string");
+        for target in report.opcode_probe_targets.iter().take(16) {
+            writeln!(
+                out,
+                "{}\t{}\t{}\t{}",
+                target.opcode, target.priority, target.recommended_action, target.reason
+            )
+            .expect("write to string");
+        }
+    }
     if !report.unsupported_instructions.is_empty() {
         writeln!(out).expect("write to string");
         writeln!(out, "unsupported_by_opcode").expect("write to string");
@@ -1380,20 +1445,22 @@ fn render_opcode_probe_targets_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "opcode\tlocally_mapped\tarchitectures\tclasses\tkinds\tknown_sources\trecommended_action"
+        "opcode\tpriority\tlocally_mapped\tarchitectures\tclasses\tkinds\tknown_sources\trecommended_action\treason"
     )
     .expect("write to string");
     for target in &report.opcode_probe_targets {
         writeln!(
             out,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&target.opcode),
+            target.priority,
             target.locally_mapped,
             tsv(&target.architectures.join(",")),
             tsv(&target.classes.join(",")),
             tsv(&target.kinds.join(",")),
             tsv(&target.known_sources.join(",")),
             tsv(&target.recommended_action),
+            tsv(&target.reason),
         )
         .expect("write to string");
     }
