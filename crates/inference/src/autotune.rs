@@ -917,6 +917,7 @@ pub struct AutoOptimizeStep {
     pub rejected: usize,
     pub best_before: Option<SearchScore>,
     pub best_after: Option<SearchScore>,
+    pub best_candidate: Option<KernelCandidateMetadata>,
     pub improvement: Option<f64>,
 }
 
@@ -1023,6 +1024,10 @@ fn profiling_auto_search_step(step: &AutoOptimizeStep) -> AutoOptimizationSearch
         rejected: step.rejected,
         best_before: step.best_before,
         best_after: step.best_after,
+        best_candidate: step
+            .best_candidate
+            .as_ref()
+            .map(KernelCandidateMetadata::optimization_spec),
         improvement: step.improvement,
     }
 }
@@ -1557,6 +1562,7 @@ where
                 rejected: step_rejected,
                 best_before,
                 best_after: None,
+                best_candidate: None,
                 improvement: None,
             });
             exit_reason = AutoOptimizeExitReason::NoCandidates;
@@ -1570,6 +1576,7 @@ where
             .take(config.beam_width)
             .collect::<Vec<_>>();
         let best_after = next_beam.first().and_then(|candidate| candidate.score);
+        let best_candidate = next_beam.first().cloned();
         let improvement =
             best_before.and_then(|before| best_after.map(|after| before.value - after.value));
         let stop_for_no_improvement = improvement
@@ -1584,14 +1591,15 @@ where
             rejected: step_rejected,
             best_before,
             best_after,
+            best_candidate: best_candidate.clone(),
             improvement,
         });
 
         if stop_for_no_improvement {
             if improvement.is_some_and(|delta| delta > 0.0)
-                && let Some(best_next) = next_beam.first()
+                && let Some(best_next) = best_candidate
             {
-                beam = vec![best_next.clone()];
+                beam = vec![best_next];
             }
             exit_reason = AutoOptimizeExitReason::NoImprovement {
                 best_delta: improvement.unwrap_or(0.0),
@@ -5562,6 +5570,11 @@ fn auto_search_report_key(report: &AutoOptimizationSearchReport) -> KernelMetada
         state = hash_u64(state, step.rejected as u64);
         state = hash_optional_score(state, step.best_before);
         state = hash_optional_score(state, step.best_after);
+        if let Some(best_candidate) = &step.best_candidate {
+            state = hash_optimization_candidate(state, best_candidate);
+        } else {
+            state = hash_str(state, "no-step-best-candidate");
+        }
         if let Some(improvement) = step.improvement {
             state = hash_str(state, "improvement");
             state = hash_u64(state, improvement.to_bits());
@@ -8742,6 +8755,11 @@ mod tests {
                 .iter()
                 .any(|step| step["best_before"].is_object() && step["best_after"].is_object())
         );
+        assert!(steps.iter().any(|step| {
+            step["best_candidate"]["action_trace"]
+                .as_array()
+                .is_some_and(|actions| !actions.is_empty())
+        }));
         assert_eq!(
             report_json["best"]["action_trace"][0]["op"].as_str(),
             Some("split")

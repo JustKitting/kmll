@@ -965,6 +965,7 @@ pub struct AutoOptimizationSearchStep {
     pub rejected: usize,
     pub best_before: Option<OptimizationScore>,
     pub best_after: Option<OptimizationScore>,
+    pub best_candidate: Option<OptimizationCandidateSpec>,
     pub improvement: Option<f64>,
 }
 
@@ -2016,6 +2017,13 @@ fn push_auto_optimization_search_step_json(
     push_json_field_usize(out, "rejected", step.rejected, indent + 2, true);
     push_optimization_score_json(out, "best_before", step.best_before, indent + 2, true);
     push_optimization_score_json(out, "best_after", step.best_after, indent + 2, true);
+    push_optimization_candidate_field_json(
+        out,
+        "best_candidate",
+        step.best_candidate.as_ref(),
+        indent + 2,
+        true,
+    );
     push_json_field_optional_f64(out, "improvement", step.improvement, indent + 2, false);
     push_indent(out, indent);
     out.push('}');
@@ -3110,6 +3118,7 @@ mod tests {
                 rejected: 0,
                 best_before: OptimizationScore::heuristic(2.0),
                 best_after: OptimizationScore::heuristic(3.0),
+                best_candidate: Some(candidate.clone()),
                 improvement: Some(-1.0),
             }],
             Some(candidate.clone()),
@@ -3148,6 +3157,7 @@ mod tests {
         assert!(json.contains("\"input_beam_len\": 8"));
         assert!(json.contains("\"best_before\""));
         assert!(json.contains("\"best_after\""));
+        assert!(json.contains("\"best_candidate\""));
         assert!(json.contains("\"improvement\": -1.000000000000"));
         assert!(json.contains("\"action_trace\""));
         assert!(!json.contains("#[kernel]"));
