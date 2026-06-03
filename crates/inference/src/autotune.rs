@@ -402,6 +402,43 @@ pub struct EmittedStandaloneKernelCrate {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MatvecRustCudaGenerator;
+
+impl KernelSourceGenerator for MatvecRustCudaGenerator {
+    fn name(&self) -> &'static str {
+        "matvec-rust-cuda-source-generator"
+    }
+
+    fn source_for(
+        &self,
+        candidate: &KernelCandidateMetadata,
+    ) -> Result<GeneratedKernelSource, KernelGenerationError> {
+        if candidate.family != "matvec-bf16-row-major" {
+            return Err(KernelGenerationError::UnsupportedCandidate {
+                family: candidate.family.clone(),
+                generator: self.name(),
+            });
+        }
+        let rows_per_block = schedule_rows_per_block(&candidate.schedule).ok_or_else(|| {
+            KernelGenerationError::MissingTransform {
+                family: candidate.family.clone(),
+                transform: "Split",
+            }
+        })?;
+        let symbol = match &candidate.generated.materialization {
+            KernelMaterialization::Existing { symbol } => (*symbol).to_string(),
+            KernelMaterialization::DeferredGenerated { symbol_hint, .. } => {
+                sanitize_identifier(symbol_hint)
+            }
+        };
+        Ok(GeneratedKernelSource {
+            symbol: symbol.clone(),
+            source: render_bf16_matvec_source(&symbol, rows_per_block),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GemmRustCudaGenerator;
 
 impl KernelSourceGenerator for GemmRustCudaGenerator {
@@ -603,6 +640,33 @@ impl MatvecSearchProblem {
     }
 
     pub fn candidate_for_rows(&self, plan: RowMajorWarpRows) -> KernelCandidateMetadata {
+        self.candidate_for_rows_with_materialization(
+            plan,
+            "matvec_bf16_kernel".to_string(),
+            KernelMaterialization::Existing {
+                symbol: "matvec_bf16_kernel",
+            },
+        )
+    }
+
+    pub fn generated_candidate_for_rows(&self, plan: RowMajorWarpRows) -> KernelCandidateMetadata {
+        let symbol_hint = format!("matvec_bf16_rows{}", plan.rows_per_block());
+        self.candidate_for_rows_with_materialization(
+            plan,
+            symbol_hint.clone(),
+            KernelMaterialization::DeferredGenerated {
+                symbol_hint,
+                reason: "row split descriptor has no emitted Rust CUDA kernel yet".to_string(),
+            },
+        )
+    }
+
+    fn candidate_for_rows_with_materialization(
+        &self,
+        plan: RowMajorWarpRows,
+        launch_kernel: String,
+        materialization: KernelMaterialization,
+    ) -> KernelCandidateMetadata {
         let rows_per_block = plan.rows_per_block();
         let schedule = KernelSchedule::new()
             .with_transform(ScheduleTransform::Split {
@@ -614,7 +678,7 @@ impl MatvecSearchProblem {
                 factor: plan.block_threads(),
             });
         let launch = CudaLaunchSpec::new(
-            "matvec_bf16_kernel",
+            launch_kernel,
             (plan.grid_rows(self.rows), 1, 1),
             (plan.block_threads(), 1, 1),
             0,
@@ -643,9 +707,7 @@ impl MatvecSearchProblem {
             self.axes(),
             schedule,
             "row-major-matvec-generator",
-            KernelMaterialization::Existing {
-                symbol: "matvec_bf16_kernel",
-            },
+            materialization,
             launch,
             operation,
         )
@@ -700,7 +762,12 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
         }
         RowMajorWarpRows::ALL
             .into_iter()
-            .map(|plan| self.candidate_for_rows(plan))
+            .flat_map(|plan| {
+                [
+                    self.candidate_for_rows(plan),
+                    self.generated_candidate_for_rows(plan),
+                ]
+            })
             .collect()
     }
 
@@ -712,7 +779,14 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
         let wasted_rows = padded_rows.saturating_sub(self.rows);
         let wasted_fma_ops = wasted_rows.checked_mul(self.cols)?.checked_mul(2)? as f64;
         let block_overhead = blocks as f64 * 2048.0;
-        SearchScore::heuristic(useful_fma_ops + wasted_fma_ops * 8.0 + block_overhead)
+        let generic_runtime_penalty = if candidate.is_launchable() {
+            blocks as f64 * 64.0
+        } else {
+            0.0
+        };
+        SearchScore::heuristic(
+            useful_fma_ops + wasted_fma_ops * 8.0 + block_overhead + generic_runtime_penalty,
+        )
     }
 }
 
@@ -1194,6 +1268,120 @@ fn score_json(score: SearchScore) -> Value {
     })
 }
 
+fn render_bf16_matvec_source(symbol: &str, rows_per_block: u32) -> String {
+    let rows_per_block = rows_per_block.max(1);
+    let mut source = String::new();
+    writeln!(
+        source,
+        "use cuda_device::{{DisjointSlice, kernel, thread, warp}};"
+    )
+    .expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "#[repr(transparent)]").expect("write to string");
+    writeln!(source, "#[derive(Clone, Copy, Default)]").expect("write to string");
+    writeln!(source, "pub struct Bf16(u16);").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "impl Bf16 {{").expect("write to string");
+    writeln!(source, "    #[inline(always)]").expect("write to string");
+    writeln!(source, "    pub fn to_f32(self) -> f32 {{").expect("write to string");
+    writeln!(source, "        f32::from_bits((self.0 as u32) << 16)").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source, "}}").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "const LANES_PER_ROW: u32 = 32;").expect("write to string");
+    writeln!(source, "const ROWS_PER_BLOCK: u32 = {rows_per_block};").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "#[inline(always)]").expect("write to string");
+    writeln!(source, "fn warp_reduce_sum(mut acc: f32) -> f32 {{").expect("write to string");
+    writeln!(source, "    acc += warp::shuffle_down_f32(acc, 16);").expect("write to string");
+    writeln!(source, "    acc += warp::shuffle_down_f32(acc, 8);").expect("write to string");
+    writeln!(source, "    acc += warp::shuffle_down_f32(acc, 4);").expect("write to string");
+    writeln!(source, "    acc += warp::shuffle_down_f32(acc, 2);").expect("write to string");
+    writeln!(source, "    acc += warp::shuffle_down_f32(acc, 1);").expect("write to string");
+    writeln!(source, "    acc").expect("write to string");
+    writeln!(source, "}}").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "#[kernel]").expect("write to string");
+    writeln!(source, "pub fn {symbol}(").expect("write to string");
+    writeln!(source, "    input: &[f32],").expect("write to string");
+    writeln!(source, "    weight: &[Bf16],").expect("write to string");
+    writeln!(source, "    rows: u32,").expect("write to string");
+    writeln!(source, "    cols: u32,").expect("write to string");
+    writeln!(source, "    row_stride: u32,").expect("write to string");
+    writeln!(source, "    col_stride: u32,").expect("write to string");
+    writeln!(source, "    _rows_per_block: u32,").expect("write to string");
+    writeln!(source, "    mut out: DisjointSlice<f32>,").expect("write to string");
+    writeln!(source, ") {{").expect("write to string");
+    writeln!(source, "    let thread_x = thread::threadIdx_x();").expect("write to string");
+    writeln!(source, "    let row_in_block = thread_x / LANES_PER_ROW;").expect("write to string");
+    writeln!(source, "    if row_in_block >= ROWS_PER_BLOCK {{").expect("write to string");
+    writeln!(source, "        return;").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(
+        source,
+        "    let row = (thread::blockIdx_x() * ROWS_PER_BLOCK + row_in_block) as usize;"
+    )
+    .expect("write to string");
+    writeln!(source, "    if row >= rows as usize {{").expect("write to string");
+    writeln!(source, "        return;").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "    let lane = warp::lane_id();").expect("write to string");
+    writeln!(source, "    let cols = cols as usize;").expect("write to string");
+    writeln!(source, "    let row_stride = row_stride as usize;").expect("write to string");
+    writeln!(source, "    let col_stride = col_stride as usize;").expect("write to string");
+    writeln!(source, "    let row_base = row * row_stride;").expect("write to string");
+    writeln!(source, "    let mut acc = 0.0_f32;").expect("write to string");
+    writeln!(source, "    let mut col = lane as usize;").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "    while col + 96 < cols {{").expect("write to string");
+    writeln!(source, "        let col0 = col;").expect("write to string");
+    writeln!(source, "        let col1 = col + 32;").expect("write to string");
+    writeln!(source, "        let col2 = col + 64;").expect("write to string");
+    writeln!(source, "        let col3 = col + 96;").expect("write to string");
+    writeln!(
+        source,
+        "        acc += weight[row_base + col0 * col_stride].to_f32() * input[col0];"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "        acc += weight[row_base + col1 * col_stride].to_f32() * input[col1];"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "        acc += weight[row_base + col2 * col_stride].to_f32() * input[col2];"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "        acc += weight[row_base + col3 * col_stride].to_f32() * input[col3];"
+    )
+    .expect("write to string");
+    writeln!(source, "        col += 128;").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "    while col < cols {{").expect("write to string");
+    writeln!(
+        source,
+        "        acc += weight[row_base + col * col_stride].to_f32() * input[col];"
+    )
+    .expect("write to string");
+    writeln!(source, "        col += 32;").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "    let acc = warp_reduce_sum(acc);").expect("write to string");
+    writeln!(source, "    if lane == 0 {{").expect("write to string");
+    writeln!(source, "        unsafe {{").expect("write to string");
+    writeln!(source, "            *out.get_unchecked_mut(row) = acc;").expect("write to string");
+    writeln!(source, "        }}").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source, "}}").expect("write to string");
+    source
+}
+
 fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
     let tile = plan.tile;
     let reduce_unroll = plan.reduce_unroll.max(1);
@@ -1612,8 +1800,8 @@ mod tests {
         let best = result
             .best
             .expect("matvec search should produce a candidate");
-        assert_eq!(result.explored, 4);
-        assert_eq!(result.rejected, 0);
+        assert_eq!(result.explored, 8);
+        assert_eq!(result.rejected, 4);
         assert!(best.is_launchable());
         assert_eq!(best.launch.kernel, "matvec_bf16_kernel");
         assert_eq!(best.launch.grid_dim.x, 512);
@@ -1636,6 +1824,83 @@ mod tests {
             .best
             .expect("matvec search should produce a candidate");
         assert_eq!(schedule_rows_per_block(&best.schedule), Some(2));
+    }
+
+    #[test]
+    fn matvec_search_exposes_generated_row_split_metadata() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let seed = problem.seed();
+        let candidates = problem.expand(&seed);
+        assert_eq!(candidates.len(), 8);
+
+        let generated = candidates
+            .iter()
+            .find(|candidate| {
+                !candidate.is_launchable()
+                    && schedule_rows_per_block(&candidate.schedule) == Some(8)
+            })
+            .expect("matvec search should expose generated rows-per-block metadata");
+        assert_eq!(generated.launch.kernel, "matvec_bf16_rows8");
+        assert!(matches!(
+            generated.generated.materialization,
+            KernelMaterialization::DeferredGenerated { .. }
+        ));
+        assert_eq!(generated.generated.generator, "row-major-matvec-generator");
+    }
+
+    #[test]
+    fn matvec_generator_renders_rows_per_block_source_on_demand() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let candidate = problem.generated_candidate_for_rows(RowMajorWarpRows::Rows8);
+        let generated = MatvecRustCudaGenerator
+            .source_for(&candidate)
+            .expect("matvec generator should render rows-per-block source");
+
+        assert_eq!(generated.symbol, "matvec_bf16_rows8");
+        assert!(generated.source.contains("#[kernel]"));
+        assert!(generated.source.contains("pub fn matvec_bf16_rows8("));
+        assert!(generated.source.contains("pub struct Bf16(u16);"));
+        assert!(generated.source.contains("const ROWS_PER_BLOCK: u32 = 8;"));
+        assert!(
+            generated
+                .source
+                .contains("let row_in_block = thread_x / LANES_PER_ROW;")
+        );
+        assert!(generated.source.contains("while col + 96 < cols"));
+        assert!(generated.source.contains("warp::shuffle_down_f32(acc, 16)"));
+    }
+
+    #[test]
+    fn matvec_search_accepts_external_measured_scores_for_generated_candidate() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let result = beam_search_metadata_with_scorer(
+            &problem,
+            BeamSearchConfig {
+                beam_width: 1,
+                max_depth: 1,
+                require_launchable: false,
+            },
+            |candidate| {
+                let rows_per_block = schedule_rows_per_block(&candidate.schedule)?;
+                let generated_bonus = if candidate.is_launchable() {
+                    100.0
+                } else {
+                    0.0
+                };
+                SearchScore::measured(generated_bonus + f64::from(8 - rows_per_block))
+            },
+        );
+        let best = result
+            .best
+            .expect("matvec search should keep externally best generated candidate");
+
+        assert!(!best.is_launchable());
+        assert_eq!(best.launch.kernel, "matvec_bf16_rows8");
+        assert_eq!(schedule_rows_per_block(&best.schedule), Some(8));
+        assert_eq!(
+            best.score.map(|score| score.source),
+            Some(SearchScoreSource::Measured)
+        );
     }
 
     #[test]
@@ -1858,6 +2123,32 @@ mod tests {
         assert_eq!(manifest["schedule"][1]["op"].as_str(), Some("stride-order"));
         assert_eq!(manifest["schedule"][1]["axes"][0].as_u64(), Some(2));
         assert_eq!(manifest["schedule"][1]["axes"][1].as_u64(), Some(1));
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn artifact_store_writes_standalone_crate_for_generated_matvec_kernel() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let candidate = problem.generated_candidate_for_rows(RowMajorWarpRows::Rows8);
+
+        let emitted = store
+            .emit_standalone_crate(&candidate, &MatvecRustCudaGenerator)
+            .expect("artifact store should write standalone generated matvec kernel crate");
+
+        assert_eq!(emitted.artifact_key, candidate.artifact_key());
+        assert_eq!(emitted.symbol, "matvec_bf16_rows8");
+        assert!(emitted.paths.crate_dir.starts_with(store.root()));
+        assert!(emitted.paths.cargo_toml_path.starts_with(store.root()));
+        assert!(emitted.paths.source_path.starts_with(store.root()));
+
+        let source = fs::read_to_string(&emitted.paths.source_path)
+            .expect("standalone matvec main.rs should be readable");
+        assert!(source.contains("pub fn matvec_bf16_rows8("));
+        assert!(source.contains("const ROWS_PER_BLOCK: u32 = 8;"));
+        assert!(source.contains("fn main() {}"));
 
         remove_test_generated_root(&root);
     }

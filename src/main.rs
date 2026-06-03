@@ -17,8 +17,9 @@ use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
     autotune::{
         BeamSearchConfig, GemmRustCudaGenerator, GemmSearchProblem, KernelArtifactStore,
-        KernelCandidateMetadata, KernelMaterialization, ScheduleTransform, SearchScore,
-        SearchScoreSource, beam_search_metadata, beam_search_metadata_with_scorer,
+        KernelCandidateMetadata, KernelMaterialization, MatvecRustCudaGenerator,
+        MatvecSearchProblem, ScheduleTransform, SearchScore, SearchScoreSource,
+        beam_search_metadata, beam_search_metadata_with_scorer,
     },
     chat,
     dtypes::{Bf16, DType},
@@ -90,6 +91,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         "smoke" => run_smoke(),
         "gemm-stress" | "matmul-stress" => run_gemm_stress(&args),
         "kernel-autotune-gemm" | "gemm-autotune" => run_kernel_autotune_gemm(&args),
+        "kernel-autotune-matvec" | "matvec-autotune" => run_kernel_autotune_matvec(&args),
         "ministral-gemm-stress" | "ministral-matmul-stress" => run_ministral_gemm_stress(&args),
         "decode-matvec-bench" | "matvec-bench" => run_decode_matvec_bench(&args),
         "logit-stress" | "logits-stress" => run_logit_stress(&args),
@@ -235,7 +237,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         "ministral-chat-exported-compare" => run_ministral_chat_exported_compare(&args),
         "ministral-chat-compare" => run_ministral_chat_compare(&args),
         other => Err(invalid_input(format!(
-            "unknown command {other:?}; expected `smoke`, `smoke-workers`, `gemm-stress`, `kernel-autotune-gemm`, `ministral-gemm-stress`, `decode-matvec-bench`, `logit-stress`, `attention-stress`, \
+            "unknown command {other:?}; expected `smoke`, `smoke-workers`, `gemm-stress`, `kernel-autotune-gemm`, `kernel-autotune-matvec`, `ministral-gemm-stress`, `decode-matvec-bench`, `logit-stress`, `attention-stress`, \
              `ministral-bf16-prefill-bench`, `ministral-bf16-decode-bench`, \
              `ministral-exported-decode-bench`, `ministral-exported-prefill-compare`, \
              `ministral-bf16-prefill-compare`, \
@@ -523,6 +525,154 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         }
         if emit_crate {
             let emitted_crate = store.emit_standalone_crate(best, &GemmRustCudaGenerator)?;
+            println!(
+                "emitted_crate rank=0 artifact_key={} package={} symbol={} crate_dir={} cargo_toml={} source_path={} cargo_toml_bytes={} source_bytes={}",
+                emitted_crate.artifact_key.hex(),
+                emitted_crate.package_name,
+                emitted_crate.symbol,
+                emitted_crate.paths.crate_dir.display(),
+                emitted_crate.paths.cargo_toml_path.display(),
+                emitted_crate.paths.source_path.display(),
+                emitted_crate.cargo_toml_bytes,
+                emitted_crate.source_bytes
+            );
+            if compile {
+                let output_dir = store.paths_for(best).directory;
+                let compiled = compile_standalone_kernel_crate(
+                    &emitted_crate.paths.crate_dir,
+                    &output_dir,
+                    &emitted_crate.package_name,
+                    compile_arch.as_deref(),
+                )?;
+                println!(
+                    "compiled_crate crate_dir={} output_dir={} ptx_path={} stdout_bytes={} stderr_bytes={}",
+                    compiled.crate_dir.display(),
+                    compiled.output_dir.display(),
+                    compiled.ptx_path.display(),
+                    compiled.stdout_bytes,
+                    compiled.stderr_bytes
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let rows = parse_required_usize(args, &mut index, "rows", "kernel-autotune-matvec")?;
+    let cols = parse_required_usize(args, &mut index, "cols", "kernel-autotune-matvec")?;
+    if rows == 0 || cols == 0 {
+        return Err(invalid_input(
+            "kernel-autotune-matvec dimensions must be nonzero",
+        ));
+    }
+
+    let mut beam_width = 4;
+    let mut max_depth = 1;
+    let mut allow_generated = false;
+    let mut emit = false;
+    let mut emit_crate = false;
+    let mut compile = false;
+    let mut compile_arch = None;
+    let mut artifact_root = None;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--allow-generated" => {
+                allow_generated = true;
+                index += 1;
+            }
+            "--emit" => {
+                emit = true;
+                index += 1;
+            }
+            "--emit-crate" => {
+                emit_crate = true;
+                index += 1;
+            }
+            "--compile" => {
+                compile = true;
+                emit_crate = true;
+                index += 1;
+            }
+            "--beam-width" => {
+                let value = parse_required_flag_value(args, &mut index, "--beam-width")?;
+                beam_width = value.parse::<usize>().map_err(|error| {
+                    invalid_input(format!(
+                        "kernel-autotune-matvec --beam-width must be a positive integer, got {value:?}: {error}"
+                    ))
+                })?;
+            }
+            "--max-depth" => {
+                let value = parse_required_flag_value(args, &mut index, "--max-depth")?;
+                max_depth = value.parse::<usize>().map_err(|error| {
+                    invalid_input(format!(
+                        "kernel-autotune-matvec --max-depth must be a positive integer, got {value:?}: {error}"
+                    ))
+                })?;
+            }
+            "--artifact-root" => {
+                let value = parse_required_flag_value(args, &mut index, "--artifact-root")?;
+                artifact_root = Some(PathBuf::from(value));
+            }
+            "--compile-arch" => {
+                let value = parse_required_flag_value(args, &mut index, "--compile-arch")?;
+                compile_arch = Some(value.to_string());
+            }
+            other => {
+                return Err(invalid_input(format!(
+                    "kernel-autotune-matvec unknown argument {other:?}; usage: kernel-autotune-matvec ROWS COLS [--allow-generated] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--artifact-root PATH]"
+                )));
+            }
+        }
+    }
+    if beam_width == 0 {
+        return Err(invalid_input(
+            "kernel-autotune-matvec --beam-width must be nonzero",
+        ));
+    }
+
+    let problem = MatvecSearchProblem::bf16_row_major(rows, cols);
+    let config = BeamSearchConfig {
+        beam_width,
+        max_depth,
+        require_launchable: !allow_generated,
+    };
+    let result = beam_search_metadata(&problem, config);
+    let best = result
+        .best
+        .as_ref()
+        .ok_or_else(|| invalid_input("kernel-autotune-matvec did not produce any candidates"))?;
+
+    println!(
+        "kernel_autotune_matvec rows={rows} cols={cols} beam_width={beam_width} max_depth={max_depth} allow_generated={allow_generated}"
+    );
+    println!(
+        "search explored={} rejected={} beam_len={}",
+        result.explored,
+        result.rejected,
+        result.beam.len()
+    );
+    for (rank, candidate) in result.beam.iter().enumerate() {
+        print_kernel_candidate(rank, candidate);
+    }
+
+    if emit || emit_crate {
+        let store = artifact_root
+            .map(KernelArtifactStore::new)
+            .unwrap_or_else(KernelArtifactStore::managed);
+        if emit {
+            let emitted = store.emit_metadata(best)?;
+            println!(
+                "emitted_metadata rank=0 artifact_key={} manifest_path={} manifest_bytes={}",
+                emitted.artifact_key.hex(),
+                emitted.paths.manifest_path.display(),
+                emitted.manifest_bytes
+            );
+        }
+        if emit_crate {
+            let emitted_crate = store.emit_standalone_crate(best, &MatvecRustCudaGenerator)?;
             println!(
                 "emitted_crate rank=0 artifact_key={} package={} symbol={} crate_dir={} cargo_toml={} source_path={} cargo_toml_bytes={} source_bytes={}",
                 emitted_crate.artifact_key.hex(),
