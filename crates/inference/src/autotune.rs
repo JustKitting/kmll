@@ -2202,6 +2202,8 @@ pub struct GemmSchedulePlan {
     pub reduce_unroll: u32,
     pub m_per_thread: u32,
     pub n_per_thread: u32,
+    pub a_load_unroll: u32,
+    pub b_load_unroll: u32,
     pub a_load_order: GemmATileLoadOrder,
     pub b_load_order: GemmBTileLoadOrder,
 }
@@ -2213,6 +2215,8 @@ impl GemmSchedulePlan {
             reduce_unroll: 1,
             m_per_thread: 1,
             n_per_thread: 1,
+            a_load_unroll: 1,
+            b_load_unroll: 1,
             a_load_order: GemmATileLoadOrder::KContiguous,
             b_load_order: GemmBTileLoadOrder::TileLinear,
         }
@@ -2233,6 +2237,16 @@ impl GemmSchedulePlan {
         self
     }
 
+    pub const fn with_a_load_unroll(mut self, factor: u32) -> Self {
+        self.a_load_unroll = if factor == 0 { 1 } else { factor };
+        self
+    }
+
+    pub const fn with_b_load_unroll(mut self, factor: u32) -> Self {
+        self.b_load_unroll = if factor == 0 { 1 } else { factor };
+        self
+    }
+
     pub const fn with_a_load_order(mut self, order: GemmATileLoadOrder) -> Self {
         self.a_load_order = order;
         self
@@ -2247,6 +2261,8 @@ impl GemmSchedulePlan {
         self.with_reduce_unroll(self.reduce_unroll)
             .with_m_per_thread(self.m_per_thread)
             .with_n_per_thread(self.n_per_thread)
+            .with_a_load_unroll(self.a_load_unroll)
+            .with_b_load_unroll(self.b_load_unroll)
     }
 
     pub fn block_dim(self) -> (u32, u32, u32) {
@@ -2256,6 +2272,29 @@ impl GemmSchedulePlan {
             plan.tile.m.div_ceil(plan.m_per_thread),
             1,
         )
+    }
+
+    fn thread_count(self) -> u32 {
+        let plan = self.normalized();
+        let threads_n = plan.tile.n.div_ceil(plan.n_per_thread);
+        let threads_m = plan.tile.m.div_ceil(plan.m_per_thread);
+        threads_m.saturating_mul(threads_n).max(1)
+    }
+
+    fn a_load_rounds(self) -> u32 {
+        let plan = self.normalized();
+        plan.tile
+            .m
+            .saturating_mul(plan.tile.k)
+            .div_ceil(plan.thread_count())
+    }
+
+    fn b_load_rounds(self) -> u32 {
+        let plan = self.normalized();
+        plan.tile
+            .k
+            .saturating_mul(plan.tile.n)
+            .div_ceil(plan.thread_count())
     }
 
     fn local_tile_symbol_suffix(self) -> String {
@@ -2278,6 +2317,30 @@ impl GemmSchedulePlan {
         }
         if plan.n_per_thread > 1 {
             write!(&mut suffix, "-nt{}", plan.n_per_thread).expect("write to string");
+        }
+        suffix
+    }
+
+    fn load_unroll_symbol_suffix(self) -> String {
+        let plan = self.normalized();
+        let mut suffix = String::new();
+        if plan.a_load_unroll > 1 {
+            write!(&mut suffix, "_au{}", plan.a_load_unroll).expect("write to string");
+        }
+        if plan.b_load_unroll > 1 {
+            write!(&mut suffix, "_bu{}", plan.b_load_unroll).expect("write to string");
+        }
+        suffix
+    }
+
+    fn load_unroll_operation_suffix(self) -> String {
+        let plan = self.normalized();
+        let mut suffix = String::new();
+        if plan.a_load_unroll > 1 {
+            write!(&mut suffix, "-au{}", plan.a_load_unroll).expect("write to string");
+        }
+        if plan.b_load_unroll > 1 {
+            write!(&mut suffix, "-bu{}", plan.b_load_unroll).expect("write to string");
         }
         suffix
     }
@@ -2358,6 +2421,7 @@ impl GemmSearchProblem {
     const EXISTING_TILE: GemmTileShape = GemmTileShape::new(16, 16, 16);
     const MAX_TILE_DIM: u32 = 32;
     const MAX_REDUCE_UNROLL_FACTOR: u32 = 32;
+    const MAX_LOAD_UNROLL_FACTOR: u32 = 4;
 
     pub const fn f32_bf16_row_col_row(m: usize, n: usize, k: usize) -> Self {
         Self {
@@ -2383,19 +2447,28 @@ impl GemmSearchProblem {
         let b_order_suffix = plan.b_load_order.symbol_suffix();
         let local_tile_symbol_suffix = plan.local_tile_symbol_suffix();
         let local_tile_operation_suffix = plan.local_tile_operation_suffix();
+        let load_unroll_symbol_suffix = plan.load_unroll_symbol_suffix();
+        let load_unroll_operation_suffix = plan.load_unroll_operation_suffix();
         let symbol_hint = if plan.reduce_unroll == 1 {
             format!(
-                "gemm_f32_bf16_tile_{}x{}x{}{}{}{}",
-                tile.m, tile.n, tile.k, local_tile_symbol_suffix, a_order_suffix, b_order_suffix
+                "gemm_f32_bf16_tile_{}x{}x{}{}{}{}{}",
+                tile.m,
+                tile.n,
+                tile.k,
+                local_tile_symbol_suffix,
+                load_unroll_symbol_suffix,
+                a_order_suffix,
+                b_order_suffix
             )
         } else {
             format!(
-                "gemm_f32_bf16_tile_{}x{}x{}_u{}{}{}{}",
+                "gemm_f32_bf16_tile_{}x{}x{}_u{}{}{}{}{}",
                 tile.m,
                 tile.n,
                 tile.k,
                 plan.reduce_unroll,
                 local_tile_symbol_suffix,
+                load_unroll_symbol_suffix,
                 a_order_suffix,
                 b_order_suffix
             )
@@ -2414,22 +2487,24 @@ impl GemmSearchProblem {
         let operation = TypedOperationSpec::new(
             if plan.reduce_unroll == 1 {
                 format!(
-                    "gemm-f32-bf16-{}x{}x{}{}{}{}",
+                    "gemm-f32-bf16-{}x{}x{}{}{}{}{}",
                     tile.m,
                     tile.n,
                     tile.k,
                     local_tile_operation_suffix,
+                    load_unroll_operation_suffix,
                     a_order_suffix,
                     b_order_suffix
                 )
             } else {
                 format!(
-                    "gemm-f32-bf16-{}x{}x{}-u{}{}{}{}",
+                    "gemm-f32-bf16-{}x{}x{}-u{}{}{}{}{}",
                     tile.m,
                     tile.n,
                     tile.k,
                     plan.reduce_unroll,
                     local_tile_operation_suffix,
+                    load_unroll_operation_suffix,
                     a_order_suffix,
                     b_order_suffix
                 )
@@ -2483,6 +2558,18 @@ impl GemmSearchProblem {
                 factor: plan.n_per_thread,
             });
         }
+        if plan.a_load_unroll > 1 {
+            schedule = schedule.with_transform(ScheduleTransform::Unroll {
+                axis: 3,
+                factor: plan.a_load_unroll,
+            });
+        }
+        if plan.b_load_unroll > 1 {
+            schedule = schedule.with_transform(ScheduleTransform::Unroll {
+                axis: 4,
+                factor: plan.b_load_unroll,
+            });
+        }
         if plan.a_load_order == GemmATileLoadOrder::MContiguous {
             schedule = schedule.with_transform(ScheduleTransform::StrideOrder { axes: vec![0, 2] });
         }
@@ -2515,6 +2602,8 @@ impl GemmSearchProblem {
             && plan.reduce_unroll == 1
             && plan.m_per_thread == 1
             && plan.n_per_thread == 1
+            && plan.a_load_unroll == 1
+            && plan.b_load_unroll == 1
             && plan.a_load_order == GemmATileLoadOrder::KContiguous
             && plan.b_load_order == GemmBTileLoadOrder::TileLinear
     }
@@ -2575,6 +2664,65 @@ impl GemmSearchProblem {
             .collect()
     }
 
+    fn local_tile_plans_for_tile(tile: GemmTileShape) -> Vec<GemmSchedulePlan> {
+        let mut m_factors = vec![1];
+        m_factors.extend(Self::m_per_thread_factors_for_tile(tile));
+        let mut n_factors = vec![1];
+        n_factors.extend(Self::n_per_thread_factors_for_tile(tile));
+
+        let mut plans = Vec::new();
+        for m_per_thread in m_factors {
+            for n_per_thread in n_factors.iter().copied() {
+                plans.push(
+                    GemmSchedulePlan::new(tile)
+                        .with_m_per_thread(m_per_thread)
+                        .with_n_per_thread(n_per_thread),
+                );
+            }
+        }
+        plans
+    }
+
+    fn a_load_unroll_factors(&self) -> Vec<u32> {
+        let mut factors = Vec::new();
+        for tile in self.tile_shapes() {
+            for plan in Self::local_tile_plans_for_tile(tile) {
+                factors.extend(Self::a_load_unroll_factors_for_plan(plan));
+            }
+        }
+        factors.sort_unstable();
+        factors.dedup();
+        factors
+    }
+
+    fn b_load_unroll_factors(&self) -> Vec<u32> {
+        let mut factors = Vec::new();
+        for tile in self.tile_shapes() {
+            for plan in Self::local_tile_plans_for_tile(tile) {
+                factors.extend(Self::b_load_unroll_factors_for_plan(plan));
+            }
+        }
+        factors.sort_unstable();
+        factors.dedup();
+        factors
+    }
+
+    fn a_load_unroll_factors_for_plan(plan: GemmSchedulePlan) -> Vec<u32> {
+        bounded_unroll_factors(
+            plan.a_load_rounds() as usize,
+            Self::MAX_LOAD_UNROLL_FACTOR,
+            Some(1),
+        )
+    }
+
+    fn b_load_unroll_factors_for_plan(plan: GemmSchedulePlan) -> Vec<u32> {
+        bounded_unroll_factors(
+            plan.b_load_rounds() as usize,
+            Self::MAX_LOAD_UNROLL_FACTOR,
+            Some(1),
+        )
+    }
+
     fn tile_shapes(&self) -> Vec<GemmTileShape> {
         let m_factors =
             bounded_tile_factors(self.m, Self::MAX_TILE_DIM, Some(Self::EXISTING_TILE.m));
@@ -2628,9 +2776,11 @@ impl KernelActionSearchProblem for GemmSearchProblem {
         let unroll_factors = self.reduce_unroll_factors();
         let m_per_thread_factors = self.m_per_thread_factors();
         let n_per_thread_factors = self.n_per_thread_factors();
+        let a_load_unroll_factors = self.a_load_unroll_factors();
+        let b_load_unroll_factors = self.b_load_unroll_factors();
         let stride_orders =
             Self::stride_orders_for_plan(GemmSchedulePlan::new(Self::EXISTING_TILE));
-        KernelActionSpaceSet::new(vec![
+        let mut spaces = vec![
             KernelActionSpace::TileGemm {
                 variants: tile_variants,
             },
@@ -2646,10 +2796,23 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 axis: 1,
                 factors: n_per_thread_factors,
             },
-            KernelActionSpace::StrideOrder {
-                orders: stride_orders,
-            },
-        ])
+        ];
+        if !a_load_unroll_factors.is_empty() {
+            spaces.push(KernelActionSpace::Unroll {
+                axis: 3,
+                factors: a_load_unroll_factors,
+            });
+        }
+        if !b_load_unroll_factors.is_empty() {
+            spaces.push(KernelActionSpace::Unroll {
+                axis: 4,
+                factors: b_load_unroll_factors,
+            });
+        }
+        spaces.push(KernelActionSpace::StrideOrder {
+            orders: stride_orders,
+        });
+        KernelActionSpaceSet::new(spaces)
     }
 
     fn action_spaces(&self, candidate: &KernelCandidateMetadata) -> KernelActionSpaceSet {
@@ -2674,6 +2837,18 @@ impl KernelActionSearchProblem for GemmSearchProblem {
             let factors = Self::n_per_thread_factors_for_tile(plan.tile);
             if !factors.is_empty() {
                 spaces.push(KernelActionSpace::LocalTile { axis: 1, factors });
+            }
+        }
+        if plan.a_load_unroll == 1 {
+            let factors = Self::a_load_unroll_factors_for_plan(plan);
+            if !factors.is_empty() {
+                spaces.push(KernelActionSpace::Unroll { axis: 3, factors });
+            }
+        }
+        if plan.b_load_unroll == 1 {
+            let factors = Self::b_load_unroll_factors_for_plan(plan);
+            if !factors.is_empty() {
+                spaces.push(KernelActionSpace::Unroll { axis: 4, factors });
             }
         }
         let orders = Self::stride_orders_for_plan(plan);
@@ -2728,6 +2903,42 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                     candidate,
                     action,
                     self.candidate_for_plan(plan.with_reduce_unroll(*factor)),
+                ))
+            }
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::Unroll,
+                axis: Some(3),
+                arg: KernelScheduleActionArg::Factor(factor),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                let plan = schedule_gemm_plan(&candidate.schedule)?;
+                if plan.a_load_unroll != 1
+                    || !Self::a_load_unroll_factors_for_plan(plan).contains(factor)
+                {
+                    return None;
+                }
+                Some(candidate_with_action_trace(
+                    candidate,
+                    action,
+                    self.candidate_for_plan(plan.with_a_load_unroll(*factor)),
+                ))
+            }
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::Unroll,
+                axis: Some(4),
+                arg: KernelScheduleActionArg::Factor(factor),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                let plan = schedule_gemm_plan(&candidate.schedule)?;
+                if plan.b_load_unroll != 1
+                    || !Self::b_load_unroll_factors_for_plan(plan).contains(factor)
+                {
+                    return None;
+                }
+                Some(candidate_with_action_trace(
+                    candidate,
+                    action,
+                    self.candidate_for_plan(plan.with_b_load_unroll(*factor)),
                 ))
             }
             KernelScheduleAction {
@@ -2867,11 +3078,20 @@ impl KernelMetadataSearchProblem for GemmSearchProblem {
             .checked_mul(self.n.div_ceil(tile_n))? as f64;
         let unroll = f64::from(plan.reduce_unroll.max(1));
         let local_tile = f64::from(m_per_thread * n_per_thread);
-        let thread_count = f64::from(tile.m.div_ceil(m_per_thread) * tile.n.div_ceil(n_per_thread));
+        let thread_count_u32 = plan.thread_count();
+        let thread_count = f64::from(thread_count_u32);
+        let a_load_unroll = plan.a_load_unroll.max(1);
+        let b_load_unroll = plan.b_load_unroll.max(1);
+        let a_load_loop_rounds = plan.a_load_rounds().div_ceil(a_load_unroll);
+        let b_load_loop_rounds = plan.b_load_rounds().div_ceil(b_load_unroll);
         let loop_overhead = block_count * 4096.0 / unroll / local_tile.sqrt();
         let thread_overhead = block_count * thread_count * 16.0;
+        let load_loop_overhead =
+            block_count * f64::from(a_load_loop_rounds + b_load_loop_rounds) * 256.0;
         let register_pressure =
             block_count * ((unroll - 1.0) * 256.0 + (local_tile - 1.0) * 1024.0);
+        let load_unroll_pressure =
+            block_count * f64::from(a_load_unroll + b_load_unroll - 2) * 128.0;
         let a_load_penalty = match plan.a_load_order {
             GemmATileLoadOrder::KContiguous => block_count * 64.0,
             GemmATileLoadOrder::MContiguous => block_count * 512.0,
@@ -2884,7 +3104,9 @@ impl KernelMetadataSearchProblem for GemmSearchProblem {
             padded_fma_ops
                 + loop_overhead
                 + thread_overhead
+                + load_loop_overhead
                 + register_pressure
+                + load_unroll_pressure
                 + a_load_penalty
                 + b_load_penalty,
         )
@@ -2990,6 +3212,26 @@ fn schedule_gemm_n_per_thread(schedule: &KernelSchedule) -> Option<u32> {
         })
 }
 
+fn schedule_gemm_a_load_unroll(schedule: &KernelSchedule) -> Option<u32> {
+    schedule
+        .transforms
+        .iter()
+        .find_map(|transform| match transform {
+            ScheduleTransform::Unroll { axis: 3, factor } => Some(*factor),
+            _ => None,
+        })
+}
+
+fn schedule_gemm_b_load_unroll(schedule: &KernelSchedule) -> Option<u32> {
+    schedule
+        .transforms
+        .iter()
+        .find_map(|transform| match transform {
+            ScheduleTransform::Unroll { axis: 4, factor } => Some(*factor),
+            _ => None,
+        })
+}
+
 fn schedule_gemm_b_load_order(schedule: &KernelSchedule) -> GemmBTileLoadOrder {
     schedule
         .transforms
@@ -3023,6 +3265,8 @@ fn schedule_gemm_plan(schedule: &KernelSchedule) -> Option<GemmSchedulePlan> {
         reduce_unroll: schedule_gemm_reduce_unroll(schedule).unwrap_or(1),
         m_per_thread: schedule_gemm_m_per_thread(schedule).unwrap_or(1),
         n_per_thread: schedule_gemm_n_per_thread(schedule).unwrap_or(1),
+        a_load_unroll: schedule_gemm_a_load_unroll(schedule).unwrap_or(1),
+        b_load_unroll: schedule_gemm_b_load_unroll(schedule).unwrap_or(1),
         a_load_order: schedule_gemm_a_load_order(schedule),
         b_load_order: schedule_gemm_b_load_order(schedule),
     })
@@ -3616,11 +3860,207 @@ fn render_bf16_matvec_source(symbol: &str, plan: MatvecSchedulePlan) -> String {
     source
 }
 
+fn render_gemm_a_load_body(
+    source: &mut String,
+    load_name: &str,
+    suffix: u32,
+    indent: &str,
+    m_contiguous_a_load: bool,
+) {
+    if m_contiguous_a_load {
+        writeln!(
+            source,
+            "{indent}let a_tile_row{suffix} = {load_name} % TILE_M;"
+        )
+        .expect("write to string");
+        writeln!(
+            source,
+            "{indent}let a_tile_col{suffix} = {load_name} / TILE_M;"
+        )
+        .expect("write to string");
+    } else {
+        writeln!(
+            source,
+            "{indent}let a_tile_row{suffix} = {load_name} / TILE_K;"
+        )
+        .expect("write to string");
+        writeln!(
+            source,
+            "{indent}let a_tile_col{suffix} = {load_name} % TILE_K;"
+        )
+        .expect("write to string");
+    }
+    writeln!(
+        source,
+        "{indent}let a_smem_index{suffix} = a_tile_row{suffix} * TILE_K + a_tile_col{suffix};"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "{indent}let a_global_row{suffix} = thread::blockIdx_y() as usize * TILE_M + a_tile_row{suffix};"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "{indent}let a_global_col{suffix} = k_base + a_tile_col{suffix};"
+    )
+    .expect("write to string");
+    writeln!(source, "{indent}unsafe {{").expect("write to string");
+    writeln!(
+        source,
+        "{indent}    TILE_A[a_smem_index{suffix}] = if a_global_row{suffix} < m && a_global_col{suffix} < k {{"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "{indent}        a[a_global_row{suffix} * a_row_stride + a_global_col{suffix} * a_col_stride]"
+    )
+    .expect("write to string");
+    writeln!(source, "{indent}    }} else {{").expect("write to string");
+    writeln!(source, "{indent}        0.0").expect("write to string");
+    writeln!(source, "{indent}    }};").expect("write to string");
+    writeln!(source, "{indent}}}").expect("write to string");
+}
+
+fn render_gemm_b_load_body(
+    source: &mut String,
+    load_name: &str,
+    suffix: u32,
+    indent: &str,
+    k_contiguous_b_load: bool,
+) {
+    if k_contiguous_b_load {
+        writeln!(
+            source,
+            "{indent}let b_tile_row{suffix} = {load_name} % TILE_K;"
+        )
+        .expect("write to string");
+        writeln!(
+            source,
+            "{indent}let b_tile_col{suffix} = {load_name} / TILE_K;"
+        )
+        .expect("write to string");
+    } else {
+        writeln!(
+            source,
+            "{indent}let b_tile_row{suffix} = {load_name} / TILE_N;"
+        )
+        .expect("write to string");
+        writeln!(
+            source,
+            "{indent}let b_tile_col{suffix} = {load_name} % TILE_N;"
+        )
+        .expect("write to string");
+    }
+    writeln!(
+        source,
+        "{indent}let b_smem_index{suffix} = b_tile_row{suffix} * TILE_N + b_tile_col{suffix};"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "{indent}let b_global_row{suffix} = k_base + b_tile_row{suffix};"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "{indent}let b_global_col{suffix} = thread::blockIdx_x() as usize * TILE_N + b_tile_col{suffix};"
+    )
+    .expect("write to string");
+    writeln!(source, "{indent}unsafe {{").expect("write to string");
+    writeln!(
+        source,
+        "{indent}    TILE_B[b_smem_index{suffix}] = if b_global_row{suffix} < k && b_global_col{suffix} < n {{"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "{indent}        b[b_global_row{suffix} * b_row_stride + b_global_col{suffix} * b_col_stride].to_f32()"
+    )
+    .expect("write to string");
+    writeln!(source, "{indent}    }} else {{").expect("write to string");
+    writeln!(source, "{indent}        0.0").expect("write to string");
+    writeln!(source, "{indent}    }};").expect("write to string");
+    writeln!(source, "{indent}}}").expect("write to string");
+}
+
+fn render_gemm_a_load_unrolled(source: &mut String, a_load_unroll: u32, m_contiguous_a_load: bool) {
+    for offset in 0..a_load_unroll {
+        let load_name = format!("a_load{offset}");
+        if offset == 0 {
+            writeln!(source, "            let {load_name} = load;").expect("write to string");
+            render_gemm_a_load_body(
+                source,
+                &load_name,
+                offset,
+                "            ",
+                m_contiguous_a_load,
+            );
+        } else {
+            let load_expr = if offset == 1 {
+                "load + thread_count".to_string()
+            } else {
+                format!("load + thread_count * {offset}")
+            };
+            writeln!(source, "            let {load_name} = {load_expr};")
+                .expect("write to string");
+            writeln!(source, "            if {load_name} < TILE_A_ELEMS {{")
+                .expect("write to string");
+            render_gemm_a_load_body(
+                source,
+                &load_name,
+                offset,
+                "                ",
+                m_contiguous_a_load,
+            );
+            writeln!(source, "            }}").expect("write to string");
+        }
+    }
+    writeln!(source, "            load += thread_count * A_LOAD_UNROLL;").expect("write to string");
+}
+
+fn render_gemm_b_load_unrolled(source: &mut String, b_load_unroll: u32, k_contiguous_b_load: bool) {
+    for offset in 0..b_load_unroll {
+        let load_name = format!("b_load{offset}");
+        if offset == 0 {
+            writeln!(source, "            let {load_name} = load;").expect("write to string");
+            render_gemm_b_load_body(
+                source,
+                &load_name,
+                offset,
+                "            ",
+                k_contiguous_b_load,
+            );
+        } else {
+            let load_expr = if offset == 1 {
+                "load + thread_count".to_string()
+            } else {
+                format!("load + thread_count * {offset}")
+            };
+            writeln!(source, "            let {load_name} = {load_expr};")
+                .expect("write to string");
+            writeln!(source, "            if {load_name} < TILE_B_ELEMS {{")
+                .expect("write to string");
+            render_gemm_b_load_body(
+                source,
+                &load_name,
+                offset,
+                "                ",
+                k_contiguous_b_load,
+            );
+            writeln!(source, "            }}").expect("write to string");
+        }
+    }
+    writeln!(source, "            load += thread_count * B_LOAD_UNROLL;").expect("write to string");
+}
+
 fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
     let tile = plan.tile;
     let reduce_unroll = plan.reduce_unroll.max(1);
     let m_per_thread = plan.m_per_thread.max(1);
     let n_per_thread = plan.n_per_thread.max(1);
+    let a_load_unroll = plan.a_load_unroll.max(1);
+    let b_load_unroll = plan.b_load_unroll.max(1);
     let m_contiguous_a_load = plan.a_load_order == GemmATileLoadOrder::MContiguous;
     let k_contiguous_b_load = plan.b_load_order == GemmBTileLoadOrder::KContiguous;
     let mut source = String::new();
@@ -3647,6 +4087,8 @@ fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
     writeln!(source, "const REDUCE_UNROLL: usize = {reduce_unroll};").expect("write to string");
     writeln!(source, "const THREAD_TILE_M: usize = {m_per_thread};").expect("write to string");
     writeln!(source, "const THREAD_TILE_N: usize = {n_per_thread};").expect("write to string");
+    writeln!(source, "const A_LOAD_UNROLL: usize = {a_load_unroll};").expect("write to string");
+    writeln!(source, "const B_LOAD_UNROLL: usize = {b_load_unroll};").expect("write to string");
     writeln!(
         source,
         "const THREADS_M: usize = (TILE_M + THREAD_TILE_M - 1) / THREAD_TILE_M;"
@@ -3748,78 +4190,88 @@ fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
     writeln!(source, "    while k_base < k {{").expect("write to string");
     writeln!(source, "        let mut load = tid;").expect("write to string");
     writeln!(source, "        while load < TILE_A_ELEMS {{").expect("write to string");
-    if m_contiguous_a_load {
-        writeln!(source, "            let tile_row = load % TILE_M;").expect("write to string");
-        writeln!(source, "            let tile_col = load / TILE_M;").expect("write to string");
+    if a_load_unroll > 1 {
+        render_gemm_a_load_unrolled(&mut source, a_load_unroll, m_contiguous_a_load);
     } else {
-        writeln!(source, "            let tile_row = load / TILE_K;").expect("write to string");
-        writeln!(source, "            let tile_col = load % TILE_K;").expect("write to string");
+        if m_contiguous_a_load {
+            writeln!(source, "            let tile_row = load % TILE_M;").expect("write to string");
+            writeln!(source, "            let tile_col = load / TILE_M;").expect("write to string");
+        } else {
+            writeln!(source, "            let tile_row = load / TILE_K;").expect("write to string");
+            writeln!(source, "            let tile_col = load % TILE_K;").expect("write to string");
+        }
+        writeln!(
+            source,
+            "            let a_smem_index = tile_row * TILE_K + tile_col;"
+        )
+        .expect("write to string");
+        writeln!(
+            source,
+            "            let global_row = thread::blockIdx_y() as usize * TILE_M + tile_row;"
+        )
+        .expect("write to string");
+        writeln!(source, "            let global_col = k_base + tile_col;")
+            .expect("write to string");
+        writeln!(source, "            unsafe {{").expect("write to string");
+        writeln!(
+            source,
+            "                TILE_A[a_smem_index] = if global_row < m && global_col < k {{"
+        )
+        .expect("write to string");
+        writeln!(
+            source,
+            "                    a[global_row * a_row_stride + global_col * a_col_stride]"
+        )
+        .expect("write to string");
+        writeln!(source, "                }} else {{").expect("write to string");
+        writeln!(source, "                    0.0").expect("write to string");
+        writeln!(source, "                }};").expect("write to string");
+        writeln!(source, "            }}").expect("write to string");
+        writeln!(source, "            load += thread_count;").expect("write to string");
     }
-    writeln!(
-        source,
-        "            let a_smem_index = tile_row * TILE_K + tile_col;"
-    )
-    .expect("write to string");
-    writeln!(
-        source,
-        "            let global_row = thread::blockIdx_y() as usize * TILE_M + tile_row;"
-    )
-    .expect("write to string");
-    writeln!(source, "            let global_col = k_base + tile_col;").expect("write to string");
-    writeln!(source, "            unsafe {{").expect("write to string");
-    writeln!(
-        source,
-        "                TILE_A[a_smem_index] = if global_row < m && global_col < k {{"
-    )
-    .expect("write to string");
-    writeln!(
-        source,
-        "                    a[global_row * a_row_stride + global_col * a_col_stride]"
-    )
-    .expect("write to string");
-    writeln!(source, "                }} else {{").expect("write to string");
-    writeln!(source, "                    0.0").expect("write to string");
-    writeln!(source, "                }};").expect("write to string");
-    writeln!(source, "            }}").expect("write to string");
-    writeln!(source, "            load += thread_count;").expect("write to string");
     writeln!(source, "        }}").expect("write to string");
     writeln!(source).expect("write to string");
     writeln!(source, "        load = tid;").expect("write to string");
     writeln!(source, "        while load < TILE_B_ELEMS {{").expect("write to string");
-    if k_contiguous_b_load {
-        writeln!(source, "            let tile_row = load % TILE_K;").expect("write to string");
-        writeln!(source, "            let tile_col = load / TILE_K;").expect("write to string");
+    if b_load_unroll > 1 {
+        render_gemm_b_load_unrolled(&mut source, b_load_unroll, k_contiguous_b_load);
     } else {
-        writeln!(source, "            let tile_row = load / TILE_N;").expect("write to string");
-        writeln!(source, "            let tile_col = load % TILE_N;").expect("write to string");
+        if k_contiguous_b_load {
+            writeln!(source, "            let tile_row = load % TILE_K;").expect("write to string");
+            writeln!(source, "            let tile_col = load / TILE_K;").expect("write to string");
+        } else {
+            writeln!(source, "            let tile_row = load / TILE_N;").expect("write to string");
+            writeln!(source, "            let tile_col = load % TILE_N;").expect("write to string");
+        }
+        writeln!(
+            source,
+            "            let b_smem_index = tile_row * TILE_N + tile_col;"
+        )
+        .expect("write to string");
+        writeln!(source, "            let global_row = k_base + tile_row;")
+            .expect("write to string");
+        writeln!(
+            source,
+            "            let global_col = thread::blockIdx_x() as usize * TILE_N + tile_col;"
+        )
+        .expect("write to string");
+        writeln!(source, "            unsafe {{").expect("write to string");
+        writeln!(
+            source,
+            "                TILE_B[b_smem_index] = if global_row < k && global_col < n {{"
+        )
+        .expect("write to string");
+        writeln!(
+            source,
+            "                    b[global_row * b_row_stride + global_col * b_col_stride].to_f32()"
+        )
+        .expect("write to string");
+        writeln!(source, "                }} else {{").expect("write to string");
+        writeln!(source, "                    0.0").expect("write to string");
+        writeln!(source, "                }};").expect("write to string");
+        writeln!(source, "            }}").expect("write to string");
+        writeln!(source, "            load += thread_count;").expect("write to string");
     }
-    writeln!(
-        source,
-        "            let b_smem_index = tile_row * TILE_N + tile_col;"
-    )
-    .expect("write to string");
-    writeln!(source, "            let global_row = k_base + tile_row;").expect("write to string");
-    writeln!(
-        source,
-        "            let global_col = thread::blockIdx_x() as usize * TILE_N + tile_col;"
-    )
-    .expect("write to string");
-    writeln!(source, "            unsafe {{").expect("write to string");
-    writeln!(
-        source,
-        "                TILE_B[b_smem_index] = if global_row < k && global_col < n {{"
-    )
-    .expect("write to string");
-    writeln!(
-        source,
-        "                    b[global_row * b_row_stride + global_col * b_col_stride].to_f32()"
-    )
-    .expect("write to string");
-    writeln!(source, "                }} else {{").expect("write to string");
-    writeln!(source, "                    0.0").expect("write to string");
-    writeln!(source, "                }};").expect("write to string");
-    writeln!(source, "            }}").expect("write to string");
-    writeln!(source, "            load += thread_count;").expect("write to string");
     writeln!(source, "        }}").expect("write to string");
     writeln!(source).expect("write to string");
     writeln!(source, "        thread::sync_threads();").expect("write to string");
@@ -5175,7 +5627,7 @@ mod tests {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let seed = problem.seed();
         let full_space = problem.search_space();
-        assert_eq!(full_space.spaces.len(), 5);
+        assert_eq!(full_space.spaces.len(), 7);
         assert!(matches!(
             full_space.spaces[0],
             KernelActionSpace::TileGemm { .. }
@@ -5192,8 +5644,26 @@ mod tests {
             full_space.spaces[3],
             KernelActionSpace::LocalTile { .. }
         ));
+        let KernelActionSpace::Unroll {
+            axis: a_load_axis,
+            factors: a_load_factors,
+        } = &full_space.spaces[4]
+        else {
+            panic!("GEMM global action space should expose A shared-load unroll metadata");
+        };
+        assert_eq!(*a_load_axis, 3);
+        assert_eq!(a_load_factors, &[2, 3, 4]);
+        let KernelActionSpace::Unroll {
+            axis: b_load_axis,
+            factors: b_load_factors,
+        } = &full_space.spaces[5]
+        else {
+            panic!("GEMM global action space should expose B shared-load unroll metadata");
+        };
+        assert_eq!(*b_load_axis, 4);
+        assert_eq!(b_load_factors, &[2, 3, 4]);
         assert!(matches!(
-            full_space.spaces[4],
+            full_space.spaces[6],
             KernelActionSpace::StrideOrder { .. }
         ));
 
@@ -5360,6 +5830,77 @@ mod tests {
     }
 
     #[test]
+    fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let local_candidate = problem.candidate_for_plan(
+            GemmSchedulePlan::new(GemmTileShape::new(16, 32, 16))
+                .with_m_per_thread(2)
+                .with_n_per_thread(2),
+        );
+        let spaces = problem.action_spaces(&local_candidate);
+        let actions = spaces.actions();
+
+        assert_eq!(spaces.spaces.len(), 4);
+        let KernelActionSpace::Unroll {
+            axis: reduce_axis, ..
+        } = &spaces.spaces[0]
+        else {
+            panic!("local-tiled GEMM should still expose reduce unroll metadata");
+        };
+        assert_eq!(*reduce_axis, 2);
+        let KernelActionSpace::Unroll {
+            axis: a_load_axis,
+            factors: a_load_factors,
+        } = &spaces.spaces[1]
+        else {
+            panic!("local-tiled GEMM should expose A shared-load unroll metadata");
+        };
+        assert_eq!(*a_load_axis, 3);
+        assert_eq!(a_load_factors, &[2]);
+        let KernelActionSpace::Unroll {
+            axis: b_load_axis,
+            factors: b_load_factors,
+        } = &spaces.spaces[2]
+        else {
+            panic!("local-tiled GEMM should expose B shared-load unroll metadata");
+        };
+        assert_eq!(*b_load_axis, 4);
+        assert_eq!(b_load_factors, &[2, 3, 4]);
+        assert!(matches!(
+            spaces.spaces[3],
+            KernelActionSpace::StrideOrder { .. }
+        ));
+
+        assert!(actions.contains(&KernelScheduleAction::unroll(3, 2)));
+        assert!(!actions.contains(&KernelScheduleAction::unroll(3, 3)));
+        assert!(actions.contains(&KernelScheduleAction::unroll(4, 4)));
+
+        let a_unrolled = problem
+            .apply_schedule_action(&local_candidate, &KernelScheduleAction::unroll(3, 2))
+            .expect("A shared-load unroll should produce candidate metadata");
+        let a_unrolled_plan = schedule_gemm_plan(&a_unrolled.schedule)
+            .expect("A load-unrolled candidate should plan");
+        assert_eq!(a_unrolled_plan.a_load_unroll, 2);
+        assert_eq!(a_unrolled_plan.b_load_unroll, 1);
+        assert_eq!(
+            a_unrolled.launch.kernel,
+            "gemm_f32_bf16_tile_16x32x16_mt2_nt2_au2"
+        );
+
+        let b_unrolled = problem
+            .apply_schedule_action(&local_candidate, &KernelScheduleAction::unroll(4, 4))
+            .expect("B shared-load unroll should produce candidate metadata");
+        let b_unrolled_plan = schedule_gemm_plan(&b_unrolled.schedule)
+            .expect("B load-unrolled candidate should plan");
+        assert_eq!(b_unrolled_plan.a_load_unroll, 1);
+        assert_eq!(b_unrolled_plan.b_load_unroll, 4);
+        assert_eq!(
+            b_unrolled.launch.kernel,
+            "gemm_f32_bf16_tile_16x32x16_mt2_nt2_bu4"
+        );
+    }
+
+    #[test]
     fn gemm_generator_renders_tile_specific_source_on_demand() {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let candidate = problem.candidate_for_tile(GemmTileShape::new(13, 24, 13));
@@ -5464,6 +6005,55 @@ mod tests {
     }
 
     #[test]
+    fn gemm_search_expands_local_tiled_metadata_into_shared_load_unroll_variants() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let local_candidate = problem.candidate_for_plan(
+            GemmSchedulePlan::new(GemmTileShape::new(16, 32, 16))
+                .with_m_per_thread(2)
+                .with_n_per_thread(2),
+        );
+        let candidates = problem.expand(&local_candidate);
+
+        let a_load_unrolled = candidates
+            .iter()
+            .find(|candidate| schedule_gemm_a_load_unroll(&candidate.schedule) == Some(2))
+            .expect("GEMM search should expose A shared-load unroll factor 2 metadata");
+        let a_plan = schedule_gemm_plan(&a_load_unrolled.schedule)
+            .expect("A load-unrolled candidate should have GEMM plan");
+        assert_eq!(a_plan.tile, GemmTileShape::new(16, 32, 16));
+        assert_eq!(a_plan.m_per_thread, 2);
+        assert_eq!(a_plan.n_per_thread, 2);
+        assert_eq!(a_plan.a_load_unroll, 2);
+        assert_eq!(a_plan.b_load_unroll, 1);
+        assert_eq!(
+            a_load_unrolled.launch.kernel,
+            "gemm_f32_bf16_tile_16x32x16_mt2_nt2_au2"
+        );
+        assert!(a_load_unrolled.schedule.transforms.iter().any(|transform| {
+            matches!(transform, ScheduleTransform::Unroll { axis: 3, factor: 2 })
+        }));
+
+        let b_load_unrolled = candidates
+            .iter()
+            .find(|candidate| schedule_gemm_b_load_unroll(&candidate.schedule) == Some(4))
+            .expect("GEMM search should expose B shared-load unroll factor 4 metadata");
+        let b_plan = schedule_gemm_plan(&b_load_unrolled.schedule)
+            .expect("B load-unrolled candidate should have GEMM plan");
+        assert_eq!(b_plan.tile, GemmTileShape::new(16, 32, 16));
+        assert_eq!(b_plan.m_per_thread, 2);
+        assert_eq!(b_plan.n_per_thread, 2);
+        assert_eq!(b_plan.a_load_unroll, 1);
+        assert_eq!(b_plan.b_load_unroll, 4);
+        assert_eq!(
+            b_load_unrolled.launch.kernel,
+            "gemm_f32_bf16_tile_16x32x16_mt2_nt2_bu4"
+        );
+        assert!(b_load_unrolled.schedule.transforms.iter().any(|transform| {
+            matches!(transform, ScheduleTransform::Unroll { axis: 4, factor: 4 })
+        }));
+    }
+
+    #[test]
     fn gemm_search_expands_tile_metadata_into_a_load_stride_order() {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
@@ -5542,6 +6132,66 @@ mod tests {
                 .contains("TILE_B[(kk + 6) * TILE_N + tile_col0]")
         );
         assert!(generated.source.contains("while kk < TILE_K"));
+    }
+
+    #[test]
+    fn gemm_generator_renders_shared_load_unroll_source_on_demand() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let candidate = replay_schedule_actions(
+            &problem,
+            &[
+                KernelScheduleAction::tile_gemm(
+                    16,
+                    32,
+                    16,
+                    KernelActionMaterialization::DeferredGenerated,
+                ),
+                KernelScheduleAction::local_tile(0, 2),
+                KernelScheduleAction::local_tile(1, 2),
+                KernelScheduleAction::unroll(3, 2),
+                KernelScheduleAction::unroll(4, 2),
+            ],
+        )
+        .expect("valid shared-load-unroll GEMM action trace should replay");
+        let plan =
+            schedule_gemm_plan(&candidate.schedule).expect("load-unrolled candidate should plan");
+        assert_eq!(plan.m_per_thread, 2);
+        assert_eq!(plan.n_per_thread, 2);
+        assert_eq!(plan.a_load_unroll, 2);
+        assert_eq!(plan.b_load_unroll, 2);
+
+        let generated = GemmRustCudaGenerator
+            .source_for(&candidate)
+            .expect("GEMM generator should render shared-load-unrolled source");
+
+        assert_eq!(
+            generated.symbol,
+            "gemm_f32_bf16_tile_16x32x16_mt2_nt2_au2_bu2"
+        );
+        assert!(generated.source.contains("const A_LOAD_UNROLL: usize = 2;"));
+        assert!(generated.source.contains("const B_LOAD_UNROLL: usize = 2;"));
+        assert!(
+            generated
+                .source
+                .contains("let a_load1 = load + thread_count;")
+        );
+        assert!(generated.source.contains("if a_load1 < TILE_A_ELEMS"));
+        assert!(
+            generated
+                .source
+                .contains("load += thread_count * A_LOAD_UNROLL;")
+        );
+        assert!(
+            generated
+                .source
+                .contains("let b_load1 = load + thread_count;")
+        );
+        assert!(generated.source.contains("if b_load1 < TILE_B_ELEMS"));
+        assert!(
+            generated
+                .source
+                .contains("load += thread_count * B_LOAD_UNROLL;")
+        );
     }
 
     #[test]
