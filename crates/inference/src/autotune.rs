@@ -21,8 +21,9 @@ pub use nn_rust_profiling::{
     OptimizationTile3dChoice as ProfilingTile3dChoice, OptimizationTiming,
 };
 use nn_rust_profiling::{
-    CudaLaunchSpec, NumericKind, OperationKind, OperationRoute, ProfileDuration, ProfileTimeSource,
-    SampleStats, TensorTypeSpec, TypedOperationSpec,
+    CudaLaunchSpec, MAX_OPTIMIZATION_SETUP_SEGMENTS, NumericKind, OperationKind, OperationRoute,
+    OptimizationTimingSegment, ProfileDuration, ProfileTimeSource, SampleStats, TensorTypeSpec,
+    TypedOperationSpec,
 };
 use serde_json::{Value, json};
 
@@ -2936,16 +2937,7 @@ fn parse_optional_timing(
     if value.is_null() {
         return Ok(None);
     }
-    let source = match required_str(value, "source")? {
-        "wall-clock" => ProfileTimeSource::WallClock,
-        "cuda-event" => ProfileTimeSource::CudaEvent,
-        "host-self-time" => ProfileTimeSource::SelfTimeAccounting,
-        source => {
-            return Err(invalid_selection(format!(
-                "score.timing.source is unsupported: {source:?}"
-            )));
-        }
-    };
+    let source = parse_profile_time_source(required_str(value, "source")?, "score.timing.source")?;
     let selected_seconds = required_f64(value, "selected_seconds")?;
     let selected = ProfileDuration::from_seconds_f64(selected_seconds).ok_or_else(|| {
         invalid_selection("score.timing.selected_seconds must be nonnegative and finite")
@@ -2968,12 +2960,83 @@ fn parse_optional_timing(
             "score.timing.samples must contain nonzero finite statistics",
         ));
     }
-    Ok(Some(OptimizationTiming::new(
-        source,
-        required_usize(value, "warmup_count")?,
-        sample_stats,
-        selected,
-    )))
+    let setup_segments =
+        parse_timing_segments(value.get("setup_segments").unwrap_or(&Value::Null))?;
+    Ok(Some(
+        OptimizationTiming::new(
+            source,
+            required_usize(value, "warmup_count")?,
+            sample_stats,
+            selected,
+        )
+        .with_setup_segments(&setup_segments),
+    ))
+}
+
+fn parse_timing_segments(
+    value: &Value,
+) -> Result<Vec<OptimizationTimingSegment>, KernelGenerationError> {
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let values = value
+        .as_array()
+        .ok_or_else(|| invalid_selection("score.timing.setup_segments must be an array"))?;
+    if values.len() > MAX_OPTIMIZATION_SETUP_SEGMENTS {
+        return Err(invalid_selection(format!(
+            "score.timing.setup_segments has {} entries, maximum is {MAX_OPTIMIZATION_SETUP_SEGMENTS}",
+            values.len()
+        )));
+    }
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, segment)| {
+            let duration_seconds = required_f64(segment, "duration_seconds")?;
+            let duration = ProfileDuration::from_seconds_f64(duration_seconds).ok_or_else(|| {
+                invalid_selection(format!(
+                    "score.timing.setup_segments[{index}].duration_seconds must be nonnegative and finite"
+                ))
+            })?;
+            Ok(OptimizationTimingSegment::new(
+                parse_timing_segment_name(required_str(segment, "name")?, index)?,
+                parse_profile_time_source(
+                    required_str(segment, "source")?,
+                    "score.timing.setup_segments[].source",
+                )?,
+                duration,
+            ))
+        })
+        .collect()
+}
+
+fn parse_profile_time_source(
+    source: &str,
+    field_name: &str,
+) -> Result<ProfileTimeSource, KernelGenerationError> {
+    match source {
+        "wall-clock" => Ok(ProfileTimeSource::WallClock),
+        "cuda-event" => Ok(ProfileTimeSource::CudaEvent),
+        "host-self-time" => Ok(ProfileTimeSource::SelfTimeAccounting),
+        source => Err(invalid_selection(format!(
+            "{field_name} is unsupported: {source:?}"
+        ))),
+    }
+}
+
+fn parse_timing_segment_name(
+    name: &str,
+    index: usize,
+) -> Result<&'static str, KernelGenerationError> {
+    match name {
+        "emit-standalone-crate" => Ok("emit-standalone-crate"),
+        "compile-standalone-crate" => Ok("compile-standalone-crate"),
+        "load-generated-module" => Ok("load-generated-module"),
+        "load-generated-symbol" => Ok("load-generated-symbol"),
+        name => Err(invalid_selection(format!(
+            "score.timing.setup_segments[{index}].name is unsupported: {name:?}"
+        ))),
+    }
 }
 
 fn required_field<'a>(value: &'a Value, name: &str) -> Result<&'a Value, KernelGenerationError> {
@@ -3157,6 +3220,18 @@ fn score_json(score: SearchScore) -> Value {
 }
 
 fn timing_json(timing: OptimizationTiming) -> Value {
+    let setup_segments = timing
+        .setup_segments
+        .iter()
+        .flatten()
+        .map(|segment| {
+            json!({
+                "name": segment.name,
+                "source": segment.source.label(),
+                "duration_seconds": segment.duration.as_seconds_f64(),
+            })
+        })
+        .collect::<Vec<_>>();
     json!({
         "source": timing.source.label(),
         "warmup_count": timing.warmup_count,
@@ -3168,6 +3243,7 @@ fn timing_json(timing: OptimizationTiming) -> Value {
             "min_seconds": timing.samples.min,
             "max_seconds": timing.samples.max,
         },
+        "setup_segments": setup_segments,
     })
 }
 
@@ -3866,6 +3942,14 @@ fn hash_optimization_candidate(mut state: u64, candidate: &OptimizationCandidate
             state = hash_u64(state, timing.samples.median.to_bits());
             state = hash_u64(state, timing.samples.min.to_bits());
             state = hash_u64(state, timing.samples.max.to_bits());
+            for segment in timing.setup_segments.iter().flatten() {
+                state = hash_str(state, segment.name);
+                state = hash_str(state, segment.source.label());
+                state = hash_u64(
+                    state,
+                    segment.duration.as_nanos_u128().min(u64::MAX as u128) as u64,
+                );
+            }
         }
     } else {
         state = hash_str(state, "no-score");
@@ -5031,7 +5115,13 @@ mod tests {
             1,
             samples,
             selected,
-        );
+        )
+        .with_setup_segment(OptimizationTimingSegment::new(
+            "compile-standalone-crate",
+            ProfileTimeSource::WallClock,
+            ProfileDuration::from_seconds_f64(0.125)
+                .expect("setup segment duration should be valid"),
+        ));
         candidate.score = SearchScore::measured_with_timing(samples.median, timing);
 
         let emitted = store
@@ -5054,6 +5144,14 @@ mod tests {
         assert_eq!(
             manifest["score"]["timing"]["samples"]["count"].as_u64(),
             Some(3)
+        );
+        assert_eq!(
+            manifest["score"]["timing"]["setup_segments"][0]["name"].as_str(),
+            Some("compile-standalone-crate")
+        );
+        assert_eq!(
+            manifest["score"]["timing"]["setup_segments"][0]["source"].as_str(),
+            Some("wall-clock")
         );
 
         remove_test_generated_root(&root);
@@ -5080,7 +5178,13 @@ mod tests {
             samples,
             ProfileDuration::from_seconds_f64(samples.median)
                 .expect("median should be a valid duration"),
-        );
+        )
+        .with_setup_segment(OptimizationTimingSegment::new(
+            "load-generated-module",
+            ProfileTimeSource::WallClock,
+            ProfileDuration::from_seconds_f64(0.03125)
+                .expect("setup segment duration should be valid"),
+        ));
         candidate.score = SearchScore::measured_with_timing(samples.median, timing);
 
         let emitted = store
@@ -5102,6 +5206,8 @@ mod tests {
         assert!(selection_text.contains("\"op\": \"split\""));
         assert!(selection_text.contains("\"op\": \"unroll\""));
         assert!(selection_text.contains("\"source\": \"measured\""));
+        assert!(selection_text.contains("\"setup_segments\""));
+        assert!(selection_text.contains("\"load-generated-module\""));
         assert!(!selection_text.contains("#[kernel]"));
         assert!(!selection_text.contains("pub fn matvec_bf16"));
 
@@ -5119,6 +5225,14 @@ mod tests {
                 .and_then(|score| score.timing)
                 .map(|timing| timing.samples.count),
             Some(3)
+        );
+        assert_eq!(
+            selection
+                .score
+                .and_then(|score| score.timing)
+                .and_then(|timing| timing.setup_segments[0])
+                .map(|segment| segment.name),
+            Some("load-generated-module")
         );
 
         let replayed = selection

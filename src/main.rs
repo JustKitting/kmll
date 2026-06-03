@@ -47,7 +47,8 @@ use nn_rust_inference::{
     tokenizer::{QwenByteLevelBpeTokenizer, TekkenTokenizer},
 };
 use nn_rust_profiling::{
-    OptimizationTiming, ProfileDuration, ProfileTimeSource, ProfileTimer, SampleStats,
+    MAX_OPTIMIZATION_SETUP_SEGMENTS, OptimizationTiming, OptimizationTimingSegment,
+    ProfileDuration, ProfileTimeSource, ProfileTimer, SampleStats,
 };
 use nn_rust_quantization::RowwiseScaledI8Matrix;
 
@@ -889,7 +890,7 @@ struct KernelAutotuneMeasureOptions {
 struct MatvecAutotuneBench<'a> {
     stream: &'a Arc<CudaStream>,
     generated_store: KernelArtifactStore,
-    generated_functions: HashMap<String, CudaFunction>,
+    generated_modules: HashMap<String, GeneratedMatvecModule>,
     existing_function: CudaFunction,
     dev_input: DeviceBuffer<f32>,
     dev_weight: DeviceBuffer<Bf16>,
@@ -922,7 +923,7 @@ impl<'a> MatvecAutotuneBench<'a> {
         Ok(Self {
             stream,
             generated_store,
-            generated_functions: HashMap::new(),
+            generated_modules: HashMap::new(),
             existing_function,
             dev_input: DeviceBuffer::from_host(stream, &input)?,
             dev_weight: DeviceBuffer::from_host(stream, &weight)?,
@@ -941,6 +942,7 @@ impl<'a> MatvecAutotuneBench<'a> {
         if candidate.family != "matvec-bf16-row-major" {
             return Ok(None);
         }
+        let setup_segments = self.prepare_candidate(candidate)?;
         for _ in 0..self.options.warmup_count {
             self.launch_candidate(candidate)?;
         }
@@ -972,7 +974,8 @@ impl<'a> MatvecAutotuneBench<'a> {
             self.options.warmup_count,
             sample_stats,
             selected,
-        );
+        )
+        .with_setup_segments(&setup_segments);
         let actual = self.dev_output.to_host_vec(self.stream)?;
         compare_matvec_output(
             &format!("kernel-autotune-matvec {}", candidate.launch.kernel),
@@ -985,6 +988,18 @@ impl<'a> MatvecAutotuneBench<'a> {
             sample_stats.median,
             timing,
         ))
+    }
+
+    fn prepare_candidate(
+        &mut self,
+        candidate: &KernelCandidateMetadata,
+    ) -> AppResult<Vec<OptimizationTimingSegment>> {
+        match &candidate.generated.materialization {
+            KernelMaterialization::Existing { .. } => Ok(Vec::new()),
+            KernelMaterialization::DeferredGenerated { .. } => {
+                self.ensure_generated_bf16_matvec(candidate)
+            }
+        }
     }
 
     fn launch_candidate(&mut self, candidate: &KernelCandidateMetadata) -> AppResult<()> {
@@ -1012,39 +1027,88 @@ impl<'a> MatvecAutotuneBench<'a> {
         }
     }
 
+    fn ensure_generated_bf16_matvec(
+        &mut self,
+        candidate: &KernelCandidateMetadata,
+    ) -> AppResult<Vec<OptimizationTimingSegment>> {
+        let artifact_key = candidate.artifact_key().hex();
+        if self.generated_modules.contains_key(&artifact_key) {
+            return Ok(Vec::new());
+        }
+
+        let timer = ProfileTimer::start();
+        let emitted = self
+            .generated_store
+            .emit_standalone_crate(candidate, &MatvecRustCudaGenerator)?;
+        let emit_duration = timer.elapsed();
+
+        let output_dir = self.generated_store.paths_for(candidate).directory;
+        let timer = ProfileTimer::start();
+        let compiled = compile_standalone_kernel_crate(
+            &emitted.paths.crate_dir,
+            &output_dir,
+            &emitted.package_name,
+            None,
+        )?;
+        let compile_duration = timer.elapsed();
+
+        let ptx_path = compiled
+            .ptx_path
+            .to_str()
+            .ok_or_else(|| invalid_input("generated PTX path is not valid UTF-8"))?;
+        let timer = ProfileTimer::start();
+        let module = self.stream.context().load_module_from_file(ptx_path)?;
+        let module_load_duration = timer.elapsed();
+
+        let timer = ProfileTimer::start();
+        let function = module.load_function(&emitted.symbol)?;
+        let function_load_duration = timer.elapsed();
+        self.generated_modules.insert(
+            artifact_key.clone(),
+            GeneratedMatvecModule {
+                _module: module,
+                function,
+            },
+        );
+
+        Ok(vec![
+            OptimizationTimingSegment::new(
+                "emit-standalone-crate",
+                ProfileTimeSource::WallClock,
+                emit_duration,
+            ),
+            OptimizationTimingSegment::new(
+                "compile-standalone-crate",
+                ProfileTimeSource::WallClock,
+                compile_duration,
+            ),
+            OptimizationTimingSegment::new(
+                "load-generated-module",
+                ProfileTimeSource::WallClock,
+                module_load_duration,
+            ),
+            OptimizationTimingSegment::new(
+                "load-generated-symbol",
+                ProfileTimeSource::WallClock,
+                function_load_duration,
+            ),
+        ])
+    }
+
     fn launch_generated_bf16_matvec(
         &mut self,
         candidate: &KernelCandidateMetadata,
     ) -> AppResult<()> {
         let artifact_key = candidate.artifact_key().hex();
-        if !self.generated_functions.contains_key(&artifact_key) {
-            let emitted = self
-                .generated_store
-                .emit_standalone_crate(candidate, &MatvecRustCudaGenerator)?;
-            let output_dir = self.generated_store.paths_for(candidate).directory;
-            let compiled = compile_standalone_kernel_crate(
-                &emitted.paths.crate_dir,
-                &output_dir,
-                &emitted.package_name,
-                None,
-            )?;
-            let ptx_path = compiled
-                .ptx_path
-                .to_str()
-                .ok_or_else(|| invalid_input("generated PTX path is not valid UTF-8"))?;
-            let module = self.stream.context().load_module_from_file(ptx_path)?;
-            let function = module.load_function(&emitted.symbol)?;
-            self.generated_functions
-                .insert(artifact_key.clone(), function);
-        }
-        let Some(function) = self.generated_functions.get(&artifact_key) else {
+        self.ensure_generated_bf16_matvec(candidate)?;
+        let Some(generated) = self.generated_modules.get(&artifact_key) else {
             return Err(invalid_input(format!(
                 "generated matvec function cache miss for artifact {artifact_key}"
             )));
         };
         launch_matvec_symbol(
             self.stream,
-            function,
+            &generated.function,
             candidate,
             &self.dev_input,
             &self.dev_weight,
@@ -1053,6 +1117,11 @@ impl<'a> MatvecAutotuneBench<'a> {
             self.cols,
         )
     }
+}
+
+struct GeneratedMatvecModule {
+    _module: Arc<CudaModule>,
+    function: CudaFunction,
 }
 
 fn launch_matvec_symbol(
@@ -1195,6 +1264,7 @@ impl<'a> GemmAutotuneBench<'a> {
         if candidate.family != "gemm-f32-bf16-row-col-row" {
             return Ok(None);
         }
+        let setup_segments = self.prepare_candidate(candidate)?;
         for _ in 0..self.options.warmup_count {
             self.launch_candidate(candidate)?;
         }
@@ -1226,7 +1296,8 @@ impl<'a> GemmAutotuneBench<'a> {
             self.options.warmup_count,
             sample_stats,
             selected,
-        );
+        )
+        .with_setup_segments(&setup_segments);
         let actual = self.dev_c.to_host_vec(self.stream)?;
         compare_gemm_output(
             &format!("kernel-autotune-gemm {}", candidate.launch.kernel),
@@ -1241,6 +1312,18 @@ impl<'a> GemmAutotuneBench<'a> {
             sample_stats.median,
             timing,
         ))
+    }
+
+    fn prepare_candidate(
+        &mut self,
+        candidate: &KernelCandidateMetadata,
+    ) -> AppResult<Vec<OptimizationTimingSegment>> {
+        match &candidate.generated.materialization {
+            KernelMaterialization::Existing { .. } => Ok(Vec::new()),
+            KernelMaterialization::DeferredGenerated { .. } => {
+                self.ensure_generated_bf16_gemm(candidate)
+            }
+        }
     }
 
     fn launch_candidate(&mut self, candidate: &KernelCandidateMetadata) -> AppResult<()> {
@@ -1275,28 +1358,77 @@ impl<'a> GemmAutotuneBench<'a> {
         Ok(())
     }
 
+    fn ensure_generated_bf16_gemm(
+        &mut self,
+        candidate: &KernelCandidateMetadata,
+    ) -> AppResult<Vec<OptimizationTimingSegment>> {
+        let artifact_key = candidate.artifact_key().hex();
+        if self.generated_modules.contains_key(&artifact_key) {
+            return Ok(Vec::new());
+        }
+
+        let timer = ProfileTimer::start();
+        let emitted = self
+            .generated_store
+            .emit_standalone_crate(candidate, &GemmRustCudaGenerator)?;
+        let emit_duration = timer.elapsed();
+
+        let output_dir = self.generated_store.paths_for(candidate).directory;
+        let timer = ProfileTimer::start();
+        let compiled = compile_standalone_kernel_crate(
+            &emitted.paths.crate_dir,
+            &output_dir,
+            &emitted.package_name,
+            None,
+        )?;
+        let compile_duration = timer.elapsed();
+
+        let ptx_path = compiled
+            .ptx_path
+            .to_str()
+            .ok_or_else(|| invalid_input("generated PTX path is not valid UTF-8"))?;
+        let timer = ProfileTimer::start();
+        let module = self.stream.context().load_module_from_file(ptx_path)?;
+        let module_load_duration = timer.elapsed();
+
+        let timer = ProfileTimer::start();
+        let function = module.load_function(&emitted.symbol)?;
+        let function_load_duration = timer.elapsed();
+        self.generated_modules.insert(
+            artifact_key.clone(),
+            GeneratedGemmModule {
+                _module: module,
+                function,
+            },
+        );
+
+        Ok(vec![
+            OptimizationTimingSegment::new(
+                "emit-standalone-crate",
+                ProfileTimeSource::WallClock,
+                emit_duration,
+            ),
+            OptimizationTimingSegment::new(
+                "compile-standalone-crate",
+                ProfileTimeSource::WallClock,
+                compile_duration,
+            ),
+            OptimizationTimingSegment::new(
+                "load-generated-module",
+                ProfileTimeSource::WallClock,
+                module_load_duration,
+            ),
+            OptimizationTimingSegment::new(
+                "load-generated-symbol",
+                ProfileTimeSource::WallClock,
+                function_load_duration,
+            ),
+        ])
+    }
+
     fn launch_generated_bf16_gemm(&mut self, candidate: &KernelCandidateMetadata) -> AppResult<()> {
         let artifact_key = candidate.artifact_key().hex();
-        if !self.generated_modules.contains_key(&artifact_key) {
-            let emitted = self
-                .generated_store
-                .emit_standalone_crate(candidate, &GemmRustCudaGenerator)?;
-            let output_dir = self.generated_store.paths_for(candidate).directory;
-            let compiled = compile_standalone_kernel_crate(
-                &emitted.paths.crate_dir,
-                &output_dir,
-                &emitted.package_name,
-                None,
-            )?;
-            let ptx_path = compiled
-                .ptx_path
-                .to_str()
-                .ok_or_else(|| invalid_input("generated PTX path is not valid UTF-8"))?;
-            let module = self.stream.context().load_module_from_file(ptx_path)?;
-            let function = module.load_function(&emitted.symbol)?;
-            self.generated_modules
-                .insert(artifact_key.clone(), GeneratedGemmModule { function });
-        }
+        self.ensure_generated_bf16_gemm(candidate)?;
         let Some(generated) = self.generated_modules.get(&artifact_key) else {
             return Err(invalid_input(format!(
                 "generated GEMM module cache miss for artifact {artifact_key}"
@@ -1317,6 +1449,7 @@ impl<'a> GemmAutotuneBench<'a> {
 }
 
 struct GeneratedGemmModule {
+    _module: Arc<CudaModule>,
     function: CudaFunction,
 }
 
@@ -1528,18 +1661,35 @@ fn format_search_score(score: SearchScore) -> String {
             let timing = score
                 .timing
                 .map(|timing| {
+                    let setup = format_setup_segments(&timing.setup_segments);
                     format!(
-                        ":source={} samples={} warmup={} min={:.9}s max={:.9}s",
+                        ":source={} samples={} warmup={} min={:.9}s max={:.9}s{}",
                         timing.source.label(),
                         timing.samples.count,
                         timing.warmup_count,
                         timing.samples.min,
-                        timing.samples.max
+                        timing.samples.max,
+                        setup
                     )
                 })
                 .unwrap_or_default();
             format!("{:.9}s:{}{}", score.value, score.source.label(), timing)
         }
+    }
+}
+
+fn format_setup_segments(
+    segments: &[Option<OptimizationTimingSegment>; MAX_OPTIMIZATION_SETUP_SEGMENTS],
+) -> String {
+    let parts = segments
+        .iter()
+        .flatten()
+        .map(|segment| format!("{}={:.6}s", segment.name, segment.duration.as_seconds_f64()))
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" setup=[{}]", parts.join(","))
     }
 }
 

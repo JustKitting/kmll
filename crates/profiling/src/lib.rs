@@ -574,12 +574,36 @@ impl OptimizationScoreSource {
     }
 }
 
+pub const MAX_OPTIMIZATION_SETUP_SEGMENTS: usize = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptimizationTimingSegment {
+    pub name: &'static str,
+    pub source: ProfileTimeSource,
+    pub duration: ProfileDuration,
+}
+
+impl OptimizationTimingSegment {
+    pub const fn new(
+        name: &'static str,
+        source: ProfileTimeSource,
+        duration: ProfileDuration,
+    ) -> Self {
+        Self {
+            name,
+            source,
+            duration,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OptimizationTiming {
     pub source: ProfileTimeSource,
     pub warmup_count: usize,
     pub samples: SampleStats,
     pub selected: ProfileDuration,
+    pub setup_segments: [Option<OptimizationTimingSegment>; MAX_OPTIMIZATION_SETUP_SEGMENTS],
 }
 
 impl OptimizationTiming {
@@ -594,7 +618,27 @@ impl OptimizationTiming {
             warmup_count,
             samples,
             selected,
+            setup_segments: [None; MAX_OPTIMIZATION_SETUP_SEGMENTS],
         }
+    }
+
+    pub fn with_setup_segment(mut self, segment: OptimizationTimingSegment) -> Self {
+        if let Some(slot) = self.setup_segments.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(segment);
+        }
+        self
+    }
+
+    pub fn with_setup_segments(mut self, segments: &[OptimizationTimingSegment]) -> Self {
+        for (index, segment) in segments
+            .iter()
+            .copied()
+            .take(MAX_OPTIMIZATION_SETUP_SEGMENTS)
+            .enumerate()
+        {
+            self.setup_segments[index] = Some(segment);
+        }
+        self
     }
 }
 
@@ -2202,13 +2246,64 @@ fn push_optimization_timing_json(
             indent + 2,
             true,
         );
-        push_sample_stats_json(out, "samples", timing.samples, indent + 2, false);
+        push_sample_stats_json(out, "samples", timing.samples, indent + 2, true);
+        push_optimization_timing_segments_json(
+            out,
+            "setup_segments",
+            &timing.setup_segments,
+            indent + 2,
+            false,
+        );
         push_indent(out, indent);
         out.push('}');
     } else {
         out.push_str("null");
     }
     push_optional_comma(out, comma);
+}
+
+fn push_optimization_timing_segments_json(
+    out: &mut String,
+    name: &str,
+    segments: &[Option<OptimizationTimingSegment>; MAX_OPTIMIZATION_SETUP_SEGMENTS],
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": [\n");
+    let mut written = 0usize;
+    for segment in segments.iter().flatten() {
+        if written > 0 {
+            out.push_str(",\n");
+        }
+        push_optimization_timing_segment_json(out, segment, indent + 2);
+        written += 1;
+    }
+    out.push('\n');
+    push_indent(out, indent);
+    out.push(']');
+    push_optional_comma(out, comma);
+}
+
+fn push_optimization_timing_segment_json(
+    out: &mut String,
+    segment: &OptimizationTimingSegment,
+    indent: usize,
+) {
+    push_indent(out, indent);
+    out.push_str("{\n");
+    push_json_field_string(out, "name", segment.name, indent + 2, true);
+    push_json_field_string(out, "source", segment.source.label(), indent + 2, true);
+    push_json_field_f64(
+        out,
+        "duration_seconds",
+        segment.duration.as_seconds_f64(),
+        indent + 2,
+        false,
+    );
+    push_indent(out, indent);
+    out.push('}');
 }
 
 fn push_sample_stats_json(
@@ -2604,7 +2699,12 @@ mod tests {
             1,
             samples,
             ProfileDuration::from_seconds_f64(samples.median).unwrap(),
-        );
+        )
+        .with_setup_segment(OptimizationTimingSegment::new(
+            "compile-standalone-crate",
+            ProfileTimeSource::WallClock,
+            ProfileDuration::from_seconds_f64(0.25).unwrap(),
+        ));
         let score = OptimizationScore::measured_with_timing(samples.median, timing);
         let candidate = OptimizationCandidateSpec::new(
             "matvec-bf16-row-major",
@@ -2624,6 +2724,12 @@ mod tests {
             OptimizationScoreSource::Measured
         );
         assert_eq!(candidate.score.unwrap().timing.unwrap().samples.count, 3);
+        assert_eq!(
+            candidate.score.unwrap().timing.unwrap().setup_segments[0]
+                .unwrap()
+                .name,
+            "compile-standalone-crate"
+        );
     }
 
     #[test]
@@ -2635,7 +2741,21 @@ mod tests {
             OperationRoute::CudaKernel,
         )
         .with_launch(launch.clone());
-        let score = OptimizationScore::measured(0.000003);
+        let samples = SampleStats::from_finite_samples(&[0.000002, 0.000003, 0.000004]).unwrap();
+        let score = OptimizationScore::measured_with_timing(
+            samples.median,
+            OptimizationTiming::new(
+                ProfileTimeSource::CudaEvent,
+                1,
+                samples,
+                ProfileDuration::from_seconds_f64(samples.median).unwrap(),
+            )
+            .with_setup_segment(OptimizationTimingSegment::new(
+                "compile-standalone-crate",
+                ProfileTimeSource::WallClock,
+                ProfileDuration::from_seconds_f64(0.5).unwrap(),
+            )),
+        );
         let candidate = OptimizationCandidateSpec::new(
             "matvec-bf16-row-major",
             "def456",
@@ -2698,6 +2818,7 @@ mod tests {
         assert!(json.contains("\"op\": \"unroll\""));
         assert!(json.contains("\"score\""));
         assert!(json.contains("\"source\": \"measured\""));
+        assert!(json.contains("\"setup_segments\""));
         assert!(!json.contains("#[kernel]"));
         assert!(!json.contains("pub fn"));
         assert!(!json.contains("pub struct Bf16"));
