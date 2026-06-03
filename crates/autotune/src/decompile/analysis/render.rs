@@ -1,6 +1,9 @@
 use std::fmt::Write as _;
 
-use super::types::{SassAnalysisModule, format_register_definition};
+use super::{
+    super::RegisterRef,
+    types::{SassAnalysisModule, format_register_definition},
+};
 
 impl SassAnalysisModule {
     pub fn to_text(&self) -> String {
@@ -96,8 +99,8 @@ impl SassAnalysisModule {
                     out,
                     "    {:#06x}: def=[{}] use=[{}] <- {}",
                     dataflow.address,
-                    dataflow.defines.join(","),
-                    dataflow.uses.join(","),
+                    format_registers(&dataflow.defines),
+                    format_registers(&dataflow.uses),
                     dataflow.source
                 )
                 .expect("write to string");
@@ -175,7 +178,7 @@ impl SassAnalysisModule {
                     access.space,
                     access.value_register,
                     access.address_expr,
-                    access.address_registers.join(","),
+                    format_registers(&access.address_registers),
                     access.address_base.as_deref().unwrap_or("-"),
                     access.offset.as_deref().unwrap_or("-"),
                     access
@@ -197,6 +200,14 @@ fn format_addresses(addresses: &[u64]) -> String {
     addresses
         .iter()
         .map(|address| format!("{address:#06x}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_registers(registers: &[RegisterRef]) -> String {
+    registers
+        .iter()
+        .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",")
 }

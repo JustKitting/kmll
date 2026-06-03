@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::super::MemorySpace;
+use super::super::{MemorySpace, RegisterRef};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassAnalysisModule {
@@ -295,15 +295,15 @@ impl fmt::Display for SassRegionKind {
 pub struct SassDataflowOp {
     pub address: u64,
     pub predicate: Option<String>,
-    pub defines: Vec<String>,
-    pub uses: Vec<String>,
+    pub defines: Vec<RegisterRef>,
+    pub uses: Vec<RegisterRef>,
     pub source: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassReachingUse {
     pub address: u64,
-    pub register: String,
+    pub register: RegisterRef,
     pub reaching_def_addresses: Vec<u64>,
     pub reaches_entry: bool,
 }
@@ -325,7 +325,7 @@ impl SassReachingUse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassSsaValue {
     pub value_id: usize,
-    pub register: String,
+    pub register: RegisterRef,
     pub def_address: Option<u64>,
     pub source: Option<String>,
     pub use_addresses: Vec<u64>,
@@ -340,7 +340,7 @@ impl SassSsaValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassDefUseEdge {
     pub value_id: usize,
-    pub register: String,
+    pub register: RegisterRef,
     pub def_address: Option<u64>,
     pub use_address: u64,
     pub use_source: String,
@@ -353,8 +353,8 @@ pub struct SassValueOp {
     pub predicate: Option<String>,
     pub opcode: String,
     pub kind: String,
-    pub input_registers: Vec<String>,
-    pub output_registers: Vec<String>,
+    pub input_registers: Vec<RegisterRef>,
+    pub output_registers: Vec<RegisterRef>,
     pub input_value_ids: Vec<usize>,
     pub output_value_ids: Vec<usize>,
     pub source: String,
@@ -362,7 +362,7 @@ pub struct SassValueOp {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassLiveRange {
-    pub register: String,
+    pub register: RegisterRef,
     pub def_address: Option<u64>,
     pub start_address: u64,
     pub end_address: u64,
@@ -384,9 +384,9 @@ pub struct SassMemoryAccess {
     pub kind: SassMemoryAccessKind,
     pub space: MemorySpace,
     pub width_bits: Option<u32>,
-    pub value_register: String,
+    pub value_register: RegisterRef,
     pub address_expr: String,
-    pub address_registers: Vec<String>,
+    pub address_registers: Vec<RegisterRef>,
     pub address_base: Option<String>,
     pub offset: Option<String>,
     pub source: String,
@@ -409,7 +409,10 @@ impl fmt::Display for SassMemoryAccessKind {
     }
 }
 
-pub(super) fn format_register_definition(register: &str, def_address: Option<u64>) -> String {
+pub(super) fn format_register_definition(
+    register: &RegisterRef,
+    def_address: Option<u64>,
+) -> String {
     def_address
         .map(|address| format!("{register}@{address:#06x}"))
         .unwrap_or_else(|| format!("{register}@entry"))

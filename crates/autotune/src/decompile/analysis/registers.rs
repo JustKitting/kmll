@@ -1,40 +1,36 @@
 use super::super::RegisterRef;
 
-pub(super) fn push_registers(text: &str, out: &mut Vec<String>) {
+pub(super) fn push_registers(text: &str, out: &mut Vec<RegisterRef>) {
     for register in extract_registers(text) {
-        if !out.contains(&register) {
-            out.push(register);
-        }
+        push_register_ref(register, out);
     }
 }
 
 pub(super) fn push_register_refs(
     registers: impl IntoIterator<Item = RegisterRef>,
-    out: &mut Vec<String>,
+    out: &mut Vec<RegisterRef>,
 ) {
     for register in registers {
-        if register.is_pseudo() {
-            continue;
-        }
-        let register = register.to_string();
-        if !out.contains(&register) {
-            out.push(register);
-        }
+        push_register_ref(register, out);
     }
 }
 
-pub(super) fn extract_registers(text: &str) -> Vec<String> {
+fn push_register_ref(register: RegisterRef, out: &mut Vec<RegisterRef>) {
+    if !register.is_pseudo() && !out.contains(&register) {
+        out.push(register);
+    }
+}
+
+pub(super) fn extract_registers(text: &str) -> Vec<RegisterRef> {
     let bytes = text.as_bytes();
     let mut index = 0usize;
     let mut registers = Vec::new();
     while index < bytes.len() {
-        let Some((register, consumed)) = parse_register_at(text, index) else {
+        let Some((raw_register, consumed)) = parse_register_at(text, index) else {
             index += 1;
             continue;
         };
-        if !is_pseudo_register(&register) && !registers.contains(&register) {
-            registers.push(register);
-        }
+        push_register_ref(RegisterRef::parse(raw_register), &mut registers);
         index += consumed;
     }
     registers
@@ -88,8 +84,4 @@ fn is_token_boundary(text: &str, index: usize) -> bool {
         .next_back()
         .expect("index > 0 should have previous char");
     !before.is_ascii_alphanumeric() && before != '_'
-}
-
-fn is_pseudo_register(register: &str) -> bool {
-    matches!(register, "RZ" | "URZ" | "PT" | "UPT")
 }

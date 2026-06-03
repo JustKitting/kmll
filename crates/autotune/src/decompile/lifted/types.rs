@@ -1,5 +1,6 @@
 use std::fmt;
 
+use super::super::RegisterRef;
 use super::semantics::SassLiftedSemantics;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +43,7 @@ pub struct SassLiftedOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassLiftedValueRef {
     pub value_id: usize,
-    pub register: String,
+    pub register: RegisterRef,
 }
 
 impl SassLiftedValueRef {

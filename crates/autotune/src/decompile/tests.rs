@@ -1,6 +1,10 @@
 use super::*;
 use std::{collections::BTreeSet, env, fs, process, time::SystemTime};
 
+fn reg(raw: &str) -> RegisterRef {
+    RegisterRef::parse(raw.to_string())
+}
+
 const SIMPLE_SASS: &str = r#"
         .target sm_120
 
@@ -440,9 +444,9 @@ fn analysis_recovers_structured_memory_accesses() {
         .expect("first descriptor load should be recovered");
     assert_eq!(first_load.kind, SassMemoryAccessKind::Load);
     assert_eq!(first_load.space, MemorySpace::Descriptor);
-    assert_eq!(first_load.value_register, "R2");
+    assert_eq!(first_load.value_register, reg("R2"));
     assert_eq!(first_load.address_expr, "desc[UR4][R0.64]");
-    assert_eq!(first_load.address_registers, ["UR4", "R0"]);
+    assert_eq!(first_load.address_registers, [reg("UR4"), reg("R0")]);
     assert_eq!(first_load.address_base.as_deref(), Some("UR4"));
     assert_eq!(first_load.offset, None);
 
@@ -461,8 +465,8 @@ fn analysis_recovers_structured_memory_accesses() {
         .expect("descriptor store should be recovered");
     assert_eq!(store.kind, SassMemoryAccessKind::Store);
     assert_eq!(store.space, MemorySpace::Descriptor);
-    assert_eq!(store.value_register, "R4");
-    assert_eq!(store.address_registers, ["UR8", "R0"]);
+    assert_eq!(store.value_register, reg("R4"));
+    assert_eq!(store.address_registers, [reg("UR8"), reg("R0")]);
 
     let text = analysis.to_text();
     assert!(text.contains("memory_accesses"));
@@ -499,7 +503,7 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
             && width_bits.is_none()
             && modifiers.as_slice() == ["E"]
     ));
-    assert!(load.outputs.iter().any(|value| value.register == "R2"));
+    assert!(load.outputs.iter().any(|value| value.register == reg("R2")));
 
     let add = function
         .ops
@@ -516,9 +520,9 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
             width_bits: None
         } if dst == "R4" && inputs == &vec!["R2".to_string(), "R3".to_string()]
     ));
-    assert!(add.inputs.iter().any(|value| value.register == "R2"));
-    assert!(add.inputs.iter().any(|value| value.register == "R3"));
-    assert!(add.outputs.iter().any(|value| value.register == "R4"));
+    assert!(add.inputs.iter().any(|value| value.register == reg("R2")));
+    assert!(add.inputs.iter().any(|value| value.register == reg("R3")));
+    assert!(add.outputs.iter().any(|value| value.register == reg("R4")));
 
     let store = function
         .ops
@@ -539,7 +543,7 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
             && width_bits.is_none()
             && modifiers.as_slice() == ["E"]
     ));
-    assert!(store.inputs.iter().any(|value| value.register == "R4"));
+    assert!(store.inputs.iter().any(|value| value.register == reg("R4")));
     assert!(store.outputs.is_empty());
 
     let exit = function
@@ -804,20 +808,20 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
         .iter()
         .find(|op| op.address == 0x0)
         .expect("compare dataflow should exist");
-    assert_eq!(compare.defines, ["P0"]);
-    assert_eq!(compare.uses, ["R0", "R1"]);
+    assert_eq!(compare.defines, [reg("P0")]);
+    assert_eq!(compare.uses, [reg("R0"), reg("R1")]);
     let add = function
         .dataflow
         .iter()
         .find(|op| op.address == 0x20)
         .expect("add dataflow should exist");
-    assert_eq!(add.defines, ["R2"]);
-    assert_eq!(add.uses, ["R0", "R1"]);
+    assert_eq!(add.defines, [reg("R2")]);
+    assert_eq!(add.uses, [reg("R0"), reg("R1")]);
 
     let predicate_use = function
         .reaching_uses
         .iter()
-        .find(|use_site| use_site.address == 0x10 && use_site.register == "P0")
+        .find(|use_site| use_site.address == 0x10 && use_site.register == reg("P0"))
         .expect("branch predicate use should have reaching definitions");
     assert!(!predicate_use.reaches_entry);
     assert_eq!(predicate_use.reaching_def_addresses.as_slice(), &[0x0]);
@@ -825,7 +829,7 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
     let joined_r2_use = function
         .reaching_uses
         .iter()
-        .find(|use_site| use_site.address == 0x30 && use_site.register == "R2")
+        .find(|use_site| use_site.address == 0x30 && use_site.register == reg("R2"))
         .expect("join use of R2 should have reaching definitions");
     assert!(joined_r2_use.reaches_entry);
     assert_eq!(joined_r2_use.reaching_def_addresses.as_slice(), &[0x20]);
@@ -833,14 +837,14 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
     let local_r2_range = function
         .live_ranges
         .iter()
-        .find(|range| range.register == "R2" && range.def_address == Some(0x20))
+        .find(|range| range.register == reg("R2") && range.def_address == Some(0x20))
         .expect("R2 definition at 0x20 should have a live range");
     assert_eq!(local_r2_range.use_addresses.as_slice(), &[0x30]);
 
     let entry_r2_range = function
         .live_ranges
         .iter()
-        .find(|range| range.register == "R2" && range.def_address.is_none())
+        .find(|range| range.register == reg("R2") && range.def_address.is_none())
         .expect("entry R2 should be live on the branch path");
     assert_eq!(entry_r2_range.start_address, 0x30);
     assert_eq!(entry_r2_range.end_address, 0x30);
@@ -849,21 +853,21 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
     let entry_r2_value = function
         .ssa_values
         .iter()
-        .find(|value| value.register == "R2" && value.def_address.is_none())
+        .find(|value| value.register == reg("R2") && value.def_address.is_none())
         .expect("entry R2 should have an SSA value");
     assert_eq!(entry_r2_value.use_addresses.as_slice(), &[0x30]);
 
     let local_r2_value = function
         .ssa_values
         .iter()
-        .find(|value| value.register == "R2" && value.def_address == Some(0x20))
+        .find(|value| value.register == reg("R2") && value.def_address == Some(0x20))
         .expect("local R2 definition should have an SSA value");
     assert_eq!(local_r2_value.use_addresses.as_slice(), &[0x30]);
 
     let joined_r2_edges = function
         .def_use_edges
         .iter()
-        .filter(|edge| edge.use_address == 0x30 && edge.register == "R2")
+        .filter(|edge| edge.use_address == 0x30 && edge.register == reg("R2"))
         .collect::<Vec<_>>();
     assert_eq!(joined_r2_edges.len(), 2);
     assert!(
@@ -881,14 +885,14 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
         .find(|op| op.address == 0x30)
         .expect("join instruction should have a value-op row");
     assert_eq!(joined_op.opcode, "IADD");
-    assert_eq!(joined_op.input_registers, ["R2", "R1"]);
-    assert_eq!(joined_op.output_registers, ["R3"]);
+    assert_eq!(joined_op.input_registers, [reg("R2"), reg("R1")]);
+    assert_eq!(joined_op.output_registers, [reg("R3")]);
     assert!(joined_op.input_value_ids.contains(&entry_r2_value.value_id));
     assert!(joined_op.input_value_ids.contains(&local_r2_value.value_id));
     let r3_value = function
         .ssa_values
         .iter()
-        .find(|value| value.register == "R3" && value.def_address == Some(0x30))
+        .find(|value| value.register == reg("R3") && value.def_address == Some(0x30))
         .expect("R3 output should have an SSA value");
     assert_eq!(joined_op.output_value_ids.as_slice(), &[r3_value.value_id]);
 
@@ -1048,7 +1052,7 @@ fn analysis_keeps_previous_definition_after_predicated_write() {
     let predicated_write_use = function
         .reaching_uses
         .iter()
-        .find(|use_site| use_site.address == 0x20 && use_site.register == "R2")
+        .find(|use_site| use_site.address == 0x20 && use_site.register == reg("R2"))
         .expect("predicated write should use the previous R2 value");
     assert!(!predicated_write_use.reaches_entry);
     assert_eq!(
@@ -1059,7 +1063,7 @@ fn analysis_keeps_previous_definition_after_predicated_write() {
     let post_write_use = function
         .reaching_uses
         .iter()
-        .find(|use_site| use_site.address == 0x30 && use_site.register == "R2")
+        .find(|use_site| use_site.address == 0x30 && use_site.register == reg("R2"))
         .expect("post-write R2 use should have reaching definitions");
     assert!(!post_write_use.reaches_entry);
     assert_eq!(
@@ -1070,14 +1074,14 @@ fn analysis_keeps_previous_definition_after_predicated_write() {
     let original_r2_range = function
         .live_ranges
         .iter()
-        .find(|range| range.register == "R2" && range.def_address == Some(0x0))
+        .find(|range| range.register == reg("R2") && range.def_address == Some(0x0))
         .expect("original R2 definition should remain live after predicated write");
     assert_eq!(original_r2_range.use_addresses.as_slice(), &[0x20, 0x30]);
 
     let predicated_r2_range = function
         .live_ranges
         .iter()
-        .find(|range| range.register == "R2" && range.def_address == Some(0x20))
+        .find(|range| range.register == reg("R2") && range.def_address == Some(0x20))
         .expect("predicated R2 definition should get its own live range");
     assert_eq!(predicated_r2_range.use_addresses.as_slice(), &[0x30]);
 }

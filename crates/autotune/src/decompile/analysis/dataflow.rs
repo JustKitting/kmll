@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    super::{KernelIrFunction, KernelIrOp, KernelIrOpKind},
+    super::{KernelIrFunction, KernelIrOp, KernelIrOpKind, RegisterRef},
     cfg::{block_id_for_op_index, predecessors_by_block},
     registers::{push_register_refs, push_registers},
     types::{
@@ -17,7 +17,7 @@ pub(super) fn build_value_ops(
     ssa_values: &[SassSsaValue],
     def_use_edges: &[SassDefUseEdge],
 ) -> Vec<SassValueOp> {
-    let mut values_by_definition = BTreeMap::<(String, Option<u64>), Vec<usize>>::new();
+    let mut values_by_definition = BTreeMap::<(RegisterRef, Option<u64>), Vec<usize>>::new();
     for value in ssa_values {
         values_by_definition
             .entry((value.register.clone(), value.def_address))
@@ -69,7 +69,7 @@ pub(super) fn build_value_ops(
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReachingDef {
-    register: String,
+    register: RegisterRef,
     address: Option<u64>,
     source: Option<String>,
 }
@@ -89,10 +89,10 @@ pub(super) fn analyze_reaching_defs(
     }
 
     let mut definitions = Vec::new();
-    let mut entry_def_by_register = BTreeMap::<String, usize>::new();
-    let mut def_by_op_register = BTreeMap::<(usize, String), usize>::new();
-    let mut defs_by_register = BTreeMap::<String, BTreeSet<usize>>::new();
-    let mut registers = BTreeSet::<String>::new();
+    let mut entry_def_by_register = BTreeMap::<RegisterRef, usize>::new();
+    let mut def_by_op_register = BTreeMap::<(usize, RegisterRef), usize>::new();
+    let mut defs_by_register = BTreeMap::<RegisterRef, BTreeSet<usize>>::new();
+    let mut registers = BTreeSet::<RegisterRef>::new();
     for op in dataflow {
         registers.extend(op.defines.iter().cloned());
         registers.extend(op.uses.iter().cloned());
@@ -164,7 +164,7 @@ pub(super) fn analyze_reaching_defs(
     let mut ssa_value_uses = (0..definitions.len())
         .map(|def_id| (def_id, BTreeSet::<u64>::new()))
         .collect::<BTreeMap<_, _>>();
-    let mut live_range_uses = BTreeMap::<(String, Option<u64>), BTreeSet<u64>>::new();
+    let mut live_range_uses = BTreeMap::<(RegisterRef, Option<u64>), BTreeSet<u64>>::new();
     for definition in &definitions {
         if let Some(address) = definition.address {
             live_range_uses
@@ -293,8 +293,8 @@ pub(super) fn analyze_reaching_defs(
 fn transfer_block(
     block: &SassBasicBlock,
     dataflow: &[SassDataflowOp],
-    def_by_op_register: &BTreeMap<(usize, String), usize>,
-    defs_by_register: &BTreeMap<String, BTreeSet<usize>>,
+    def_by_op_register: &BTreeMap<(usize, RegisterRef), usize>,
+    defs_by_register: &BTreeMap<RegisterRef, BTreeSet<usize>>,
     mut state: BTreeSet<usize>,
 ) -> BTreeSet<usize> {
     for op_index in block.start_op_index..=block.end_op_index {
@@ -313,8 +313,8 @@ fn apply_defs(
     op_index: usize,
     op: &SassDataflowOp,
     state: &mut BTreeSet<usize>,
-    def_by_op_register: &BTreeMap<(usize, String), usize>,
-    defs_by_register: &BTreeMap<String, BTreeSet<usize>>,
+    def_by_op_register: &BTreeMap<(usize, RegisterRef), usize>,
+    defs_by_register: &BTreeMap<RegisterRef, BTreeSet<usize>>,
 ) {
     let conditional_write = op.predicate.is_some();
     for register in &op.defines {
@@ -334,12 +334,12 @@ fn apply_defs(
 fn reaching_defs_for_register(
     state: &BTreeSet<usize>,
     definitions: &[ReachingDef],
-    register: &str,
+    register: &RegisterRef,
 ) -> Vec<usize> {
     state
         .iter()
         .copied()
-        .filter(|def_id| definitions[*def_id].register == register)
+        .filter(|def_id| &definitions[*def_id].register == register)
         .collect()
 }
 

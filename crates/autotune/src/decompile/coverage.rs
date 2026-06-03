@@ -1079,8 +1079,8 @@ fn append_analysis(
                 sass_path: sass_path.to_path_buf(),
                 function: function.name.clone(),
                 address: op.address,
-                defines: op.defines.clone(),
-                uses: op.uses.clone(),
+                defines: op.defines.iter().map(ToString::to_string).collect(),
+                uses: op.uses.iter().map(ToString::to_string).collect(),
                 source: op.source.clone(),
             });
         }
@@ -1089,7 +1089,7 @@ fn append_analysis(
                 sass_path: sass_path.to_path_buf(),
                 function: function.name.clone(),
                 address: use_site.address,
-                register: use_site.register.clone(),
+                register: use_site.register.to_string(),
                 reaching_def_addresses: use_site.reaching_def_addresses.clone(),
                 reaches_entry: use_site.reaches_entry,
             });
@@ -1099,7 +1099,7 @@ fn append_analysis(
                 sass_path: sass_path.to_path_buf(),
                 function: function.name.clone(),
                 value_id: value.value_id,
-                register: value.register.clone(),
+                register: value.register.to_string(),
                 def_address: value.def_address,
                 source: value.source.clone(),
                 use_addresses: value.use_addresses.clone(),
@@ -1110,7 +1110,7 @@ fn append_analysis(
                 sass_path: sass_path.to_path_buf(),
                 function: function.name.clone(),
                 value_id: edge.value_id,
-                register: edge.register.clone(),
+                register: edge.register.to_string(),
                 def_address: edge.def_address,
                 use_address: edge.use_address,
                 use_source: edge.use_source.clone(),
@@ -1125,8 +1125,12 @@ fn append_analysis(
                 predicate: op.predicate.clone(),
                 opcode: op.opcode.clone(),
                 kind: op.kind.clone(),
-                input_registers: op.input_registers.clone(),
-                output_registers: op.output_registers.clone(),
+                input_registers: op.input_registers.iter().map(ToString::to_string).collect(),
+                output_registers: op
+                    .output_registers
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
                 input_value_ids: op.input_value_ids.clone(),
                 output_value_ids: op.output_value_ids.clone(),
                 source: op.source.clone(),
@@ -1160,7 +1164,7 @@ fn append_analysis(
             live_ranges.push(SassCoverageLiveRange {
                 sass_path: sass_path.to_path_buf(),
                 function: function.name.clone(),
-                register: range.register.clone(),
+                register: range.register.to_string(),
                 def_address: range.def_address,
                 start_address: range.start_address,
                 end_address: range.end_address,
@@ -1176,9 +1180,13 @@ fn append_analysis(
                 kind: access.kind.to_string(),
                 space: access.space.to_string(),
                 width_bits: access.width_bits,
-                value_register: access.value_register.clone(),
+                value_register: access.value_register.to_string(),
                 address_expr: access.address_expr.clone(),
-                address_registers: access.address_registers.clone(),
+                address_registers: access
+                    .address_registers
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
                 address_base: access.address_base.clone(),
                 offset: access.offset.clone(),
                 source: access.source.clone(),

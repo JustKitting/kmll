@@ -1,5 +1,7 @@
 use super::{
-    super::{KernelIrFunction, KernelIrOp, KernelIrOpKind, MemoryAddress, MemorySpace},
+    super::{
+        KernelIrFunction, KernelIrOp, KernelIrOpKind, MemoryAddress, MemorySpace, RegisterRef,
+    },
     types::{SassMemoryAccess, SassMemoryAccessKind},
 };
 
@@ -63,13 +65,12 @@ fn memory_access(
         kind,
         space,
         width_bits,
-        value_register: value_register.to_string(),
+        value_register: RegisterRef::parse(value_register.to_string()),
         address_expr: address.raw.clone(),
         address_registers: address
             .registers()
             .into_iter()
             .filter(|register| !register.is_pseudo())
-            .map(|register| register.to_string())
             .collect(),
         address_base: address.base().map(str::to_string),
         offset: address.offset().map(str::to_string),
