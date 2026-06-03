@@ -1754,6 +1754,55 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
 }
 
 #[test]
+fn coverage_scan_preserves_typed_semantic_pattern_rows() {
+    let root = unique_test_dir("coverage_patterns");
+    let input = root.join("input");
+    let output = root.join("output");
+    fs::create_dir_all(&input).expect("test input dir should be created");
+    fs::write(input.join("rows17.sass"), ROWS17_SLICE).expect("rows17 SASS should be written");
+
+    let report = run_sass_coverage_scan(&SassCoverageOptions {
+        root: input,
+        output_dir: output,
+    })
+    .expect("coverage scan should complete");
+
+    assert!(report.semantic_pattern_count > 0);
+    assert!(report.semantic_patterns.iter().any(|pattern| {
+        pattern.confidence == SassPatternConfidence::ExactOpcodeSequence
+            && matches!(
+                &pattern.kind,
+                SassSemanticPatternKind::Bf16WidenBits { src, dst, .. }
+                    if src == &reg("R23") && dst == &reg("R23")
+            )
+    }));
+    assert!(report.semantic_patterns.iter().any(|pattern| {
+        pattern.confidence == SassPatternConfidence::HeuristicDataflow
+            && matches!(
+                &pattern.kind,
+                SassSemanticPatternKind::WarpReduceSum { output, .. }
+                    if output == &reg("R7")
+            )
+    }));
+    assert!(report.semantic_pattern_counts.iter().any(|count| {
+        count.category == SassSemanticPatternCategory::Bf16WidenBits && count.count == 1
+    }));
+    assert!(report.semantic_pattern_counts.iter().any(|count| {
+        count.category == SassSemanticPatternCategory::WarpReduceSum && count.count == 1
+    }));
+
+    let pattern_tsv =
+        fs::read_to_string(&report.semantic_patterns_path).expect("patterns TSV should read");
+    assert!(pattern_tsv.starts_with("sass_path\tfunction\tstart_address\tend_address\tkind"));
+    assert!(pattern_tsv.contains("bf16-widen-bits"));
+    assert!(pattern_tsv.contains("exact-opcode-sequence"));
+    let pattern_frequency_tsv = fs::read_to_string(&report.semantic_pattern_frequency_path)
+        .expect("pattern frequency TSV should read");
+    assert!(pattern_frequency_tsv.starts_with("semantic_pattern\tcount"));
+    assert!(pattern_frequency_tsv.contains("warp-reduce-sum\t1"));
+}
+
+#[test]
 fn coverage_comparison_reports_resolved_probe_targets() {
     let root = unique_test_dir("coverage_compare");
     let baseline = root.join("baseline");

@@ -39,7 +39,8 @@ pub use self::{
         SassCoverageOptions, SassCoverageReachingUse, SassCoverageRegion, SassCoverageReport,
         SassCoverageSemanticPattern, SassCoverageSsaValue, SassCoverageValueOp,
         SassOpcodeCatalogEntry, SassOpcodeCount, SassOpcodeCoverageState, SassOpcodeProbeTarget,
-        SassOpcodeSupport, SassUnsupportedInstruction, run_sass_coverage_scan,
+        SassOpcodeSupport, SassSemanticPatternCount, SassUnsupportedInstruction,
+        run_sass_coverage_scan,
     },
     coverage_compare::{
         SassCoverageComparisonOptions, SassCoverageComparisonReport, SassCoverageOpcodeChange,
@@ -69,7 +70,7 @@ pub use self::{
     },
     patterns::{
         SassPatternConfidence, SassPatternFunction, SassPatternModule, SassSemanticPattern,
-        SassSemanticPatternKind, recover_sass_patterns,
+        SassSemanticPatternCategory, SassSemanticPatternKind, recover_sass_patterns,
     },
     ptx_probes::{
         PtxDecompileProbe, PtxDecompileProbeKind, all_ptx_decompile_probe_kinds,

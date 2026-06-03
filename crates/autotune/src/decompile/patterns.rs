@@ -70,6 +70,31 @@ impl SassSemanticPattern {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassSemanticPatternCategory {
+    Bf16WidenBits,
+    F32MulAddPair,
+    AddressPair,
+    WarpReduceSum,
+}
+
+impl SassSemanticPatternCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bf16WidenBits => "bf16-widen-bits",
+            Self::F32MulAddPair => "f32-mul-add-pair",
+            Self::AddressPair => "address-pair",
+            Self::WarpReduceSum => "warp-reduce-sum",
+        }
+    }
+}
+
+impl fmt::Display for SassSemanticPatternCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub enum SassSemanticPatternKind {
     Bf16WidenBits {
@@ -100,13 +125,17 @@ pub enum SassSemanticPatternKind {
 }
 
 impl SassSemanticPatternKind {
-    pub fn name(&self) -> &'static str {
+    pub fn category(&self) -> SassSemanticPatternCategory {
         match self {
-            Self::Bf16WidenBits { .. } => "bf16-widen-bits",
-            Self::F32MulAddPair { .. } => "f32-mul-add-pair",
-            Self::AddressPair { .. } => "address-pair",
-            Self::WarpReduceSum { .. } => "warp-reduce-sum",
+            Self::Bf16WidenBits { .. } => SassSemanticPatternCategory::Bf16WidenBits,
+            Self::F32MulAddPair { .. } => SassSemanticPatternCategory::F32MulAddPair,
+            Self::AddressPair { .. } => SassSemanticPatternCategory::AddressPair,
+            Self::WarpReduceSum { .. } => SassSemanticPatternCategory::WarpReduceSum,
         }
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.category().as_str()
     }
 }
 

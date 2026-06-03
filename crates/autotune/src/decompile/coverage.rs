@@ -14,7 +14,8 @@ use super::{
     SassBlockTerminator, SassCfgEdgeKind, SassLiftedModule, SassLiftedOpClass, SassLiftedOpDetail,
     SassLiftedOpKind, SassLiftedSemantics, SassLiftedValueRef, SassMemoryAccessKind, SassModifier,
     SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind, SassOpcodeCatalogSource,
-    SassPatternModule, SassRegionKind, SassRegionPath, SassValueOpKind, analyze_sass_ir,
+    SassPatternConfidence, SassPatternModule, SassRegionKind, SassRegionPath,
+    SassSemanticPatternCategory, SassSemanticPatternKind, SassValueOpKind, analyze_sass_ir,
     known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
     render_sass_file_side_by_side,
 };
@@ -66,7 +67,7 @@ pub struct SassCoverageReport {
     pub opcode_probe_targets: Vec<SassOpcodeProbeTarget>,
     pub opcode_counts: Vec<SassOpcodeCount>,
     pub opcode_signature_counts: Vec<SassOpcodeCount>,
-    pub semantic_pattern_counts: Vec<SassOpcodeCount>,
+    pub semantic_pattern_counts: Vec<SassSemanticPatternCount>,
     pub semantic_patterns: Vec<SassCoverageSemanticPattern>,
     pub cfg_blocks: Vec<SassCoverageBasicBlock>,
     pub cfg_edges: Vec<SassCoverageCfgEdge>,
@@ -138,6 +139,12 @@ pub struct SassCoverageFileReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassOpcodeCount {
     pub opcode: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassSemanticPatternCount {
+    pub category: SassSemanticPatternCategory,
     pub count: usize,
 }
 
@@ -385,9 +392,8 @@ pub struct SassCoverageSemanticPattern {
     pub function: String,
     pub start_address: u64,
     pub end_address: u64,
-    pub kind: String,
-    pub confidence: String,
-    pub detail: String,
+    pub kind: SassSemanticPatternKind,
+    pub confidence: SassPatternConfidence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -575,7 +581,7 @@ pub fn run_sass_coverage_scan(
     seed_known_opcode_catalog(&mut opcode_catalog);
     let mut opcode_counts = BTreeMap::<SassOpcode, usize>::new();
     let mut opcode_signature_counts = BTreeMap::<SassOpcodeSignature, usize>::new();
-    let mut semantic_pattern_counts = BTreeMap::<String, usize>::new();
+    let mut semantic_pattern_counts = BTreeMap::<SassSemanticPatternCategory, usize>::new();
     let mut semantic_patterns = Vec::new();
     let mut cfg_blocks = Vec::new();
     let mut cfg_edges = Vec::new();
@@ -621,7 +627,7 @@ pub fn run_sass_coverage_scan(
                 for function in &patterns.functions {
                     for pattern in &function.patterns {
                         *semantic_pattern_counts
-                            .entry(pattern.kind_name().to_string())
+                            .entry(pattern.kind.category())
                             .or_default() += 1;
                     }
                 }
@@ -736,7 +742,7 @@ pub fn run_sass_coverage_scan(
     let opcode_catalog = opcode_catalog_entries(opcode_catalog);
     let opcode_counts = sorted_opcode_counts(opcode_counts);
     let opcode_signature_counts = sorted_opcode_signature_counts(opcode_signature_counts);
-    let semantic_pattern_counts = sorted_counts(semantic_pattern_counts);
+    let semantic_pattern_counts = sorted_semantic_pattern_counts(semantic_pattern_counts);
     let parsed_file_count = files
         .iter()
         .filter(|file| file.parse_error.is_none())
@@ -1116,9 +1122,8 @@ fn append_semantic_patterns(
                 function: function.name.clone(),
                 start_address: pattern.start_address,
                 end_address: pattern.end_address,
-                kind: pattern.kind_name().to_string(),
-                confidence: pattern.confidence.to_string(),
-                detail: format!("{:?}", pattern.kind),
+                kind: pattern.kind.clone(),
+                confidence: pattern.confidence,
             });
         }
     }
@@ -1357,6 +1362,21 @@ fn sorted_opcode_signature_counts(
     )
 }
 
+fn sorted_semantic_pattern_counts(
+    counts: BTreeMap<SassSemanticPatternCategory, usize>,
+) -> Vec<SassSemanticPatternCount> {
+    let mut counts = counts
+        .into_iter()
+        .map(|(category, count)| SassSemanticPatternCount { category, count })
+        .collect::<Vec<_>>();
+    counts.sort_by(|lhs, rhs| {
+        rhs.count
+            .cmp(&lhs.count)
+            .then_with(|| lhs.category.cmp(&rhs.category))
+    });
+    counts
+}
+
 fn write_coverage_reports(report: &SassCoverageReport) -> Result<(), Box<dyn Error>> {
     fs::write(
         &report.summary_path,
@@ -1385,7 +1405,7 @@ fn write_coverage_reports(report: &SassCoverageReport) -> Result<(), Box<dyn Err
     )?;
     fs::write(
         &report.semantic_pattern_frequency_path,
-        render_counts_tsv("semantic_pattern", &report.semantic_pattern_counts).as_bytes(),
+        render_semantic_pattern_counts_tsv(&report.semantic_pattern_counts).as_bytes(),
     )?;
     fs::write(
         &report.cfg_blocks_path,
@@ -1536,7 +1556,7 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
         writeln!(out).expect("write to string");
         writeln!(out, "top_semantic_patterns").expect("write to string");
         for count in report.semantic_pattern_counts.iter().take(32) {
-            writeln!(out, "{}\t{}", count.opcode, count.count).expect("write to string");
+            writeln!(out, "{}\t{}", count.category, count.count).expect("write to string");
         }
     }
     if !report.opcode_probe_targets.is_empty() {
@@ -1686,9 +1706,9 @@ fn render_semantic_patterns_tsv(report: &SassCoverageReport) -> String {
             tsv(&pattern.function),
             pattern.start_address,
             pattern.end_address,
-            tsv(&pattern.kind),
-            tsv(&pattern.confidence),
-            tsv(&pattern.detail),
+            tsv(pattern.kind.name()),
+            tsv(&pattern.confidence.to_string()),
+            tsv(&format!("{:?}", pattern.kind)),
         )
         .expect("write to string");
     }
@@ -2061,6 +2081,16 @@ fn render_counts_tsv(header: &str, counts: &[SassOpcodeCount]) -> String {
     writeln!(out, "{header}\tcount").expect("write to string");
     for count in counts {
         writeln!(out, "{}\t{}", tsv(&count.opcode), count.count).expect("write to string");
+    }
+    out
+}
+
+fn render_semantic_pattern_counts_tsv(counts: &[SassSemanticPatternCount]) -> String {
+    let mut out = String::new();
+    writeln!(out, "semantic_pattern\tcount").expect("write to string");
+    for count in counts {
+        writeln!(out, "{}\t{}", tsv(&count.category.to_string()), count.count)
+            .expect("write to string");
     }
     out
 }
