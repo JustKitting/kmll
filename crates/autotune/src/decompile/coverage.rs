@@ -11,6 +11,7 @@ use nn_rust_inference::runtime;
 use super::{
     KernelIrModule, KernelIrOpKind, KnownSassOpcode, MemoryAddressBase, MemoryAddressImmediate,
     MemorySpace, RegisterRef, SassAnalysisModule, SassLiftedModule, SassLiftedOpClass,
+    SassLiftedOpDetail, SassLiftedOpKind, SassLiftedSemantics, SassLiftedValueRef,
     SassMemoryAccessKind, SassModifier, SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind,
     SassOpcodeCatalogSource, SassPatternModule, SassRegionPath, analyze_sass_ir,
     known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
@@ -521,14 +522,14 @@ pub struct SassCoverageLiftedOp {
     pub address: u64,
     pub block_id: Option<usize>,
     pub predicate: Option<String>,
-    pub opcode: String,
-    pub class: String,
-    pub kind: String,
-    pub semantics: String,
-    pub inputs: Vec<String>,
-    pub outputs: Vec<String>,
+    pub opcode: SassOpcode,
+    pub class: SassLiftedOpClass,
+    pub kind: SassLiftedOpKind,
+    pub semantics: SassLiftedSemantics,
+    pub inputs: Vec<SassLiftedValueRef>,
+    pub outputs: Vec<SassLiftedValueRef>,
     pub source_operands: Vec<String>,
-    pub detail: String,
+    pub detail: SassLiftedOpDetail,
     pub source: String,
 }
 
@@ -1290,14 +1291,14 @@ fn append_analysis(
                     address: op.address,
                     block_id: op.block_id,
                     predicate: op.predicate.clone(),
-                    opcode: op.opcode.to_string(),
-                    class: op.class.to_string(),
-                    kind: op.kind.to_string(),
-                    semantics: op.semantics.to_string(),
-                    inputs: op.inputs.iter().map(|value| value.name()).collect(),
-                    outputs: op.outputs.iter().map(|value| value.name()).collect(),
+                    opcode: op.opcode.clone(),
+                    class: op.class,
+                    kind: op.kind,
+                    semantics: op.semantics.clone(),
+                    inputs: op.inputs.clone(),
+                    outputs: op.outputs.clone(),
                     source_operands: op.source_operands.clone(),
-                    detail: op.detail.to_string(),
+                    detail: op.detail,
                     source: op.source.clone(),
                 });
             }
@@ -1993,14 +1994,14 @@ fn render_lifted_ops_tsv(report: &SassCoverageReport) -> String {
                 .map(|block| block.to_string())
                 .unwrap_or_default(),
             tsv(op.predicate.as_deref().unwrap_or("")),
-            tsv(&op.opcode),
-            tsv(&op.class),
-            tsv(&op.kind),
-            tsv(&op.semantics),
-            tsv(&op.inputs.join(",")),
-            tsv(&op.outputs.join(",")),
+            tsv(&op.opcode.to_string()),
+            tsv(&op.class.to_string()),
+            tsv(&op.kind.to_string()),
+            tsv(&op.semantics.to_string()),
+            tsv(&display_lifted_value_refs(&op.inputs)),
+            tsv(&display_lifted_value_refs(&op.outputs)),
             tsv(&op.source_operands.join(",")),
-            tsv(&op.detail),
+            tsv(&op.detail.to_string()),
             tsv(&op.source),
         )
         .expect("write to string");
@@ -2084,6 +2085,14 @@ fn display_list<T: fmt::Display>(values: &[T]) -> String {
 
 fn display_optional<T: fmt::Display>(value: Option<&T>) -> String {
     value.map(ToString::to_string).unwrap_or_default()
+}
+
+fn display_lifted_value_refs(values: &[SassLiftedValueRef]) -> String {
+    values
+        .iter()
+        .map(SassLiftedValueRef::name)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn render_unsupported_tsv(report: &SassCoverageReport) -> String {

@@ -1636,13 +1636,22 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         report
             .lifted_ops
             .iter()
-            .any(|op| op.class == "memory" && op.kind == "load")
+            .any(|op| op.class == SassLiftedOpClass::Memory && op.kind == SassLiftedOpKind::Load)
     );
     assert!(report.lifted_ops.iter().any(|op| {
-        op.class == "memory"
-            && op.kind == "load"
-            && op.semantics.contains(
-                "load(space=descriptor,dst=R2,address=desc[UR4][R0.64],width=-,modifiers=[E])",
+        op.class == SassLiftedOpClass::Memory
+            && op.kind == SassLiftedOpKind::Load
+            && matches!(
+                &op.semantics,
+                SassLiftedSemantics::Load {
+                    space: MemorySpace::Descriptor,
+                    dst,
+                    address,
+                    width_bits: None,
+                    modifiers,
+                } if dst == &reg("R2")
+                    && address.to_string() == "desc[UR4][R0.64]"
+                    && modifiers.iter().any(|modifier| modifier.to_string() == "E")
             )
     }));
     let lifted_ops_tsv =
