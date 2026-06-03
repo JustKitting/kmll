@@ -38,12 +38,12 @@ pub use self::{
         SassCoverageLiveRange, SassCoverageMemoryAccess, SassCoverageNaturalLoop,
         SassCoverageOptions, SassCoverageReachingUse, SassCoverageRegion, SassCoverageReport,
         SassCoverageSemanticPattern, SassCoverageSsaValue, SassCoverageValueOp,
-        SassOpcodeCatalogEntry, SassOpcodeCount, SassOpcodeProbeTarget, SassUnsupportedInstruction,
-        run_sass_coverage_scan,
+        SassOpcodeCatalogEntry, SassOpcodeCount, SassOpcodeCoverageState, SassOpcodeProbeTarget,
+        SassOpcodeSupport, SassUnsupportedInstruction, run_sass_coverage_scan,
     },
     coverage_compare::{
-        SassCoverageComparisonOptions, SassCoverageComparisonReport, SassCoverageOpcodeDelta,
-        SassCoverageProbeTargetDelta, run_sass_coverage_comparison,
+        SassCoverageComparisonOptions, SassCoverageComparisonReport, SassCoverageOpcodeChange,
+        SassCoverageOpcodeDelta, SassCoverageProbeTargetDelta, run_sass_coverage_comparison,
     },
     fixtures::{
         SimpleKernelFixture, SimpleKernelFixtureKind, all_simple_kernel_fixture_kinds,

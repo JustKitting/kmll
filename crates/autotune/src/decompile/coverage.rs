@@ -10,7 +10,7 @@ use nn_rust_inference::runtime;
 
 use super::{
     KernelIrModule, KernelIrOpKind, KnownSassOpcode, SassAnalysisModule, SassLiftedModule,
-    SassModifier, SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind,
+    SassLiftedOpClass, SassModifier, SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind,
     SassOpcodeCatalogSource, SassPatternModule, SassRegionPath, analyze_sass_ir,
     known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
     render_sass_file_side_by_side,
@@ -165,9 +165,94 @@ pub struct SassOpcodeCatalogEntry {
     pub known_sources: Vec<String>,
     pub classes: Vec<String>,
     pub kinds: Vec<String>,
-    pub support: String,
-    pub coverage: String,
+    pub support: SassOpcodeSupport,
+    pub coverage: SassOpcodeCoverageState,
     pub unsupported_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassOpcodeSupport {
+    Mapped,
+    Unsupported,
+    Mixed,
+    Unmapped,
+}
+
+impl SassOpcodeSupport {
+    fn from_counts(
+        locally_mapped: bool,
+        observed: bool,
+        instruction_count: usize,
+        unsupported_count: usize,
+    ) -> Self {
+        if locally_mapped && unsupported_count == 0 {
+            Self::Mapped
+        } else if observed && unsupported_count == instruction_count {
+            Self::Unsupported
+        } else if observed && unsupported_count > 0 {
+            Self::Mixed
+        } else {
+            Self::Unmapped
+        }
+    }
+}
+
+impl fmt::Display for SassOpcodeSupport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Mapped => f.write_str("mapped"),
+            Self::Unsupported => f.write_str("unsupported"),
+            Self::Mixed => f.write_str("mixed"),
+            Self::Unmapped => f.write_str("unmapped"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassOpcodeCoverageState {
+    KnownObservedMapped,
+    KnownObservedPartial,
+    KnownObservedUnmapped,
+    KnownUnobservedMapped,
+    KnownUnobservedUnmapped,
+    ObservedMapped,
+    ObservedPartial,
+    ObservedUnregisteredUnmapped,
+    Empty,
+    Absent,
+}
+
+impl SassOpcodeCoverageState {
+    fn from_catalog(known: bool, observed: bool, support: SassOpcodeSupport) -> Self {
+        match (known, observed, support) {
+            (true, true, SassOpcodeSupport::Mapped) => Self::KnownObservedMapped,
+            (true, true, SassOpcodeSupport::Mixed) => Self::KnownObservedPartial,
+            (true, true, _) => Self::KnownObservedUnmapped,
+            (true, false, SassOpcodeSupport::Mapped) => Self::KnownUnobservedMapped,
+            (true, false, _) => Self::KnownUnobservedUnmapped,
+            (false, true, SassOpcodeSupport::Mapped) => Self::ObservedMapped,
+            (false, true, SassOpcodeSupport::Mixed) => Self::ObservedPartial,
+            (false, true, _) => Self::ObservedUnregisteredUnmapped,
+            (false, false, _) => Self::Empty,
+        }
+    }
+}
+
+impl fmt::Display for SassOpcodeCoverageState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::KnownObservedMapped => f.write_str("known-observed-mapped"),
+            Self::KnownObservedPartial => f.write_str("known-observed-partial"),
+            Self::KnownObservedUnmapped => f.write_str("known-observed-unmapped"),
+            Self::KnownUnobservedMapped => f.write_str("known-unobserved-mapped"),
+            Self::KnownUnobservedUnmapped => f.write_str("known-unobserved-unmapped"),
+            Self::ObservedMapped => f.write_str("observed-mapped"),
+            Self::ObservedPartial => f.write_str("observed-partial"),
+            Self::ObservedUnregisteredUnmapped => f.write_str("observed-unregistered-unmapped"),
+            Self::Empty => f.write_str("empty"),
+            Self::Absent => f.write_str("absent"),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -187,28 +272,13 @@ struct OpcodeCatalogBuilder {
 impl OpcodeCatalogBuilder {
     fn into_entry(self, opcode: String) -> SassOpcodeCatalogEntry {
         let observed = self.instruction_count > 0;
-        let support = if self.locally_mapped && self.unsupported_count == 0 {
-            "mapped"
-        } else if observed && self.unsupported_count == self.instruction_count {
-            "unsupported"
-        } else if observed && self.unsupported_count > 0 {
-            "mixed"
-        } else {
-            "unmapped"
-        }
-        .to_string();
-        let coverage = match (self.known, observed, support.as_str()) {
-            (true, true, "mapped") => "known-observed-mapped",
-            (true, true, "mixed") => "known-observed-partial",
-            (true, true, _) => "known-observed-unmapped",
-            (true, false, "mapped") => "known-unobserved-mapped",
-            (true, false, _) => "known-unobserved-unmapped",
-            (false, true, "mapped") => "observed-mapped",
-            (false, true, "mixed") => "observed-partial",
-            (false, true, _) => "observed-unregistered-unmapped",
-            (false, false, _) => "empty",
-        }
-        .to_string();
+        let support = SassOpcodeSupport::from_counts(
+            self.locally_mapped,
+            observed,
+            self.instruction_count,
+            self.unsupported_count,
+        );
+        let coverage = SassOpcodeCoverageState::from_catalog(self.known, observed, support);
         let signatures = self
             .signatures
             .into_iter()
@@ -897,7 +967,7 @@ fn append_opcode_catalog_lifted_ops(
     for function in &lifted.functions {
         for op in &function.ops {
             let entry = opcode_catalog.entry(op.opcode.clone()).or_default();
-            if op.class.to_string() != "unsupported" {
+            if op.class != SassLiftedOpClass::Unsupported {
                 entry.locally_mapped = true;
             }
             entry.classes.insert(op.class.into());
@@ -1533,8 +1603,8 @@ fn render_opcode_catalog_tsv(report: &SassCoverageReport) -> String {
             tsv(&entry.known_sources.join(",")),
             tsv(&entry.classes.join(",")),
             tsv(&entry.kinds.join(",")),
-            tsv(&entry.support),
-            tsv(&entry.coverage),
+            tsv(&entry.support.to_string()),
+            tsv(&entry.coverage.to_string()),
             entry.unsupported_count,
         )
         .expect("write to string");

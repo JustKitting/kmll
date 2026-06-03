@@ -1,14 +1,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
-    fmt::Write as _,
+    fmt::{self, Write as _},
     fs,
     path::PathBuf,
 };
 
 use super::{
     SassCoverageOptions, SassCoverageReport, SassOpcode, SassOpcodeCatalogEntry,
-    run_sass_coverage_scan,
+    SassOpcodeCoverageState, run_sass_coverage_scan,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +39,7 @@ pub struct SassCoverageComparisonReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageOpcodeDelta {
     pub opcode: String,
-    pub change: String,
+    pub change: SassCoverageOpcodeChange,
     pub baseline_known: bool,
     pub candidate_known: bool,
     pub baseline_observed: bool,
@@ -48,19 +48,38 @@ pub struct SassCoverageOpcodeDelta {
     pub candidate_locally_mapped: bool,
     pub baseline_instruction_count: usize,
     pub candidate_instruction_count: usize,
-    pub baseline_coverage: String,
-    pub candidate_coverage: String,
+    pub baseline_coverage: SassOpcodeCoverageState,
+    pub candidate_coverage: SassOpcodeCoverageState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageProbeTargetDelta {
     pub opcode: String,
-    pub baseline_coverage: String,
-    pub candidate_coverage: String,
+    pub baseline_coverage: SassOpcodeCoverageState,
+    pub candidate_coverage: SassOpcodeCoverageState,
     pub candidate_instruction_count: usize,
     pub classes: Vec<String>,
     pub kinds: Vec<String>,
     pub architectures: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassCoverageOpcodeChange {
+    NewlyObserved,
+    NoLongerObserved,
+    CoverageChanged,
+    CountChanged,
+}
+
+impl fmt::Display for SassCoverageOpcodeChange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NewlyObserved => f.write_str("newly-observed"),
+            Self::NoLongerObserved => f.write_str("no-longer-observed"),
+            Self::CoverageChanged => f.write_str("coverage-changed"),
+            Self::CountChanged => f.write_str("count-changed"),
+        }
+    }
 }
 
 pub fn run_sass_coverage_comparison(
@@ -84,19 +103,19 @@ pub fn run_sass_coverage_comparison(
     let new_probe_targets = new_probe_targets(&candidate_report, &opcode_deltas);
     let newly_observed_opcode_count = opcode_deltas
         .iter()
-        .filter(|delta| delta.change == "newly-observed")
+        .filter(|delta| delta.change == SassCoverageOpcodeChange::NewlyObserved)
         .count();
     let no_longer_observed_opcode_count = opcode_deltas
         .iter()
-        .filter(|delta| delta.change == "no-longer-observed")
+        .filter(|delta| delta.change == SassCoverageOpcodeChange::NoLongerObserved)
         .count();
     let coverage_changed_opcode_count = opcode_deltas
         .iter()
-        .filter(|delta| delta.change == "coverage-changed")
+        .filter(|delta| delta.change == SassCoverageOpcodeChange::CoverageChanged)
         .count();
     let count_changed_opcode_count = opcode_deltas
         .iter()
-        .filter(|delta| delta.change == "count-changed")
+        .filter(|delta| delta.change == SassCoverageOpcodeChange::CountChanged)
         .count();
 
     let report = SassCoverageComparisonReport {
@@ -137,7 +156,7 @@ fn opcode_deltas(
             let change = opcode_change(baseline, candidate)?;
             Some(SassCoverageOpcodeDelta {
                 opcode: opcode.to_string(),
-                change: change.to_string(),
+                change,
                 baseline_known: catalog_known(baseline),
                 candidate_known: catalog_known(candidate),
                 baseline_observed: catalog_observed(baseline),
@@ -223,20 +242,20 @@ fn catalog_by_opcode(report: &SassCoverageReport) -> BTreeMap<SassOpcode, &SassO
 fn opcode_change(
     baseline: Option<&&SassOpcodeCatalogEntry>,
     candidate: Option<&&SassOpcodeCatalogEntry>,
-) -> Option<&'static str> {
+) -> Option<SassCoverageOpcodeChange> {
     let baseline_observed = catalog_observed(baseline);
     let candidate_observed = catalog_observed(candidate);
     if !baseline_observed && candidate_observed {
-        return Some("newly-observed");
+        return Some(SassCoverageOpcodeChange::NewlyObserved);
     }
     if baseline_observed && !candidate_observed {
-        return Some("no-longer-observed");
+        return Some(SassCoverageOpcodeChange::NoLongerObserved);
     }
     if catalog_coverage(baseline) != catalog_coverage(candidate) {
-        return Some("coverage-changed");
+        return Some(SassCoverageOpcodeChange::CoverageChanged);
     }
     if catalog_instruction_count(baseline) != catalog_instruction_count(candidate) {
-        return Some("count-changed");
+        return Some(SassCoverageOpcodeChange::CountChanged);
     }
     None
 }
@@ -257,10 +276,10 @@ fn catalog_instruction_count(entry: Option<&&SassOpcodeCatalogEntry>) -> usize {
     entry.map(|entry| entry.instruction_count).unwrap_or(0)
 }
 
-fn catalog_coverage(entry: Option<&&SassOpcodeCatalogEntry>) -> String {
+fn catalog_coverage(entry: Option<&&SassOpcodeCatalogEntry>) -> SassOpcodeCoverageState {
     entry
-        .map(|entry| entry.coverage.clone())
-        .unwrap_or_else(|| "absent".to_string())
+        .map(|entry| entry.coverage)
+        .unwrap_or(SassOpcodeCoverageState::Absent)
 }
 
 fn write_comparison_reports(report: &SassCoverageComparisonReport) -> Result<(), Box<dyn Error>> {
@@ -380,7 +399,7 @@ fn render_opcode_delta_tsv(report: &SassCoverageComparisonReport) -> String {
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&delta.opcode),
-            tsv(&delta.change),
+            tsv(&delta.change.to_string()),
             delta.baseline_known,
             delta.candidate_known,
             delta.baseline_observed,
@@ -389,8 +408,8 @@ fn render_opcode_delta_tsv(report: &SassCoverageComparisonReport) -> String {
             delta.candidate_locally_mapped,
             delta.baseline_instruction_count,
             delta.candidate_instruction_count,
-            tsv(&delta.baseline_coverage),
-            tsv(&delta.candidate_coverage),
+            tsv(&delta.baseline_coverage.to_string()),
+            tsv(&delta.candidate_coverage.to_string()),
         )
         .expect("write to string");
     }
@@ -409,8 +428,8 @@ fn render_probe_target_delta_tsv(targets: &[SassCoverageProbeTargetDelta]) -> St
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&target.opcode),
-            tsv(&target.baseline_coverage),
-            tsv(&target.candidate_coverage),
+            tsv(&target.baseline_coverage.to_string()),
+            tsv(&target.candidate_coverage.to_string()),
             target.candidate_instruction_count,
             tsv(&target.classes.join(",")),
             tsv(&target.kinds.join(",")),

@@ -1476,8 +1476,11 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         .iter()
         .find(|entry| entry.opcode == "MYSTERY")
         .expect("unsupported opcode should be catalogued");
-    assert_eq!(mystery_catalog.support, "unsupported");
-    assert_eq!(mystery_catalog.coverage, "observed-unregistered-unmapped");
+    assert_eq!(mystery_catalog.support, SassOpcodeSupport::Unsupported);
+    assert_eq!(
+        mystery_catalog.coverage,
+        SassOpcodeCoverageState::ObservedUnregisteredUnmapped
+    );
     assert!(!mystery_catalog.known);
     assert!(mystery_catalog.observed);
     assert!(!mystery_catalog.locally_mapped);
@@ -1493,11 +1496,14 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         .iter()
         .find(|entry| entry.opcode == "IADD")
         .expect("IADD should be catalogued");
-    assert_eq!(iadd_catalog.support, "mapped");
+    assert_eq!(iadd_catalog.support, SassOpcodeSupport::Mapped);
     assert!(iadd_catalog.known);
     assert!(iadd_catalog.observed);
     assert!(iadd_catalog.locally_mapped);
-    assert_eq!(iadd_catalog.coverage, "known-observed-mapped");
+    assert_eq!(
+        iadd_catalog.coverage,
+        SassOpcodeCoverageState::KnownObservedMapped
+    );
     assert!(
         iadd_catalog
             .source_formats
@@ -1518,8 +1524,11 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(hmma_catalog.known);
     assert!(!hmma_catalog.observed);
     assert!(hmma_catalog.locally_mapped);
-    assert_eq!(hmma_catalog.support, "mapped");
-    assert_eq!(hmma_catalog.coverage, "known-unobserved-mapped");
+    assert_eq!(hmma_catalog.support, SassOpcodeSupport::Mapped);
+    assert_eq!(
+        hmma_catalog.coverage,
+        SassOpcodeCoverageState::KnownUnobservedMapped
+    );
     assert!(
         hmma_catalog
             .architectures
@@ -1707,15 +1716,22 @@ fn coverage_comparison_reports_resolved_probe_targets() {
         report
             .opcode_deltas
             .iter()
-            .any(|delta| delta.opcode == "IADD" && delta.change == "newly-observed")
+            .any(|delta| delta.opcode == "IADD"
+                && delta.change == SassCoverageOpcodeChange::NewlyObserved)
     );
     let resolved_iadd = report
         .resolved_probe_targets
         .iter()
         .find(|target| target.opcode == "IADD")
         .expect("candidate IADD should resolve a baseline probe target");
-    assert_eq!(resolved_iadd.baseline_coverage, "known-unobserved-mapped");
-    assert_eq!(resolved_iadd.candidate_coverage, "known-observed-mapped");
+    assert_eq!(
+        resolved_iadd.baseline_coverage,
+        SassOpcodeCoverageState::KnownUnobservedMapped
+    );
+    assert_eq!(
+        resolved_iadd.candidate_coverage,
+        SassOpcodeCoverageState::KnownObservedMapped
+    );
     assert!(resolved_iadd.candidate_instruction_count > 0);
     let resolved_tsv = fs::read_to_string(&report.resolved_probe_targets_path)
         .expect("resolved probe target TSV should read");
