@@ -620,6 +620,40 @@ fn semantic_patterns_recover_bf16_widen_and_warp_reduce() {
 }
 
 #[test]
+fn address_pair_patterns_match_interleaved_low_high_registers() {
+    const INTERLEAVED_LEA_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.interleaved_lea,"ax",@progbits
+        .global interleaved_lea
+interleaved_lea:
+.text.interleaved_lea:
+        /*0000*/                   LEA R4, P2, R26, UR10, 0x2 ;                 /* 0x0 */
+        /*0010*/                   LDCU.64 UR14, c[0x0][0x358] ;                /* 0x0 */
+        /*0020*/                   LEA R2, P1, R8, UR11, 0x7 ;                  /* 0x0 */
+        /*0030*/                   LEA.HI.X R5, R26, RZ, RZ, 0x2, P2 ;          /* 0x0 */
+        /*0040*/                   LEA.HI.X R3, R8, RZ, RZ, 0x7, P1 ;           /* 0x0 */
+        /*0050*/                   EXIT ;                                       /* 0x0 */
+"#;
+
+    let module = parse_nvidia_sass(INTERLEAVED_LEA_SASS).expect("interleaved LEA should parse");
+    let ir = lift_sass_module(&module);
+    let patterns = recover_sass_patterns(&ir);
+    let address_pairs = patterns.functions[0]
+        .patterns
+        .iter()
+        .filter_map(|pattern| match &pattern.kind {
+            SassSemanticPatternKind::AddressPair {
+                low_dst, high_dst, ..
+            } => Some((low_dst.as_str(), high_dst.as_str())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(address_pairs, [("R4", "R5"), ("R2", "R3")]);
+}
+
+#[test]
 fn analysis_recovers_cfg_edges_and_register_dataflow() {
     let module = parse_nvidia_sass(CFG_SASS).expect("cfg fixture should parse");
     let ir = lift_sass_module(&module);

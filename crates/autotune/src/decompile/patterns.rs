@@ -1,4 +1,4 @@
-use std::fmt::Write as _;
+use std::{collections::BTreeSet, fmt::Write as _};
 
 use super::{KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind};
 
@@ -226,9 +226,8 @@ fn recover_f32_mul_add_pairs(function: &KernelIrFunction, patterns: &mut Vec<Sas
 }
 
 fn recover_address_pairs(function: &KernelIrFunction, patterns: &mut Vec<SassSemanticPattern>) {
-    for ops in function.ops.windows(2) {
-        let low = &ops[0];
-        let high = &ops[1];
+    let mut used_high_indices = BTreeSet::new();
+    for (low_index, low) in function.ops.iter().enumerate() {
         let KernelIrOpKind::AddressCalc {
             dst: low_dst,
             inputs: low_inputs,
@@ -236,23 +235,33 @@ fn recover_address_pairs(function: &KernelIrFunction, patterns: &mut Vec<SassSem
         else {
             continue;
         };
-        let KernelIrOpKind::AddressCalc {
-            dst: high_dst,
-            inputs: high_inputs,
-        } = &high.kind
+        if low.source_opcode != "LEA" || is_lea_high_x(low) {
+            continue;
+        }
+        let Some((high_index, high, high_dst, high_inputs)) = function.ops[low_index + 1..]
+            .iter()
+            .enumerate()
+            .take_while(|(_, candidate)| !stops_address_pair_scan(candidate, low_dst))
+            .filter_map(|(relative_index, high)| {
+                let high_index = low_index + 1 + relative_index;
+                if used_high_indices.contains(&high_index) || !is_lea_high_x(high) {
+                    return None;
+                }
+                let KernelIrOpKind::AddressCalc {
+                    dst: high_dst,
+                    inputs: high_inputs,
+                } = &high.kind
+                else {
+                    return None;
+                };
+                (is_next_register(low_dst, high_dst) && lea_carry_matches(low_inputs, high_inputs))
+                    .then_some((high_index, high, high_dst, high_inputs))
+            })
+            .next()
         else {
             continue;
         };
-        if low.source_opcode != "LEA"
-            || high.source_opcode != "LEA"
-            || !high
-                .source_modifiers
-                .iter()
-                .any(|modifier| modifier == "HI")
-            || !high.source_modifiers.iter().any(|modifier| modifier == "X")
-        {
-            continue;
-        }
+        used_high_indices.insert(high_index);
         patterns.push(SassSemanticPattern {
             start_address: low.address,
             end_address: high.address,
@@ -266,6 +275,58 @@ fn recover_address_pairs(function: &KernelIrFunction, patterns: &mut Vec<SassSem
             confidence: SassPatternConfidence::ExactOpcodeSequence,
         });
     }
+}
+
+fn is_lea_high_x(op: &KernelIrOp) -> bool {
+    op.source_opcode == "LEA"
+        && op.source_modifiers.iter().any(|modifier| modifier == "HI")
+        && op.source_modifiers.iter().any(|modifier| modifier == "X")
+}
+
+fn stops_address_pair_scan(op: &KernelIrOp, low_dst: &str) -> bool {
+    matches!(
+        &op.kind,
+        KernelIrOpKind::Branch { .. }
+            | KernelIrOpKind::Call { .. }
+            | KernelIrOpKind::Return { .. }
+            | KernelIrOpKind::Exit { .. }
+    ) || op.defines(low_dst)
+}
+
+fn lea_carry_matches(low_inputs: &[String], high_inputs: &[String]) -> bool {
+    let Some(low_carry) = low_inputs
+        .first()
+        .filter(|input| is_predicate_register(input))
+    else {
+        return true;
+    };
+    high_inputs.last() == Some(low_carry)
+}
+
+fn is_predicate_register(input: &str) -> bool {
+    let input = input.trim_start_matches('!');
+    input == "PT" || input == "UPT" || input.starts_with('P') || input.starts_with("UP")
+}
+
+fn is_next_register(low: &str, high: &str) -> bool {
+    let Some((low_prefix, low_index)) = split_numbered_register(low) else {
+        return false;
+    };
+    let Some((high_prefix, high_index)) = split_numbered_register(high) else {
+        return false;
+    };
+    low_prefix == high_prefix && high_index == low_index + 1
+}
+
+fn split_numbered_register(register: &str) -> Option<(&str, u32)> {
+    let register = register.split('.').next().unwrap_or(register);
+    for prefix in ["UR", "R"] {
+        if let Some(rest) = register.strip_prefix(prefix) {
+            let index = rest.parse::<u32>().ok()?;
+            return Some((prefix, index));
+        }
+    }
+    None
 }
 
 fn recover_warp_reduce_sum(function: &KernelIrFunction, patterns: &mut Vec<SassSemanticPattern>) {
