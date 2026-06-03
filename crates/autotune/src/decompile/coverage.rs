@@ -9,13 +9,13 @@ use std::{
 use nn_rust_inference::runtime;
 
 use super::{
-    KernelIrModule, KernelIrOpKind, KnownSassOpcode, MemoryAddressBase, MemoryAddressImmediate,
-    MemorySpace, RegisterRef, SassAnalysisModule, SassLiftedModule, SassLiftedOpClass,
-    SassLiftedOpDetail, SassLiftedOpKind, SassLiftedSemantics, SassLiftedValueRef,
-    SassMemoryAccessKind, SassModifier, SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind,
-    SassOpcodeCatalogSource, SassPatternModule, SassRegionPath, SassValueOpKind, analyze_sass_ir,
-    known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
-    render_sass_file_side_by_side,
+    ControlTarget, KernelIrModule, KernelIrOpKind, KnownSassOpcode, MemoryAddressBase,
+    MemoryAddressImmediate, MemorySpace, PredicateCondition, RegisterRef, SassAnalysisModule,
+    SassLiftedModule, SassLiftedOpClass, SassLiftedOpDetail, SassLiftedOpKind, SassLiftedSemantics,
+    SassLiftedValueRef, SassMemoryAccessKind, SassModifier, SassOpcode, SassOpcodeCatalogClass,
+    SassOpcodeCatalogKind, SassOpcodeCatalogSource, SassPatternModule, SassRegionKind,
+    SassRegionPath, SassValueOpKind, analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir,
+    parse_nvidia_sass, recover_sass_patterns, render_sass_file_side_by_side,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -445,16 +445,16 @@ pub struct SassCoverageRegion {
     pub depth: usize,
     pub path: SassRegionPath,
     pub local_rank: usize,
-    pub kind: String,
+    pub kind: SassRegionKind,
     pub header_block: Option<usize>,
     pub latch_block: Option<usize>,
     pub branch_block: Option<usize>,
     pub entry_blocks: Vec<usize>,
     pub blocks: Vec<usize>,
     pub op_addresses: Vec<u64>,
-    pub opcode_closure: Vec<String>,
-    pub condition: Option<String>,
-    pub target: Option<String>,
+    pub opcode_closure: Vec<SassOpcode>,
+    pub condition: Option<PredicateCondition>,
+    pub target: Option<ControlTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1201,20 +1201,16 @@ fn append_analysis(
                 depth: region.depth,
                 path: region.path.clone(),
                 local_rank: region.local_rank,
-                kind: region.kind.to_string(),
+                kind: region.kind,
                 header_block: region.header_block,
                 latch_block: region.latch_block,
                 branch_block: region.branch_block,
                 entry_blocks: region.entry_blocks.clone(),
                 blocks: region.blocks.clone(),
                 op_addresses: region.op_addresses.clone(),
-                opcode_closure: region
-                    .opcode_closure
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect(),
-                condition: region.condition.as_ref().map(ToString::to_string),
-                target: region.target.as_ref().map(ToString::to_string),
+                opcode_closure: region.opcode_closure.clone(),
+                condition: region.condition.clone(),
+                target: region.target.clone(),
             });
         }
         for op in &function.dataflow {
@@ -1823,7 +1819,7 @@ fn render_regions_tsv(report: &SassCoverageReport) -> String {
             region.depth,
             tsv(&region.path.to_string()),
             region.local_rank,
-            tsv(&region.kind),
+            tsv(&region.kind.to_string()),
             region
                 .header_block
                 .map(|block| block.to_string())
@@ -1839,9 +1835,9 @@ fn render_regions_tsv(report: &SassCoverageReport) -> String {
             tsv(&format_blocks(&region.entry_blocks)),
             tsv(&format_blocks(&region.blocks)),
             tsv(&format_addresses(&region.op_addresses)),
-            tsv(&region.opcode_closure.join(",")),
-            tsv(region.condition.as_deref().unwrap_or("")),
-            tsv(region.target.as_deref().unwrap_or("")),
+            tsv(&display_list(&region.opcode_closure)),
+            tsv(&display_optional(region.condition.as_ref())),
+            tsv(&display_optional(region.target.as_ref())),
         )
         .expect("write to string");
     }

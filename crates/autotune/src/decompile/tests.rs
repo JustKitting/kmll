@@ -1706,6 +1706,10 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(opcode_probe_targets_tsv.contains("HMMA"));
     assert!(opcode_probe_targets_tsv.contains("tensor-core opcode is mapped"));
     assert!(opcode_probe_targets_tsv.contains("generate-sass-artifact"));
+    assert!(report.regions.iter().any(|region| {
+        region.kind == SassRegionKind::Function
+            && region.opcode_closure.contains(&SassOpcode::new("BRA"))
+    }));
     let regions_tsv = fs::read_to_string(&report.regions_path).expect("regions TSV should read");
     assert!(regions_tsv.starts_with(
         "sass_path\tfunction\tregion_id\tparent_region\tchildren\tdepth\tpath\tlocal_rank\tkind"
