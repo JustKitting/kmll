@@ -691,7 +691,7 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
         KernelIrOpKind::Sync {
             ref kind,
             ref operands,
-        } if kind == "BSSY"
+        } if kind == &SassSyncKind::BarrierSet
             && matches!(&operands[0].kind, AggregateOperandKind::Register(register) if register == &reg("B0"))
     )));
     assert!(ops.iter().any(|op| matches!(

@@ -1,11 +1,11 @@
-use super::super::types::{AggregateOperand, KernelIrOpKind, SassMappingConfidence};
+use super::super::types::{AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassSyncKind};
 use super::LiftResult;
 
 pub(super) fn lift(opcode: &str, operands: &[AggregateOperand]) -> Option<LiftResult> {
     Some(match opcode {
         "BSSY" | "BSYNC" | "BAR" => (
             KernelIrOpKind::Sync {
-                kind: opcode.to_string(),
+                kind: SassSyncKind::parse(opcode),
                 operands: operands.to_vec(),
             },
             SassMappingConfidence::OpcodeHeuristic,

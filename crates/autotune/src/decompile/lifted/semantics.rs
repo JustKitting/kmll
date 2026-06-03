@@ -2,7 +2,7 @@ use std::fmt;
 
 use super::super::{
     AggregateOperand, ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace,
-    PredicateCondition, RegisterRef, SassOpcode, ScalarOperand,
+    PredicateCondition, RegisterRef, SassOpcode, SassSyncKind, ScalarOperand,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,7 +137,7 @@ pub enum SassLiftedSemantics {
         inputs: Vec<ScalarOperand>,
     },
     Sync {
-        kind: String,
+        kind: SassSyncKind,
         operands: Vec<AggregateOperand>,
     },
     NoOp,

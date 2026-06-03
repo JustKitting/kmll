@@ -222,7 +222,7 @@ pub enum KernelIrOpKind {
         inputs: Vec<ScalarOperand>,
     },
     Sync {
-        kind: String,
+        kind: SassSyncKind,
         operands: Vec<AggregateOperand>,
     },
     NoOp,
@@ -230,6 +230,41 @@ pub enum KernelIrOpKind {
         opcode: SassOpcode,
         reason: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassSyncKind {
+    BarrierSet,
+    BarrierSync,
+    Barrier,
+    Raw(String),
+}
+
+impl SassSyncKind {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        match raw.as_str() {
+            "BSSY" => Self::BarrierSet,
+            "BSYNC" => Self::BarrierSync,
+            "BAR" => Self::Barrier,
+            _ => Self::Raw(raw),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::BarrierSet => "BSSY",
+            Self::BarrierSync => "BSYNC",
+            Self::Barrier => "BAR",
+            Self::Raw(raw) => raw,
+        }
+    }
+}
+
+impl fmt::Display for SassSyncKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
