@@ -177,8 +177,8 @@ pub enum KernelIrOpKind {
     },
     CompareSet {
         dst: RegisterRef,
-        comparison: Option<String>,
-        dtype: Option<String>,
+        comparison: Option<SassComparisonKind>,
+        dtype: Option<SassCompareDType>,
         lhs: ScalarOperand,
         rhs: ScalarOperand,
     },
@@ -379,6 +379,124 @@ impl SassTensorScope {
 }
 
 impl fmt::Display for SassTensorScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassComparisonKind {
+    Equal,
+    NotEqual,
+    LessThan,
+    LessEqual,
+    GreaterThan,
+    GreaterEqual,
+    Lower,
+    LowerSame,
+    Higher,
+    HigherSame,
+    Nan,
+    Num,
+    Raw(String),
+}
+
+impl SassComparisonKind {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        match raw.as_str() {
+            "EQ" => Self::Equal,
+            "NE" => Self::NotEqual,
+            "LT" => Self::LessThan,
+            "LE" => Self::LessEqual,
+            "GT" => Self::GreaterThan,
+            "GE" => Self::GreaterEqual,
+            "LO" => Self::Lower,
+            "LS" => Self::LowerSame,
+            "HI" => Self::Higher,
+            "HS" => Self::HigherSame,
+            "NAN" => Self::Nan,
+            "NUM" => Self::Num,
+            _ => Self::Raw(raw),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Equal => "EQ",
+            Self::NotEqual => "NE",
+            Self::LessThan => "LT",
+            Self::LessEqual => "LE",
+            Self::GreaterThan => "GT",
+            Self::GreaterEqual => "GE",
+            Self::Lower => "LO",
+            Self::LowerSame => "LS",
+            Self::Higher => "HI",
+            Self::HigherSame => "HS",
+            Self::Nan => "NAN",
+            Self::Num => "NUM",
+            Self::Raw(raw) => raw,
+        }
+    }
+}
+
+impl fmt::Display for SassComparisonKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassCompareDType {
+    U8,
+    S8,
+    U16,
+    S16,
+    U32,
+    S32,
+    U64,
+    S64,
+    F32,
+    F64,
+    Raw(String),
+}
+
+impl SassCompareDType {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        match raw.as_str() {
+            "U8" => Self::U8,
+            "S8" => Self::S8,
+            "U16" => Self::U16,
+            "S16" => Self::S16,
+            "U32" => Self::U32,
+            "S32" => Self::S32,
+            "U64" => Self::U64,
+            "S64" => Self::S64,
+            "F32" => Self::F32,
+            "F64" => Self::F64,
+            _ => Self::Raw(raw),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::U8 => "U8",
+            Self::S8 => "S8",
+            Self::U16 => "U16",
+            Self::S16 => "S16",
+            Self::U32 => "U32",
+            Self::S32 => "S32",
+            Self::U64 => "U64",
+            Self::S64 => "S64",
+            Self::F32 => "F32",
+            Self::F64 => "F64",
+            Self::Raw(raw) => raw,
+        }
+    }
+}
+
+impl fmt::Display for SassCompareDType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }

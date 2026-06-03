@@ -2,8 +2,8 @@ use std::fmt;
 
 use super::super::{
     AggregateOperand, ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace,
-    PredicateCondition, RegisterRef, SassOpcode, SassSyncKind, SassTensorElementType,
-    SassTensorScope, SassWarpShuffleMode, ScalarOperand,
+    PredicateCondition, RegisterRef, SassCompareDType, SassComparisonKind, SassOpcode,
+    SassSyncKind, SassTensorElementType, SassTensorScope, SassWarpShuffleMode, ScalarOperand,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,8 +93,8 @@ pub enum SassLiftedSemantics {
     },
     CompareSet {
         dst: RegisterRef,
-        comparison: Option<String>,
-        dtype: Option<String>,
+        comparison: Option<SassComparisonKind>,
+        dtype: Option<SassCompareDType>,
         lhs: ScalarOperand,
         rhs: ScalarOperand,
     },
@@ -260,8 +260,8 @@ impl fmt::Display for SassLiftedSemantics {
             } => write!(
                 f,
                 "compare-set(dst={dst},comparison={},dtype={},lhs={lhs},rhs={rhs})",
-                option_str(comparison.as_deref()),
-                option_str(dtype.as_deref())
+                option_display(comparison.as_ref()),
+                option_display(dtype.as_ref())
             ),
             Self::Branch { target, condition } => write!(
                 f,
@@ -526,10 +526,6 @@ pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
             reason: reason.clone(),
         },
     }
-}
-
-fn option_str(value: Option<&str>) -> &str {
-    value.unwrap_or("-")
 }
 
 fn option_display(value: Option<&impl fmt::Display>) -> String {

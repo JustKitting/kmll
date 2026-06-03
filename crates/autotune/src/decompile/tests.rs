@@ -631,6 +631,16 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
 
     assert!(ops.iter().any(|op| matches!(
         op.kind,
+        KernelIrOpKind::CompareSet {
+            comparison: Some(SassComparisonKind::GreaterThan),
+            dtype: Some(SassCompareDType::U32),
+            ref lhs,
+            ref rhs,
+            ..
+        } if lhs == &scalar("R2") && rhs == &scalar("0x10")
+    )));
+    assert!(ops.iter().any(|op| matches!(
+        op.kind,
         KernelIrOpKind::Exit {
             condition: Some(ref condition)
         } if matches!(
