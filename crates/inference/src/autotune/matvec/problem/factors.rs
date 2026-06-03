@@ -1,0 +1,53 @@
+use super::*;
+
+impl MatvecSearchProblem {
+    pub(in crate::autotune::matvec::problem) fn reduce_unroll_factors(&self) -> Vec<u32> {
+        bounded_unroll_factors(
+            self.cols,
+            Self::MAX_REDUCE_UNROLL_FACTOR,
+            Some(MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL),
+        )
+    }
+
+    pub(in crate::autotune::matvec::problem) fn thread_group_factors(&self) -> Vec<u32> {
+        KernelScheduleActionTemplate::INFERENCE_DEFAULT.legal_thread_group_factors(|factor| {
+            MatvecThreadGroup::SEARCH_LANES_PER_ROW.contains(&factor)
+        })
+    }
+
+    pub(in crate::autotune::matvec::problem) fn row_upcast_factors(&self) -> Vec<u32> {
+        KernelScheduleActionTemplate::INFERENCE_DEFAULT
+            .legal_upcast_factors(|factor| MatvecRowUpcast::SEARCH_FACTORS.contains(&factor))
+    }
+
+    pub(in crate::autotune::matvec::problem) fn row_upcast_factors_for_rows(
+        &self,
+        rows: MatvecRowSplit,
+    ) -> Vec<u32> {
+        self.row_upcast_factors()
+            .into_iter()
+            .filter(|factor| *factor <= rows.rows_per_block())
+            .collect()
+    }
+
+    pub(in crate::autotune::matvec::problem) fn deferred_row_split_factors(&self) -> Vec<u32> {
+        bounded_unroll_factors(self.rows, Self::MAX_ROWS_PER_BLOCK, None)
+    }
+
+    pub(in crate::autotune::matvec::problem) fn split_variants(
+        &self,
+    ) -> Vec<KernelAxisFactorAction> {
+        let mut variants = Vec::new();
+        variants.extend(RowMajorWarpRows::ALL.into_iter().map(|plan| {
+            KernelAxisFactorAction::new(
+                0,
+                plan.rows_per_block(),
+                KernelActionMaterialization::Existing,
+            )
+        }));
+        variants.extend(self.deferred_row_split_factors().into_iter().map(|factor| {
+            KernelAxisFactorAction::new(0, factor, KernelActionMaterialization::DeferredGenerated)
+        }));
+        variants
+    }
+}
