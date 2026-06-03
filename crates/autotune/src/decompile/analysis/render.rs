@@ -1,0 +1,200 @@
+use std::fmt::Write as _;
+
+use super::types::{SassAnalysisModule, format_register_definition};
+
+impl SassAnalysisModule {
+    pub fn to_text(&self) -> String {
+        let mut out = String::new();
+        if let Some(target) = &self.target {
+            writeln!(out, "target {target}").expect("write to string");
+        }
+        for function in &self.functions {
+            writeln!(out, "fn {} {{", function.name).expect("write to string");
+            writeln!(out, "  blocks").expect("write to string");
+            for block in &function.blocks {
+                writeln!(
+                    out,
+                    "    b{} {:#06x}-{:#06x} label={} instructions={} terminator={}",
+                    block.id,
+                    block.start_address,
+                    block.end_address,
+                    block.label.as_deref().unwrap_or("-"),
+                    block.instruction_count,
+                    block.terminator
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "  edges").expect("write to string");
+            for edge in &function.edges {
+                writeln!(
+                    out,
+                    "    b{} -> {} [{} condition={} target={}]",
+                    edge.from_block,
+                    edge.to_block
+                        .map(|block| format!("b{block}"))
+                        .unwrap_or_else(|| "external".to_string()),
+                    edge.kind,
+                    edge.condition.as_deref().unwrap_or("-"),
+                    edge.target.as_deref().unwrap_or("-")
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "  dominators").expect("write to string");
+            for dominator in &function.dominators {
+                writeln!(
+                    out,
+                    "    b{} reachable={} idom={} dom=[{}] dominated=[{}]",
+                    dominator.block_id,
+                    dominator.reachable,
+                    format_block_id(dominator.immediate_dominator),
+                    format_block_ids(&dominator.dominators),
+                    format_block_ids(&dominator.dominated_blocks)
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "  natural_loops").expect("write to string");
+            for natural_loop in &function.natural_loops {
+                writeln!(
+                    out,
+                    "    header=b{} latch=b{} reachable={} blocks=[{}] condition={} target={}",
+                    natural_loop.header_block,
+                    natural_loop.latch_block,
+                    natural_loop.reachable,
+                    format_block_ids(&natural_loop.blocks),
+                    natural_loop.edge_condition.as_deref().unwrap_or("-"),
+                    natural_loop.edge_target.as_deref().unwrap_or("-")
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "  dataflow").expect("write to string");
+            for dataflow in &function.dataflow {
+                writeln!(
+                    out,
+                    "    {:#06x}: def=[{}] use=[{}] <- {}",
+                    dataflow.address,
+                    dataflow.defines.join(","),
+                    dataflow.uses.join(","),
+                    dataflow.source
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "  reaching_uses").expect("write to string");
+            for reaching in &function.reaching_uses {
+                writeln!(
+                    out,
+                    "    {:#06x}: {} <- [{}]",
+                    reaching.address,
+                    reaching.register,
+                    reaching.sources_text()
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "  ssa_values").expect("write to string");
+            for value in &function.ssa_values {
+                writeln!(
+                    out,
+                    "    v{} {} uses=[{}] <- {}",
+                    value.value_id,
+                    value.name(),
+                    format_addresses(&value.use_addresses),
+                    value.source.as_deref().unwrap_or("entry")
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "  def_use_edges").expect("write to string");
+            for edge in &function.def_use_edges {
+                writeln!(
+                    out,
+                    "    {:#06x}: {} <- v{} {}",
+                    edge.use_address,
+                    edge.register,
+                    edge.value_id,
+                    format_register_definition(&edge.register, edge.def_address)
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "  value_ops").expect("write to string");
+            for op in &function.value_ops {
+                writeln!(
+                    out,
+                    "    {:#06x}: block={} opcode={} in=[{}] out=[{}] predicate={} <- {}",
+                    op.address,
+                    format_block_id(op.block_id),
+                    op.opcode,
+                    format_value_ids(&op.input_value_ids),
+                    format_value_ids(&op.output_value_ids),
+                    op.predicate.as_deref().unwrap_or("-"),
+                    op.source
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "  live_ranges").expect("write to string");
+            for range in &function.live_ranges {
+                writeln!(
+                    out,
+                    "    {}@{} {:#06x}-{:#06x} uses=[{}]",
+                    range.register,
+                    range.def_text(),
+                    range.start_address,
+                    range.end_address,
+                    format_addresses(&range.use_addresses)
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "  memory_accesses").expect("write to string");
+            for access in &function.memory_accesses {
+                writeln!(
+                    out,
+                    "    {:#06x}: {} {} value={} addr={} regs=[{}] base={} offset={} width={} predicate={} <- {}",
+                    access.address,
+                    access.kind,
+                    access.space,
+                    access.value_register,
+                    access.address_expr,
+                    access.address_registers.join(","),
+                    access.address_base.as_deref().unwrap_or("-"),
+                    access.offset.as_deref().unwrap_or("-"),
+                    access
+                        .width_bits
+                        .map(|bits| bits.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    access.predicate.as_deref().unwrap_or("-"),
+                    access.source
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "}}").expect("write to string");
+        }
+        out
+    }
+}
+
+fn format_addresses(addresses: &[u64]) -> String {
+    addresses
+        .iter()
+        .map(|address| format!("{address:#06x}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_block_id(block_id: Option<usize>) -> String {
+    block_id
+        .map(|block_id| format!("b{block_id}"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_block_ids(block_ids: &[usize]) -> String {
+    block_ids
+        .iter()
+        .map(|block_id| format!("b{block_id}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_value_ids(value_ids: &[usize]) -> String {
+    value_ids
+        .iter()
+        .map(|value_id| format!("v{value_id}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}

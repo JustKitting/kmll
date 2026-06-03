@@ -146,9 +146,9 @@ fn parse_nvdisasm_sass_captures_function_and_operands() {
 }
 
 #[test]
-fn lower_simple_sass_maps_observed_core_ops() {
+fn lift_simple_sass_maps_observed_core_ops() {
     let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
-    let ir = lower_sass_module(&module);
+    let ir = lift_sass_module(&module);
     let kinds = ir.functions[0]
         .ops
         .iter()
@@ -188,7 +188,7 @@ fn lower_simple_sass_maps_observed_core_ops() {
 #[test]
 fn analysis_recovers_structured_memory_accesses() {
     let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
-    let ir = lower_sass_module(&module);
+    let ir = lift_sass_module(&module);
     let analysis = analyze_sass_ir(&ir);
     let function = &analysis.functions[0];
 
@@ -231,9 +231,63 @@ fn analysis_recovers_structured_memory_accesses() {
 }
 
 #[test]
-fn lower_rows17_slice_keeps_predicates_and_half_fma_visible() {
+fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
+    let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
+    let ir = lift_sass_module(&module);
+    let analysis = analyze_sass_ir(&ir);
+    let lifted = lift_sass_value_ir(&ir, &analysis);
+    let function = &lifted.functions[0];
+
+    assert_eq!(lifted.op_count(), ir.functions[0].ops.len());
+
+    let load = function
+        .ops
+        .iter()
+        .find(|op| op.address == 0x10)
+        .expect("descriptor load should lift");
+    assert_eq!(load.class, SassLiftedOpClass::Memory);
+    assert_eq!(load.kind, SassLiftedOpKind::Load);
+    assert!(load.outputs.iter().any(|value| value.register == "R2"));
+
+    let add = function
+        .ops
+        .iter()
+        .find(|op| op.address == 0x30)
+        .expect("integer add should lift");
+    assert_eq!(add.class, SassLiftedOpClass::IntegerMath);
+    assert_eq!(add.kind, SassLiftedOpKind::IntegerAdd);
+    assert!(add.inputs.iter().any(|value| value.register == "R2"));
+    assert!(add.inputs.iter().any(|value| value.register == "R3"));
+    assert!(add.outputs.iter().any(|value| value.register == "R4"));
+
+    let store = function
+        .ops
+        .iter()
+        .find(|op| op.address == 0x40)
+        .expect("descriptor store should lift");
+    assert_eq!(store.class, SassLiftedOpClass::Memory);
+    assert_eq!(store.kind, SassLiftedOpKind::Store);
+    assert!(store.inputs.iter().any(|value| value.register == "R4"));
+    assert!(store.outputs.is_empty());
+
+    let exit = function
+        .ops
+        .iter()
+        .find(|op| op.address == 0x60)
+        .expect("exit should lift");
+    assert_eq!(exit.class, SassLiftedOpClass::ControlFlow);
+    assert_eq!(exit.kind, SassLiftedOpKind::Exit);
+
+    let text = lifted.to_text();
+    assert!(text.contains("lifted_value_ir"));
+    assert!(text.contains("integer-math integer-add"));
+    assert!(text.contains("memory load"));
+}
+
+#[test]
+fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
     let module = parse_nvdisasm_sass(ROWS17_SLICE).expect("rows17 slice should parse");
-    let ir = lower_sass_module(&module);
+    let ir = lift_sass_module(&module);
     let ops = &ir.functions[0].ops;
 
     assert!(ops.iter().any(|op| matches!(
@@ -292,7 +346,7 @@ fn lower_rows17_slice_keeps_predicates_and_half_fma_visible() {
 #[test]
 fn semantic_patterns_recover_bf16_widen_and_warp_reduce() {
     let module = parse_nvdisasm_sass(ROWS17_SLICE).expect("rows17 slice should parse");
-    let ir = lower_sass_module(&module);
+    let ir = lift_sass_module(&module);
     let patterns = recover_sass_patterns(&ir);
     let flat = patterns
         .functions
@@ -333,7 +387,7 @@ fn semantic_patterns_recover_bf16_widen_and_warp_reduce() {
 #[test]
 fn analysis_recovers_cfg_edges_and_register_dataflow() {
     let module = parse_nvdisasm_sass(CFG_SASS).expect("cfg fixture should parse");
-    let ir = lower_sass_module(&module);
+    let ir = lift_sass_module(&module);
     let analysis = analyze_sass_ir(&ir);
     let function = &analysis.functions[0];
 
@@ -471,7 +525,7 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
 #[test]
 fn analysis_recovers_dominators_and_natural_loops() {
     let module = parse_nvdisasm_sass(LOOP_SASS).expect("loop fixture should parse");
-    let ir = lower_sass_module(&module);
+    let ir = lift_sass_module(&module);
     let analysis = analyze_sass_ir(&ir);
     let function = &analysis.functions[0];
 
@@ -536,7 +590,7 @@ fn analysis_recovers_dominators_and_natural_loops() {
 fn analysis_keeps_fallthrough_after_predicated_exit() {
     let module =
         parse_nvdisasm_sass(PREDICATED_EXIT_SASS).expect("predicated exit fixture should parse");
-    let ir = lower_sass_module(&module);
+    let ir = lift_sass_module(&module);
     let analysis = analyze_sass_ir(&ir);
     let function = &analysis.functions[0];
 
@@ -558,7 +612,7 @@ fn analysis_keeps_fallthrough_after_predicated_exit() {
 fn analysis_keeps_previous_definition_after_predicated_write() {
     let module =
         parse_nvdisasm_sass(PREDICATED_WRITE_SASS).expect("predicated write fixture should parse");
-    let ir = lower_sass_module(&module);
+    let ir = lift_sass_module(&module);
     let analysis = analyze_sass_ir(&ir);
     let function = &analysis.functions[0];
 
@@ -606,7 +660,7 @@ fn side_by_side_dump_contains_source_sass_and_ir_sections() {
         .find(|fixture| fixture.kind == SimpleKernelFixtureKind::I32Add)
         .expect("i32 add fixture should exist");
     let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
-    let ir = lower_sass_module(&module);
+    let ir = lift_sass_module(&module);
     let dump = render_side_by_side(&fixture, SIMPLE_SASS, &ir);
 
     assert!(dump.contains("## source"));
@@ -664,6 +718,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.ssa_values_path.exists());
     assert!(report.def_use_edges_path.exists());
     assert!(report.value_ops_path.exists());
+    assert!(report.lifted_ops_path.exists());
     assert!(report.live_ranges_path.exists());
     assert!(report.memory_accesses_path.exists());
     assert!(report.unsupported_instructions_path.exists());
@@ -676,6 +731,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.ssa_value_count > 0);
     assert!(report.def_use_edge_count > 0);
     assert!(report.value_op_count > 0);
+    assert!(report.lifted_op_count > 0);
     assert!(report.live_range_count > 0);
     assert!(report.memory_access_count > 0);
     assert!(report.memory_accesses.iter().any(|access| {
@@ -689,6 +745,19 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
             .iter()
             .filter_map(|file| file.ir_path.as_ref())
             .all(|path| path.exists())
+    );
+    assert!(
+        report
+            .files
+            .iter()
+            .filter_map(|file| file.lifted_ir_path.as_ref())
+            .all(|path| path.exists())
+    );
+    assert!(
+        report
+            .lifted_ops
+            .iter()
+            .any(|op| op.class == "memory" && op.kind == "load")
     );
     assert!(
         report

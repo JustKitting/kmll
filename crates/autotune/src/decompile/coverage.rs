@@ -9,8 +9,9 @@ use std::{
 use nn_rust_inference::runtime;
 
 use super::{
-    KernelIrModule, KernelIrOpKind, SassAnalysisModule, SassPatternModule, analyze_sass_ir,
-    parse_nvdisasm_sass, recover_sass_patterns, render_sass_file_side_by_side,
+    KernelIrModule, KernelIrOpKind, SassAnalysisModule, SassLiftedModule, SassPatternModule,
+    analyze_sass_ir, lift_sass_value_ir, parse_nvdisasm_sass, recover_sass_patterns,
+    render_sass_file_side_by_side,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +49,7 @@ pub struct SassCoverageReport {
     pub ssa_values_path: PathBuf,
     pub def_use_edges_path: PathBuf,
     pub value_ops_path: PathBuf,
+    pub lifted_ops_path: PathBuf,
     pub live_ranges_path: PathBuf,
     pub memory_accesses_path: PathBuf,
     pub unsupported_instructions_path: PathBuf,
@@ -65,6 +67,7 @@ pub struct SassCoverageReport {
     pub ssa_values: Vec<SassCoverageSsaValue>,
     pub def_use_edges: Vec<SassCoverageDefUseEdge>,
     pub value_ops: Vec<SassCoverageValueOp>,
+    pub lifted_ops: Vec<SassCoverageLiftedOp>,
     pub live_ranges: Vec<SassCoverageLiveRange>,
     pub memory_accesses: Vec<SassCoverageMemoryAccess>,
     pub unsupported_instructions: Vec<SassUnsupportedInstruction>,
@@ -80,6 +83,7 @@ pub struct SassCoverageReport {
     pub ssa_value_count: usize,
     pub def_use_edge_count: usize,
     pub value_op_count: usize,
+    pub lifted_op_count: usize,
     pub live_range_count: usize,
     pub memory_access_count: usize,
     pub semantic_pattern_count: usize,
@@ -90,6 +94,7 @@ pub struct SassCoverageReport {
 pub struct SassCoverageFileReport {
     pub sass_path: PathBuf,
     pub ir_path: Option<PathBuf>,
+    pub lifted_ir_path: Option<PathBuf>,
     pub analysis_path: Option<PathBuf>,
     pub pattern_path: Option<PathBuf>,
     pub side_by_side_path: Option<PathBuf>,
@@ -102,6 +107,7 @@ pub struct SassCoverageFileReport {
     pub ssa_value_count: usize,
     pub def_use_edge_count: usize,
     pub value_op_count: usize,
+    pub lifted_op_count: usize,
     pub live_range_count: usize,
     pub memory_access_count: usize,
     pub semantic_pattern_count: usize,
@@ -241,6 +247,23 @@ pub struct SassCoverageValueOp {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassCoverageLiftedOp {
+    pub sass_path: PathBuf,
+    pub function: String,
+    pub address: u64,
+    pub block_id: Option<usize>,
+    pub predicate: Option<String>,
+    pub opcode: String,
+    pub class: String,
+    pub kind: String,
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+    pub source_operands: Vec<String>,
+    pub detail: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageLiveRange {
     pub sass_path: PathBuf,
     pub function: String,
@@ -290,6 +313,7 @@ pub fn run_sass_coverage_scan(
     let mut ssa_values = Vec::new();
     let mut def_use_edges = Vec::new();
     let mut value_ops = Vec::new();
+    let mut lifted_ops = Vec::new();
     let mut live_ranges = Vec::new();
     let mut memory_accesses = Vec::new();
     let mut unsupported_instructions = Vec::new();
@@ -312,9 +336,10 @@ pub fn run_sass_coverage_scan(
                     }
                 }
 
-                let lowered = super::lower_sass_module(&parsed);
-                let analysis = analyze_sass_ir(&lowered);
-                let patterns = recover_sass_patterns(&lowered);
+                let project_ir = super::lift_sass_module(&parsed);
+                let analysis = analyze_sass_ir(&project_ir);
+                let lifted = lift_sass_value_ir(&project_ir, &analysis);
+                let patterns = recover_sass_patterns(&project_ir);
                 for function in &patterns.functions {
                     for pattern in &function.patterns {
                         *semantic_pattern_counts
@@ -325,6 +350,7 @@ pub fn run_sass_coverage_scan(
                 append_analysis(
                     &sass_path,
                     &analysis,
+                    &lifted,
                     &mut cfg_blocks,
                     &mut cfg_edges,
                     &mut dominators,
@@ -334,11 +360,12 @@ pub fn run_sass_coverage_scan(
                     &mut ssa_values,
                     &mut def_use_edges,
                     &mut value_ops,
+                    &mut lifted_ops,
                     &mut live_ranges,
                     &mut memory_accesses,
                 );
                 append_semantic_patterns(&sass_path, &patterns, &mut semantic_patterns);
-                append_unsupported(&sass_path, &lowered, &mut unsupported_instructions);
+                append_unsupported(&sass_path, &project_ir, &mut unsupported_instructions);
 
                 let ir_path = files_output_root
                     .join(&relative)
@@ -346,7 +373,12 @@ pub fn run_sass_coverage_scan(
                 if let Some(parent) = ir_path.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                fs::write(&ir_path, lowered.to_text().as_bytes())?;
+                fs::write(&ir_path, project_ir.to_text().as_bytes())?;
+
+                let lifted_ir_path = files_output_root
+                    .join(&relative)
+                    .with_extension("lifted-value-ir.txt");
+                fs::write(&lifted_ir_path, lifted.to_text().as_bytes())?;
 
                 let analysis_path = files_output_root
                     .join(&relative)
@@ -361,12 +393,14 @@ pub fn run_sass_coverage_scan(
                 let side_by_side_path = files_output_root
                     .join(&relative)
                     .with_extension("source-sass-ir.txt");
-                let side_by_side = render_sass_file_side_by_side(&sass_path, None, &sass, &lowered);
+                let side_by_side =
+                    render_sass_file_side_by_side(&sass_path, None, &sass, &project_ir);
                 fs::write(&side_by_side_path, side_by_side.as_bytes())?;
 
                 files.push(SassCoverageFileReport {
                     sass_path,
                     ir_path: Some(ir_path),
+                    lifted_ir_path: Some(lifted_ir_path),
                     analysis_path: Some(analysis_path),
                     pattern_path: Some(pattern_path),
                     side_by_side_path: Some(side_by_side_path),
@@ -379,10 +413,11 @@ pub fn run_sass_coverage_scan(
                     ssa_value_count: analysis.ssa_value_count(),
                     def_use_edge_count: analysis.def_use_edge_count(),
                     value_op_count: analysis.value_op_count(),
+                    lifted_op_count: lifted.op_count(),
                     live_range_count: analysis.live_range_count(),
                     memory_access_count: analysis.memory_access_count(),
                     semantic_pattern_count: patterns.pattern_count(),
-                    unsupported_instruction_count: lowered.unsupported_instruction_count(),
+                    unsupported_instruction_count: project_ir.unsupported_instruction_count(),
                     parse_error: None,
                 });
             }
@@ -390,6 +425,7 @@ pub fn run_sass_coverage_scan(
                 files.push(SassCoverageFileReport {
                     sass_path,
                     ir_path: None,
+                    lifted_ir_path: None,
                     analysis_path: None,
                     pattern_path: None,
                     side_by_side_path: None,
@@ -402,6 +438,7 @@ pub fn run_sass_coverage_scan(
                     ssa_value_count: 0,
                     def_use_edge_count: 0,
                     value_op_count: 0,
+                    lifted_op_count: 0,
                     live_range_count: 0,
                     memory_access_count: 0,
                     semantic_pattern_count: 0,
@@ -430,6 +467,7 @@ pub fn run_sass_coverage_scan(
     let ssa_value_count = ssa_values.len();
     let def_use_edge_count = def_use_edges.len();
     let value_op_count = value_ops.len();
+    let lifted_op_count = lifted_ops.len();
     let live_range_count = live_ranges.len();
     let memory_access_count = memory_accesses.len();
     let semantic_pattern_count = semantic_patterns.len();
@@ -450,6 +488,7 @@ pub fn run_sass_coverage_scan(
     let ssa_values_path = options.output_dir.join("ssa-values.tsv");
     let def_use_edges_path = options.output_dir.join("def-use-edges.tsv");
     let value_ops_path = options.output_dir.join("value-ops.tsv");
+    let lifted_ops_path = options.output_dir.join("lifted-ops.tsv");
     let live_ranges_path = options.output_dir.join("live-ranges.tsv");
     let memory_accesses_path = options.output_dir.join("memory-accesses.tsv");
     let unsupported_instructions_path = options.output_dir.join("unsupported-instructions.tsv");
@@ -472,6 +511,7 @@ pub fn run_sass_coverage_scan(
         ssa_values_path,
         def_use_edges_path,
         value_ops_path,
+        lifted_ops_path,
         live_ranges_path,
         memory_accesses_path,
         unsupported_instructions_path,
@@ -489,6 +529,7 @@ pub fn run_sass_coverage_scan(
         ssa_values,
         def_use_edges,
         value_ops,
+        lifted_ops,
         live_ranges,
         memory_accesses,
         unsupported_instructions,
@@ -504,6 +545,7 @@ pub fn run_sass_coverage_scan(
         ssa_value_count,
         def_use_edge_count,
         value_op_count,
+        lifted_op_count,
         live_range_count,
         memory_access_count,
         semantic_pattern_count,
@@ -569,10 +611,10 @@ fn opcode_signature(opcode: &str, modifiers: &[String]) -> String {
 
 fn append_unsupported(
     sass_path: &Path,
-    lowered: &KernelIrModule,
+    project_ir: &KernelIrModule,
     unsupported_instructions: &mut Vec<SassUnsupportedInstruction>,
 ) {
-    for function in &lowered.functions {
+    for function in &project_ir.functions {
         for op in &function.ops {
             let KernelIrOpKind::Unsupported { opcode, reason } = &op.kind else {
                 continue;
@@ -612,6 +654,7 @@ fn append_semantic_patterns(
 fn append_analysis(
     sass_path: &Path,
     analysis: &SassAnalysisModule,
+    lifted: &SassLiftedModule,
     cfg_blocks: &mut Vec<SassCoverageBasicBlock>,
     cfg_edges: &mut Vec<SassCoverageCfgEdge>,
     dominators: &mut Vec<SassCoverageDominatorBlock>,
@@ -621,6 +664,7 @@ fn append_analysis(
     ssa_values: &mut Vec<SassCoverageSsaValue>,
     def_use_edges: &mut Vec<SassCoverageDefUseEdge>,
     value_ops: &mut Vec<SassCoverageValueOp>,
+    lifted_ops: &mut Vec<SassCoverageLiftedOp>,
     live_ranges: &mut Vec<SassCoverageLiveRange>,
     memory_accesses: &mut Vec<SassCoverageMemoryAccess>,
 ) {
@@ -729,6 +773,29 @@ fn append_analysis(
                 source: op.source.clone(),
             });
         }
+        if let Some(lifted_function) = lifted
+            .functions
+            .iter()
+            .find(|lifted| lifted.name == function.name)
+        {
+            for op in &lifted_function.ops {
+                lifted_ops.push(SassCoverageLiftedOp {
+                    sass_path: sass_path.to_path_buf(),
+                    function: function.name.clone(),
+                    address: op.address,
+                    block_id: op.block_id,
+                    predicate: op.predicate.clone(),
+                    opcode: op.opcode.clone(),
+                    class: op.class.to_string(),
+                    kind: op.kind.to_string(),
+                    inputs: op.inputs.iter().map(|value| value.name()).collect(),
+                    outputs: op.outputs.iter().map(|value| value.name()).collect(),
+                    source_operands: op.source_operands.clone(),
+                    detail: op.detail.clone(),
+                    source: op.source.clone(),
+                });
+            }
+        }
         for range in &function.live_ranges {
             live_ranges.push(SassCoverageLiveRange {
                 sass_path: sass_path.to_path_buf(),
@@ -832,6 +899,10 @@ fn write_coverage_reports(report: &SassCoverageReport) -> Result<(), Box<dyn Err
         render_value_ops_tsv(report).as_bytes(),
     )?;
     fs::write(
+        &report.lifted_ops_path,
+        render_lifted_ops_tsv(report).as_bytes(),
+    )?;
+    fs::write(
         &report.live_ranges_path,
         render_live_ranges_tsv(report).as_bytes(),
     )?;
@@ -868,6 +939,7 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
     writeln!(out, "ssa_values={}", report.ssa_value_count).expect("write to string");
     writeln!(out, "def_use_edges={}", report.def_use_edge_count).expect("write to string");
     writeln!(out, "value_ops={}", report.value_op_count).expect("write to string");
+    writeln!(out, "lifted_ops={}", report.lifted_op_count).expect("write to string");
     writeln!(out, "live_ranges={}", report.live_range_count).expect("write to string");
     writeln!(out, "memory_accesses={}", report.memory_access_count).expect("write to string");
     writeln!(out, "semantic_patterns={}", report.semantic_pattern_count).expect("write to string");
@@ -914,7 +986,7 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "status\tsass_path\tparsed_instructions\tcfg_blocks\tcfg_edges\tdominator_blocks\tnatural_loops\treaching_uses\tssa_values\tdef_use_edges\tvalue_ops\tlive_ranges\tmemory_accesses\tsemantic_patterns\tunsupported_instructions\tir_path\tanalysis_path\tpatterns_path\tside_by_side_path\terror"
+        "status\tsass_path\tparsed_instructions\tcfg_blocks\tcfg_edges\tdominator_blocks\tnatural_loops\treaching_uses\tssa_values\tdef_use_edges\tvalue_ops\tlifted_ops\tlive_ranges\tmemory_accesses\tsemantic_patterns\tunsupported_instructions\tir_path\tlifted_ir_path\tanalysis_path\tpatterns_path\tside_by_side_path\terror"
     )
     .expect("write to string");
     for file in &report.files {
@@ -925,7 +997,7 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
         };
         writeln!(
             out,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             status,
             tsv(&file.sass_path.display().to_string()),
             file.parsed_instruction_count,
@@ -937,11 +1009,13 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
             file.ssa_value_count,
             file.def_use_edge_count,
             file.value_op_count,
+            file.lifted_op_count,
             file.live_range_count,
             file.memory_access_count,
             file.semantic_pattern_count,
             file.unsupported_instruction_count,
             tsv(&optional_path(&file.ir_path)),
+            tsv(&optional_path(&file.lifted_ir_path)),
             tsv(&optional_path(&file.analysis_path)),
             tsv(&optional_path(&file.pattern_path)),
             tsv(&optional_path(&file.side_by_side_path)),
@@ -1196,6 +1270,38 @@ fn render_value_ops_tsv(report: &SassCoverageReport) -> String {
             tsv(&format_values(&op.input_value_ids)),
             tsv(&format_values(&op.output_value_ids)),
             tsv(&op.kind),
+            tsv(&op.source),
+        )
+        .expect("write to string");
+    }
+    out
+}
+
+fn render_lifted_ops_tsv(report: &SassCoverageReport) -> String {
+    let mut out = String::new();
+    writeln!(
+        out,
+        "sass_path\tfunction\taddress\tblock_id\tpredicate\topcode\tclass\tkind\tinputs\toutputs\tsource_operands\tdetail\traw"
+    )
+    .expect("write to string");
+    for op in &report.lifted_ops {
+        writeln!(
+            out,
+            "{}\t{}\t{:#06x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            tsv(&op.sass_path.display().to_string()),
+            tsv(&op.function),
+            op.address,
+            op.block_id
+                .map(|block| block.to_string())
+                .unwrap_or_default(),
+            tsv(op.predicate.as_deref().unwrap_or("")),
+            tsv(&op.opcode),
+            tsv(&op.class),
+            tsv(&op.kind),
+            tsv(&op.inputs.join(",")),
+            tsv(&op.outputs.join(",")),
+            tsv(&op.source_operands.join(",")),
+            tsv(&op.detail),
             tsv(&op.source),
         )
         .expect("write to string");

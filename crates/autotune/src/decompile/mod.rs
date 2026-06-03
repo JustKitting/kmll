@@ -17,6 +17,7 @@ mod analysis;
 mod coverage;
 mod fixtures;
 mod ir;
+mod lifted;
 mod patterns;
 mod sass;
 
@@ -38,7 +39,11 @@ pub use self::{
     fixtures::{SimpleKernelFixture, SimpleKernelFixtureKind, simple_kernel_fixtures},
     ir::{
         KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemorySpace,
-        SassMappingConfidence, lower_sass_module,
+        SassMappingConfidence, lift_sass_module,
+    },
+    lifted::{
+        SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedOpClass, SassLiftedOpKind,
+        SassLiftedValueRef, lift_sass_value_ir,
     },
     patterns::{
         SassPatternConfidence, SassPatternFunction, SassPatternModule, SassSemanticPattern,
@@ -77,6 +82,7 @@ pub struct DecompileFixtureReport {
     pub cubin_path: PathBuf,
     pub sass_path: PathBuf,
     pub ir_path: PathBuf,
+    pub lifted_ir_path: PathBuf,
     pub analysis_path: PathBuf,
     pub pattern_path: PathBuf,
     pub side_by_side_path: PathBuf,
@@ -89,6 +95,7 @@ pub struct DecompileFixtureReport {
     pub ssa_value_count: usize,
     pub def_use_edge_count: usize,
     pub value_op_count: usize,
+    pub lifted_op_count: usize,
     pub live_range_count: usize,
     pub memory_access_count: usize,
     pub semantic_pattern_count: usize,
@@ -107,6 +114,7 @@ pub struct SassFileDecompileReport {
     pub sass_path: PathBuf,
     pub source_path: Option<PathBuf>,
     pub ir_path: PathBuf,
+    pub lifted_ir_path: PathBuf,
     pub analysis_path: PathBuf,
     pub pattern_path: PathBuf,
     pub side_by_side_path: PathBuf,
@@ -119,6 +127,7 @@ pub struct SassFileDecompileReport {
     pub ssa_value_count: usize,
     pub def_use_edge_count: usize,
     pub value_op_count: usize,
+    pub lifted_op_count: usize,
     pub live_range_count: usize,
     pub memory_access_count: usize,
     pub semantic_pattern_count: usize,
@@ -154,9 +163,10 @@ pub fn run_sass_file_decompile(
         None => None,
     };
     let parsed = parse_nvdisasm_sass(&sass)?;
-    let lowered = lower_sass_module(&parsed);
-    let analysis = analyze_sass_ir(&lowered);
-    let patterns = recover_sass_patterns(&lowered);
+    let project_ir = lift_sass_module(&parsed);
+    let analysis = analyze_sass_ir(&project_ir);
+    let lifted = lift_sass_value_ir(&project_ir, &analysis);
+    let patterns = recover_sass_patterns(&project_ir);
     let output_dir = options.output_dir.clone().unwrap_or_else(|| {
         options
             .sass_path
@@ -171,7 +181,9 @@ pub fn run_sass_file_decompile(
         .and_then(|stem| stem.to_str())
         .unwrap_or("sass");
     let ir_path = output_dir.join(format!("{stem}.lifted.ir.txt"));
-    fs::write(&ir_path, lowered.to_text().as_bytes())?;
+    fs::write(&ir_path, project_ir.to_text().as_bytes())?;
+    let lifted_ir_path = output_dir.join(format!("{stem}.lifted-value-ir.txt"));
+    fs::write(&lifted_ir_path, lifted.to_text().as_bytes())?;
     let analysis_path = output_dir.join(format!("{stem}.analysis.txt"));
     fs::write(&analysis_path, analysis.to_text().as_bytes())?;
     let pattern_path = output_dir.join(format!("{stem}.patterns.txt"));
@@ -183,7 +195,7 @@ pub fn run_sass_file_decompile(
             .as_ref()
             .map(|(path, text)| (path.as_path(), text.as_str())),
         &sass,
-        &lowered,
+        &project_ir,
     );
     fs::write(&side_by_side_path, side_by_side.as_bytes())?;
 
@@ -191,6 +203,7 @@ pub fn run_sass_file_decompile(
         sass_path: options.sass_path.clone(),
         source_path: options.source_path.clone(),
         ir_path,
+        lifted_ir_path,
         analysis_path,
         pattern_path,
         side_by_side_path,
@@ -203,10 +216,11 @@ pub fn run_sass_file_decompile(
         ssa_value_count: analysis.ssa_value_count(),
         def_use_edge_count: analysis.def_use_edge_count(),
         value_op_count: analysis.value_op_count(),
+        lifted_op_count: lifted.op_count(),
         live_range_count: analysis.live_range_count(),
         memory_access_count: analysis.memory_access_count(),
         semantic_pattern_count: patterns.pattern_count(),
-        unsupported_instruction_count: lowered.unsupported_instruction_count(),
+        unsupported_instruction_count: project_ir.unsupported_instruction_count(),
     })
 }
 
@@ -264,18 +278,21 @@ fn run_decompile_fixture(
     fs::write(&sass_path, sass.as_bytes())?;
 
     let parsed = parse_nvdisasm_sass(&sass)?;
-    let lowered = lower_sass_module(&parsed);
-    let analysis = analyze_sass_ir(&lowered);
-    let patterns = recover_sass_patterns(&lowered);
-    let ir_text = lowered.to_text();
+    let project_ir = lift_sass_module(&parsed);
+    let analysis = analyze_sass_ir(&project_ir);
+    let lifted = lift_sass_value_ir(&project_ir, &analysis);
+    let patterns = recover_sass_patterns(&project_ir);
+    let ir_text = project_ir.to_text();
     let ir_path = fixture_dir.join("lifted.ir.txt");
     fs::write(&ir_path, ir_text.as_bytes())?;
+    let lifted_ir_path = fixture_dir.join("lifted-value-ir.txt");
+    fs::write(&lifted_ir_path, lifted.to_text().as_bytes())?;
     let analysis_path = fixture_dir.join("analysis.txt");
     fs::write(&analysis_path, analysis.to_text().as_bytes())?;
     let pattern_path = fixture_dir.join("patterns.txt");
     fs::write(&pattern_path, patterns.to_text().as_bytes())?;
 
-    let side_by_side = render_side_by_side(fixture, &sass, &lowered);
+    let side_by_side = render_side_by_side(fixture, &sass, &project_ir);
     let side_by_side_path = fixture_dir.join("source-sass-ir.txt");
     fs::write(&side_by_side_path, side_by_side.as_bytes())?;
 
@@ -288,6 +305,7 @@ fn run_decompile_fixture(
         cubin_path,
         sass_path,
         ir_path,
+        lifted_ir_path,
         analysis_path,
         pattern_path,
         side_by_side_path,
@@ -300,10 +318,11 @@ fn run_decompile_fixture(
         ssa_value_count: analysis.ssa_value_count(),
         def_use_edge_count: analysis.def_use_edge_count(),
         value_op_count: analysis.value_op_count(),
+        lifted_op_count: lifted.op_count(),
         live_range_count: analysis.live_range_count(),
         memory_access_count: analysis.memory_access_count(),
         semantic_pattern_count: patterns.pattern_count(),
-        unsupported_instruction_count: lowered.unsupported_instruction_count(),
+        unsupported_instruction_count: project_ir.unsupported_instruction_count(),
     })
 }
 
