@@ -17,7 +17,8 @@ use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
     autotune::{
         BeamSearchConfig, GemmRustCudaGenerator, GemmSearchProblem, KernelArtifactStore,
-        KernelCandidateMetadata, KernelMaterialization, ScheduleTransform, beam_search_metadata,
+        KernelCandidateMetadata, KernelMaterialization, ScheduleTransform, SearchScore,
+        SearchScoreSource, beam_search_metadata, beam_search_metadata_with_scorer,
     },
     chat,
     dtypes::{Bf16, DType},
@@ -358,6 +359,9 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
     let mut emit_crate = false;
     let mut compile = false;
     let mut compile_arch = None;
+    let mut measure = false;
+    let mut measure_repeat_count = 5usize;
+    let mut measure_warmup_count = 2usize;
     let mut artifact_root = None;
     while index < args.len() {
         match args[index].as_str() {
@@ -377,6 +381,26 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
                 compile = true;
                 emit_crate = true;
                 index += 1;
+            }
+            "--measure" => {
+                measure = true;
+                index += 1;
+            }
+            "--measure-repeat" => {
+                let value = parse_required_flag_value(args, &mut index, "--measure-repeat")?;
+                measure_repeat_count = value.parse::<usize>().map_err(|error| {
+                    invalid_input(format!(
+                        "kernel-autotune-gemm --measure-repeat must be a positive integer, got {value:?}: {error}"
+                    ))
+                })?;
+            }
+            "--measure-warmup" => {
+                let value = parse_required_flag_value(args, &mut index, "--measure-warmup")?;
+                measure_warmup_count = value.parse::<usize>().map_err(|error| {
+                    invalid_input(format!(
+                        "kernel-autotune-gemm --measure-warmup must be a nonnegative integer, got {value:?}: {error}"
+                    ))
+                })?;
             }
             "--beam-width" => {
                 let value = parse_required_flag_value(args, &mut index, "--beam-width")?;
@@ -404,7 +428,7 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
             }
             other => {
                 return Err(invalid_input(format!(
-                    "kernel-autotune-gemm unknown argument {other:?}; usage: kernel-autotune-gemm M N K [--allow-generated] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--artifact-root PATH]"
+                    "kernel-autotune-gemm unknown argument {other:?}; usage: kernel-autotune-gemm M N K [--allow-generated] [--measure] [--measure-repeat N] [--measure-warmup N] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--artifact-root PATH]"
                 )));
             }
         }
@@ -414,6 +438,11 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
             "kernel-autotune-gemm --beam-width must be nonzero",
         ));
     }
+    if measure && measure_repeat_count == 0 {
+        return Err(invalid_input(
+            "kernel-autotune-gemm --measure-repeat must be nonzero",
+        ));
+    }
 
     let problem = GemmSearchProblem::f32_bf16_row_col_row(m, n, k);
     let config = BeamSearchConfig {
@@ -421,15 +450,49 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         max_depth,
         require_launchable: !allow_generated,
     };
-    let result = beam_search_metadata(&problem, config);
+    let result = if measure {
+        let (stream, module) = cuda_handles()?;
+        let options = GemmAutotuneMeasureOptions {
+            repeat_count: measure_repeat_count,
+            warmup_count: measure_warmup_count,
+        };
+        let mut bench = GemmAutotuneBench::new(&stream, &module, m, n, k, options)?;
+        let mut first_measure_error = None;
+        let result = beam_search_metadata_with_scorer(&problem, config, |candidate| {
+            match bench.score_candidate(candidate) {
+                Ok(score) => score,
+                Err(error) => {
+                    if first_measure_error.is_none() {
+                        first_measure_error = Some(error.to_string());
+                    }
+                    None
+                }
+            }
+        });
+        if result.best.is_none() {
+            if let Some(error) = first_measure_error {
+                return Err(invalid_input(format!(
+                    "kernel-autotune-gemm measured search did not produce a candidate; first measurement error: {error}"
+                )));
+            }
+        }
+        result
+    } else {
+        beam_search_metadata(&problem, config)
+    };
     let best = result
         .best
         .as_ref()
         .ok_or_else(|| invalid_input("kernel-autotune-gemm did not produce any candidates"))?;
 
     println!(
-        "kernel_autotune_gemm m={m} n={n} k={k} beam_width={beam_width} max_depth={max_depth} allow_generated={allow_generated}"
+        "kernel_autotune_gemm m={m} n={n} k={k} beam_width={beam_width} max_depth={max_depth} allow_generated={allow_generated} measure={measure}"
     );
+    if measure {
+        println!(
+            "measurement time_source=cuda-event warmup_count={measure_warmup_count} repeat_count={measure_repeat_count}"
+        );
+    }
     println!(
         "search explored={} rejected={} beam_len={}",
         result.explored,
@@ -478,6 +541,115 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GemmAutotuneMeasureOptions {
+    repeat_count: usize,
+    warmup_count: usize,
+}
+
+struct GemmAutotuneBench<'a> {
+    stream: &'a Arc<CudaStream>,
+    module: &'a Arc<CudaModule>,
+    dev_a: DeviceBuffer<f32>,
+    dev_b: DeviceBuffer<Bf16>,
+    dev_c: DeviceBuffer<f32>,
+    m: usize,
+    n: usize,
+    k: usize,
+    options: GemmAutotuneMeasureOptions,
+}
+
+impl<'a> GemmAutotuneBench<'a> {
+    fn new(
+        stream: &'a Arc<CudaStream>,
+        module: &'a Arc<CudaModule>,
+        m: usize,
+        n: usize,
+        k: usize,
+        options: GemmAutotuneMeasureOptions,
+    ) -> AppResult<Self> {
+        let a_layout = MatrixLayout::<RowMajor>::packed(m, k);
+        let b_layout = MatrixLayout::<ColumnMajor>::packed(k, n);
+        let c_layout = MatrixLayout::<RowMajor>::packed(m, n);
+        let mut seed =
+            0x5045_5246_4155_544f_u64 ^ ((m as u64) << 32) ^ ((n as u64) << 16) ^ k as u64;
+        let mut a = vec![0.0_f32; a_layout.capacity()];
+        let mut b = vec![Bf16::from_bits(0); b_layout.capacity()];
+        let c = vec![0.0_f32; c_layout.capacity()];
+        fill_matrix::<RowMajor>(&mut a, &a_layout, m, k, &mut seed);
+        fill_bf16_matrix::<ColumnMajor>(&mut b, &b_layout, k, n, &mut seed);
+
+        Ok(Self {
+            stream,
+            module,
+            dev_a: DeviceBuffer::from_host(stream, &a)?,
+            dev_b: DeviceBuffer::from_host(stream, &b)?,
+            dev_c: DeviceBuffer::from_host(stream, &c)?,
+            m,
+            n,
+            k,
+            options,
+        })
+    }
+
+    fn score_candidate(
+        &mut self,
+        candidate: &KernelCandidateMetadata,
+    ) -> AppResult<Option<SearchScore>> {
+        if candidate.family != "gemm-f32-bf16-row-col-row" {
+            return Ok(None);
+        }
+        let KernelMaterialization::Existing { symbol } = &candidate.generated.materialization
+        else {
+            return Ok(None);
+        };
+        if *symbol != "gemm_f32_bf16_tiled_kernel" {
+            return Ok(None);
+        }
+
+        for _ in 0..self.options.warmup_count {
+            self.launch_existing_bf16_gemm()?;
+        }
+        self.stream.synchronize()?;
+
+        let mut samples = Vec::with_capacity(self.options.repeat_count);
+        for _ in 0..self.options.repeat_count {
+            let start = self
+                .stream
+                .record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            self.launch_existing_bf16_gemm()?;
+            let end = self
+                .stream
+                .record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let seconds = start.elapsed_ms(&end)? as f64 / 1_000.0;
+            if seconds.is_finite() {
+                samples.push(seconds);
+            }
+        }
+
+        let median = nn_rust_profiling::median_f64(&samples).ok_or_else(|| {
+            invalid_data("kernel-autotune-gemm measurement produced no finite samples")
+        })?;
+        Ok(SearchScore::measured(median))
+    }
+
+    fn launch_existing_bf16_gemm(&mut self) -> AppResult<()> {
+        ops::gemm_f32_bf16::<RowMajor, ColumnMajor, RowMajor>(
+            self.stream,
+            self.module,
+            &self.dev_a,
+            &self.dev_b,
+            &mut self.dev_c,
+            self.m,
+            self.n,
+            self.k,
+            1.0,
+            0.0,
+        )?;
+        Ok(())
+    }
 }
 
 fn compile_standalone_kernel_crate(
@@ -532,7 +704,12 @@ fn print_kernel_candidate(rank: usize, candidate: &KernelCandidateMetadata) {
     };
     let score = candidate
         .score
-        .map(|score| format!("{:.3}:{}", score.value, score.source.label()))
+        .map(|score| match score.source {
+            SearchScoreSource::Heuristic => format!("{:.3}:{}", score.value, score.source.label()),
+            SearchScoreSource::Measured => {
+                format!("{:.9}s:{}", score.value, score.source.label())
+            }
+        })
         .unwrap_or_else(|| "none".to_string());
     println!(
         "candidate rank={rank} key={} family={} launchable={} score={} generator={} materialization={} kernel={} grid={}x{}x{} block={}x{}x{} schedule={}",

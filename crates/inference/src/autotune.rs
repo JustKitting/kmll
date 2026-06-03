@@ -155,6 +155,13 @@ impl SearchScore {
             source: SearchScoreSource::Heuristic,
         })
     }
+
+    pub fn measured(value: f64) -> Option<Self> {
+        value.is_finite().then_some(Self {
+            value,
+            source: SearchScoreSource::Measured,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -466,10 +473,22 @@ pub fn beam_search_metadata<P>(problem: &P, config: BeamSearchConfig) -> BeamSea
 where
     P: KernelMetadataSearchProblem,
 {
+    beam_search_metadata_with_scorer(problem, config, |candidate| problem.score(candidate))
+}
+
+pub fn beam_search_metadata_with_scorer<P, F>(
+    problem: &P,
+    config: BeamSearchConfig,
+    mut score_candidate: F,
+) -> BeamSearchResult
+where
+    P: KernelMetadataSearchProblem,
+    F: FnMut(&KernelCandidateMetadata) -> Option<SearchScore>,
+{
     assert!(config.beam_width > 0, "beam width must be nonzero");
 
     let mut seed = problem.seed();
-    seed.score = problem.score(&seed);
+    seed.score = score_candidate(&seed);
     let mut seen = HashSet::new();
     seen.insert(seed.artifact_key());
     let mut beam = vec![seed];
@@ -488,7 +507,7 @@ where
                     rejected += 1;
                     continue;
                 }
-                match problem.score(&next) {
+                match score_candidate(&next) {
                     Some(score) => {
                         next.score = Some(score);
                         candidates.push(next);
@@ -1380,6 +1399,26 @@ fn hash_bytes(mut state: u64, value: &[u8]) -> u64 {
 mod tests {
     use super::*;
 
+    fn test_generated_root() -> PathBuf {
+        runtime::default_artifact_dir()
+            .join("test-generated")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("system clock should be after unix epoch")
+                    .as_nanos()
+            ))
+    }
+
+    fn remove_test_generated_root(root: &Path) {
+        fs::remove_dir_all(root).expect("test-generated kernel artifact directory should clean up");
+        if let Some(parent) = root.parent() {
+            let _ = fs::remove_dir(parent);
+        }
+    }
+
     #[test]
     fn matvec_search_keeps_only_metadata_for_rows_per_block_variants() {
         let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
@@ -1478,16 +1517,7 @@ mod tests {
 
     #[test]
     fn artifact_store_writes_metadata_manifest_without_kernel_source() {
-        let root = runtime::default_artifact_dir()
-            .join("test-generated")
-            .join(format!(
-                "{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("system clock should be after unix epoch")
-                    .as_nanos()
-            ));
+        let root = test_generated_root();
         let store = KernelArtifactStore::new(&root);
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
@@ -1530,22 +1560,12 @@ mod tests {
         assert_eq!(manifest["schedule"][0]["op"].as_str(), Some("tile-gemm"));
         assert_eq!(manifest["schedule"][0]["n"].as_u64(), Some(32));
 
-        fs::remove_dir_all(&root)
-            .expect("test-generated kernel artifact directory should clean up");
+        remove_test_generated_root(&root);
     }
 
     #[test]
     fn artifact_store_writes_standalone_crate_for_generated_kernel() {
-        let root = runtime::default_artifact_dir()
-            .join("test-generated")
-            .join(format!(
-                "{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("system clock should be after unix epoch")
-                    .as_nanos()
-            ));
+        let root = test_generated_root();
         let store = KernelArtifactStore::new(&root);
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
@@ -1573,7 +1593,7 @@ mod tests {
         assert!(source.contains("pub struct Bf16(u16);"));
         assert!(source.contains("fn main() {}"));
 
-        fs::remove_dir_all(&root).expect("test-generated kernel crate directory should clean up");
+        remove_test_generated_root(&root);
     }
 
     #[test]
@@ -1600,6 +1620,35 @@ mod tests {
             best.generated.materialization,
             KernelMaterialization::DeferredGenerated { .. }
         ));
+    }
+
+    #[test]
+    fn gemm_search_accepts_external_measured_scores() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let result = beam_search_metadata_with_scorer(
+            &problem,
+            BeamSearchConfig {
+                beam_width: 1,
+                max_depth: 1,
+                require_launchable: false,
+            },
+            |candidate| {
+                let tile = schedule_gemm_tile(&candidate.schedule)?;
+                SearchScore::measured((tile.m + tile.n + tile.k) as f64)
+            },
+        );
+        let best = result
+            .best
+            .expect("GEMM search should accept externally scored candidates");
+
+        assert_eq!(
+            schedule_gemm_tile(&best.schedule),
+            Some(GemmTileShape::new(8, 16, 16))
+        );
+        assert_eq!(
+            best.score.map(|score| score.source),
+            Some(SearchScoreSource::Measured)
+        );
     }
 
     #[test]
