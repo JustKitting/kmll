@@ -18,12 +18,12 @@ use nn_rust_inference::{
     autotune::{
         AutoOptimizeConfig, BeamSearchConfig, EmittedKernelOptimizationSelection,
         EmittedStandaloneKernelCrate, GemmRustCudaGenerator, InferenceKernelRustCudaGenerator,
-        KernelArtifactStore, KernelCandidateMetadata, KernelMaterialization,
+        KernelArtifactStore, KernelCandidateMetadata, KernelExpansionPolicy, KernelMaterialization,
         KernelOptimizationCacheKey, KernelScheduleAction, KernelScheduleActionArg,
         KernelSourceGenerator, MatvecRustCudaGenerator, ScheduleTransform, SearchScore,
         SearchScoreSource, SelectionCacheStatus,
-        auto_optimize_inference_kernel_with_selection_cache,
-        auto_optimize_inference_kernel_with_selection_cache_scorer,
+        auto_optimize_inference_kernel_with_selection_cache_and_policy,
+        auto_optimize_inference_kernel_with_selection_cache_and_policy_scorer,
     },
     chat,
     dtypes::{Bf16, DType},
@@ -409,7 +409,11 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
     let mut measure_repeat_count = 5usize;
     let mut measure_warmup_count = 2usize;
     let mut artifact_root = None;
+    let mut policy_overrides = KernelExpansionPolicyOverrides::default();
     while index < args.len() {
+        if parse_kernel_expansion_policy_flag(args, &mut index, &mut policy_overrides)? {
+            continue;
+        }
         match args[index].as_str() {
             "--allow-generated" => {
                 allow_generated = true;
@@ -474,7 +478,7 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
             }
             other => {
                 return Err(invalid_input(format!(
-                    "kernel-autotune-gemm unknown argument {other:?}; usage: kernel-autotune-gemm M N K [--allow-generated] [--measure] [--measure-repeat N] [--measure-warmup N] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--artifact-root PATH]"
+                    "kernel-autotune-gemm unknown argument {other:?}; usage: kernel-autotune-gemm M N K [--allow-generated] [--measure] [--measure-repeat N] [--measure-warmup N] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--max-threads-per-block N|none] [--max-shared-memory-bytes N|none] [--max-accumulator-elements-per-thread N|none] [--max-output-elements-per-thread N|none] [--max-load-elements-per-block N|none] [--artifact-root PATH]"
                 )));
             }
         }
@@ -496,6 +500,9 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         max_depth,
         require_launchable: !allow_generated,
     });
+    let policy = policy_overrides.apply(KernelExpansionPolicy::for_search_config(
+        config.require_launchable,
+    ));
     let store = artifact_root
         .as_ref()
         .map(|root| KernelArtifactStore::new(root.clone()))
@@ -517,10 +524,11 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
             GemmAutotuneBench::new(&stream, &module, m, n, k, options, generated_store)?;
         let mut first_measure_error = None;
         let mut score_cache_error = None;
-        let cached = auto_optimize_inference_kernel_with_selection_cache_scorer(
+        let cached = auto_optimize_inference_kernel_with_selection_cache_and_policy_scorer(
             &store,
             &operation,
             config,
+            policy,
             &score_namespace,
             |candidate, _problem| {
                 cached_measured_score(
@@ -547,10 +555,11 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         }
         cached
     } else {
-        auto_optimize_inference_kernel_with_selection_cache(
+        auto_optimize_inference_kernel_with_selection_cache_and_policy(
             &store,
             &operation,
             config,
+            policy,
             &score_namespace,
         )?
     };
@@ -567,6 +576,7 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
     println!(
         "kernel_autotune_gemm m={m} n={n} k={k} beam_width={beam_width} max_depth={max_depth} allow_generated={allow_generated} measure={measure}"
     );
+    print_kernel_expansion_policy(policy);
     if measure {
         println!(
             "measurement time_source=cuda-event warmup_count={measure_warmup_count} repeat_count={measure_repeat_count}"
@@ -681,7 +691,11 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
     let mut measure_repeat_count = 5usize;
     let mut measure_warmup_count = 2usize;
     let mut artifact_root = None;
+    let mut policy_overrides = KernelExpansionPolicyOverrides::default();
     while index < args.len() {
+        if parse_kernel_expansion_policy_flag(args, &mut index, &mut policy_overrides)? {
+            continue;
+        }
         match args[index].as_str() {
             "--allow-generated" => {
                 allow_generated = true;
@@ -746,7 +760,7 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
             }
             other => {
                 return Err(invalid_input(format!(
-                    "kernel-autotune-matvec unknown argument {other:?}; usage: kernel-autotune-matvec ROWS COLS [--allow-generated] [--measure] [--measure-repeat N] [--measure-warmup N] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--artifact-root PATH]"
+                    "kernel-autotune-matvec unknown argument {other:?}; usage: kernel-autotune-matvec ROWS COLS [--allow-generated] [--measure] [--measure-repeat N] [--measure-warmup N] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--max-threads-per-block N|none] [--max-shared-memory-bytes N|none] [--max-accumulator-elements-per-thread N|none] [--max-output-elements-per-thread N|none] [--max-load-elements-per-block N|none] [--artifact-root PATH]"
                 )));
             }
         }
@@ -768,6 +782,9 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         max_depth,
         require_launchable: !allow_generated,
     });
+    let policy = policy_overrides.apply(KernelExpansionPolicy::for_search_config(
+        config.require_launchable,
+    ));
     let store = artifact_root
         .as_ref()
         .map(|root| KernelArtifactStore::new(root.clone()))
@@ -789,10 +806,11 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
             MatvecAutotuneBench::new(&stream, &module, rows, cols, options, generated_store)?;
         let mut first_measure_error = None;
         let mut score_cache_error = None;
-        let cached = auto_optimize_inference_kernel_with_selection_cache_scorer(
+        let cached = auto_optimize_inference_kernel_with_selection_cache_and_policy_scorer(
             &store,
             &operation,
             config,
+            policy,
             &score_namespace,
             |candidate, _problem| {
                 cached_measured_score(
@@ -819,10 +837,11 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         }
         cached
     } else {
-        auto_optimize_inference_kernel_with_selection_cache(
+        auto_optimize_inference_kernel_with_selection_cache_and_policy(
             &store,
             &operation,
             config,
+            policy,
             &score_namespace,
         )?
     };
@@ -839,6 +858,7 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
     println!(
         "kernel_autotune_matvec rows={rows} cols={cols} beam_width={beam_width} max_depth={max_depth} allow_generated={allow_generated} measure={measure}"
     );
+    print_kernel_expansion_policy(policy);
     if measure {
         println!(
             "measurement time_source=cuda-event warmup_count={measure_warmup_count} repeat_count={measure_repeat_count}"
@@ -936,6 +956,75 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
 struct KernelAutotuneMeasureOptions {
     repeat_count: usize,
     warmup_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct KernelExpansionPolicyOverrides {
+    max_threads_per_block: Option<Option<u32>>,
+    max_shared_memory_bytes: Option<Option<u32>>,
+    max_accumulator_elements_per_thread: Option<Option<u32>>,
+    max_output_elements_per_thread: Option<Option<u32>>,
+    max_load_elements_per_block: Option<Option<u32>>,
+}
+
+impl KernelExpansionPolicyOverrides {
+    fn apply(self, mut policy: KernelExpansionPolicy) -> KernelExpansionPolicy {
+        if let Some(value) = self.max_threads_per_block {
+            policy = policy.with_max_threads_per_block(value);
+        }
+        if let Some(value) = self.max_shared_memory_bytes {
+            policy = policy.with_max_shared_memory_bytes(value);
+        }
+        if let Some(value) = self.max_accumulator_elements_per_thread {
+            policy = policy.with_max_accumulator_elements_per_thread(value);
+        }
+        if let Some(value) = self.max_output_elements_per_thread {
+            policy = policy.with_max_output_elements_per_thread(value);
+        }
+        if let Some(value) = self.max_load_elements_per_block {
+            policy = policy.with_max_load_elements_per_block(value);
+        }
+        policy
+    }
+}
+
+fn parse_kernel_expansion_policy_flag(
+    args: &[String],
+    index: &mut usize,
+    overrides: &mut KernelExpansionPolicyOverrides,
+) -> AppResult<bool> {
+    let Some(flag) = args.get(*index).cloned() else {
+        return Ok(false);
+    };
+    match flag.as_str() {
+        "--max-threads-per-block" => {
+            let value = parse_required_flag_value(args, index, &flag)?;
+            overrides.max_threads_per_block = Some(parse_optional_u32_cap(value, &flag)?);
+            Ok(true)
+        }
+        "--max-shared-memory-bytes" => {
+            let value = parse_required_flag_value(args, index, &flag)?;
+            overrides.max_shared_memory_bytes = Some(parse_optional_u32_cap(value, &flag)?);
+            Ok(true)
+        }
+        "--max-accumulator-elements-per-thread" | "--max-accumulators-per-thread" => {
+            let value = parse_required_flag_value(args, index, &flag)?;
+            overrides.max_accumulator_elements_per_thread =
+                Some(parse_optional_u32_cap(value, &flag)?);
+            Ok(true)
+        }
+        "--max-output-elements-per-thread" => {
+            let value = parse_required_flag_value(args, index, &flag)?;
+            overrides.max_output_elements_per_thread = Some(parse_optional_u32_cap(value, &flag)?);
+            Ok(true)
+        }
+        "--max-load-elements-per-block" => {
+            let value = parse_required_flag_value(args, index, &flag)?;
+            overrides.max_load_elements_per_block = Some(parse_optional_u32_cap(value, &flag)?);
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
 }
 
 struct MatvecAutotuneBench<'a> {
@@ -11292,6 +11381,44 @@ fn parse_required_flag_value<'a>(
             value.as_str()
         })
         .ok_or_else(|| invalid_input(format!("{flag} requires a value")))
+}
+
+fn parse_optional_u32_cap(value: &str, flag: &str) -> AppResult<Option<u32>> {
+    if ["none", "unlimited", "off"]
+        .iter()
+        .any(|keyword| value.eq_ignore_ascii_case(keyword))
+    {
+        return Ok(None);
+    }
+    let parsed = value.parse::<u32>().map_err(|error| {
+        invalid_input(format!(
+            "{flag} must be a positive integer or `none`, got {value:?}: {error}"
+        ))
+    })?;
+    if parsed == 0 {
+        return Err(invalid_input(format!(
+            "{flag} must be nonzero or `none`, got {value:?}"
+        )));
+    }
+    Ok(Some(parsed))
+}
+
+fn format_optional_u32_cap(value: Option<u32>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn print_kernel_expansion_policy(policy: KernelExpansionPolicy) {
+    println!(
+        "search_policy require_launchable={} max_threads_per_block={} max_shared_memory_bytes={} max_accumulator_elements_per_thread={} max_output_elements_per_thread={} max_load_elements_per_block={}",
+        policy.require_launchable,
+        format_optional_u32_cap(policy.max_threads_per_block),
+        format_optional_u32_cap(policy.max_shared_memory_bytes),
+        format_optional_u32_cap(policy.max_accumulator_elements_per_thread),
+        format_optional_u32_cap(policy.max_output_elements_per_thread),
+        format_optional_u32_cap(policy.max_load_elements_per_block),
+    );
 }
 
 #[derive(Debug)]
