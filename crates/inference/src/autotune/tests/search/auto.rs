@@ -31,7 +31,7 @@ fn auto_optimize_preserves_parent_when_children_do_not_improve() {
 
     assert_eq!(
         result.exit_reason,
-        AutoOptimizeExitReason::NoImprovement { best_delta: -9.0 }
+        AutoOptimizeExitReason::NoImprovement { best_delta: 0.0 }
     );
     assert_eq!(result.steps.len(), 2);
     assert_eq!(

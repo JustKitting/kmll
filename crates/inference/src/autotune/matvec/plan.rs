@@ -269,6 +269,11 @@ impl MatvecSchedulePlan {
         self
     }
 
+    pub const fn with_rows(mut self, rows: MatvecRowSplit) -> Self {
+        self.rows = rows;
+        self
+    }
+
     pub const fn with_reduce_unroll(mut self, factor: u32) -> Self {
         self.reduce_unroll = if factor == 0 { 1 } else { factor };
         self

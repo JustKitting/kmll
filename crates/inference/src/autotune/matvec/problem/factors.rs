@@ -59,6 +59,34 @@ impl MatvecSearchProblem {
             .collect()
     }
 
+    pub(in crate::autotune::matvec::problem) fn local_tile_factors(&self) -> Vec<u32> {
+        let upper = self.rows.min(MatvecRowSplit::MAX_ROWS_PER_BLOCK as usize) as u32;
+        KernelScheduleActionTemplate::INFERENCE_DEFAULT
+            .local_tile_factors
+            .iter()
+            .copied()
+            .filter(|factor| *factor <= upper)
+            .filter(|factor| MatvecRowSplit::new(*factor).is_some())
+            .collect()
+    }
+
+    pub(in crate::autotune::matvec::problem) fn local_tile_factors_for_plan(
+        plan: MatvecSchedulePlan,
+        rows: usize,
+    ) -> Vec<u32> {
+        let plan = plan.normalized();
+        let upper = rows.min(MatvecRowSplit::MAX_ROWS_PER_BLOCK as usize) as u32;
+        KernelScheduleActionTemplate::INFERENCE_DEFAULT
+            .local_tile_factors
+            .iter()
+            .copied()
+            .filter(|factor| *factor <= upper)
+            .filter(|factor| *factor != plan.rows.rows_per_block())
+            .filter(|factor| *factor >= plan.row_upcast.factor())
+            .filter(|factor| MatvecRowSplit::new(*factor).is_some())
+            .collect()
+    }
+
     pub(in crate::autotune::matvec::problem) fn stride_orders_for_plan(
         plan: MatvecSchedulePlan,
     ) -> Vec<Vec<u8>> {

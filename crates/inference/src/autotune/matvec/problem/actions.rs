@@ -7,6 +7,7 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
     fn search_space(&self) -> KernelActionSpaceSet {
         let split_variants = self.split_variants();
         let group_top_factors = self.group_top_factors();
+        let local_tile_factors = self.local_tile_factors();
         let row_upcast_factors = self.row_upcast_factors();
         let unroll_factors = self.reduce_unroll_factors();
         let reduce_group_top_factors = self.reduce_group_top_factors();
@@ -19,6 +20,10 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
             KernelActionSpace::GroupTop {
                 axis: 0,
                 factors: group_top_factors,
+            },
+            KernelActionSpace::LocalTile {
+                axis: 0,
+                factors: local_tile_factors,
             },
             KernelActionSpace::Upcast {
                 axis: 0,
@@ -65,10 +70,17 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
         let Some(plan) = schedule_matvec_plan(&candidate.schedule) else {
             return KernelActionSpaceSet::default();
         };
-        if candidate.generated.materialization.is_existing() {
-            return KernelActionSpaceSet::default();
-        }
         let mut spaces = Vec::new();
+        let local_tile_factors = Self::local_tile_factors_for_plan(plan, self.rows);
+        if !local_tile_factors.is_empty() {
+            spaces.push(KernelActionSpace::LocalTile {
+                axis: 0,
+                factors: local_tile_factors,
+            });
+        }
+        if candidate.generated.materialization.is_existing() {
+            return KernelActionSpaceSet::new(spaces);
+        }
         if plan.row_upcast.is_default() {
             let factors = self.row_upcast_factors_for_rows(plan.rows);
             if !factors.is_empty() {
@@ -146,6 +158,24 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 }
                 let rows = MatvecRowSplit::new(*rows_per_block)?;
                 let next = self.generated_candidate_for_row_group_top(rows);
+                Some(candidate_with_action_trace(candidate, action, next))
+            }
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::LocalTile,
+                axis: Some(0),
+                arg: KernelScheduleActionArg::Factor(rows_per_block),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                let plan = schedule_matvec_plan(&candidate.schedule)?;
+                if !Self::local_tile_factors_for_plan(plan, self.rows).contains(rows_per_block) {
+                    return None;
+                }
+                let rows = MatvecRowSplit::new(*rows_per_block)?;
+                let next = self.generated_candidate_for_plan_with_grouping(
+                    plan.with_rows(rows),
+                    row_grouping_transform(&candidate.schedule),
+                    reduce_grouping_transform(&candidate.schedule),
+                );
                 Some(candidate_with_action_trace(candidate, action, next))
             }
             KernelScheduleAction {

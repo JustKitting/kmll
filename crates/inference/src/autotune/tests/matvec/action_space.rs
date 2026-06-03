@@ -31,7 +31,7 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
     assert_eq!(factors.first().copied(), Some(1));
     assert_eq!(factors.last().copied(), Some(32));
     let complete_space = problem.search_space();
-    assert_eq!(complete_space.spaces.len(), 7);
+    assert_eq!(complete_space.spaces.len(), 8);
     assert!(matches!(
         complete_space.spaces[0],
         KernelActionSpace::Split { .. }
@@ -40,24 +40,29 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
         complete_space.spaces[1],
         KernelActionSpace::GroupTop { .. }
     ));
+    let KernelActionSpace::LocalTile { axis, factors } = &complete_space.spaces[2] else {
+        panic!("matvec global action space should expose local-tile metadata");
+    };
+    assert_eq!(*axis, 0);
+    assert_eq!(factors.as_slice(), &[2, 3, 4, 8, 13, 16, 24, 29, 32]);
     assert!(matches!(
-        complete_space.spaces[2],
+        complete_space.spaces[3],
         KernelActionSpace::Upcast { .. }
     ));
     assert!(matches!(
-        complete_space.spaces[3],
+        complete_space.spaces[4],
         KernelActionSpace::Unroll { .. }
     ));
     assert!(matches!(
-        complete_space.spaces[4],
+        complete_space.spaces[5],
         KernelActionSpace::GroupTop { .. }
     ));
     assert!(matches!(
-        complete_space.spaces[5],
+        complete_space.spaces[6],
         KernelActionSpace::Group { .. }
     ));
     assert!(matches!(
-        complete_space.spaces[6],
+        complete_space.spaces[7],
         KernelActionSpace::StrideOrder { .. }
     ));
     assert_eq!(actions.len(), 36);
@@ -93,6 +98,41 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
             symbol: "matvec_bf16_rows13".to_string()
         }
     );
+
+    let existing_rows8 = problem
+        .apply_schedule_action(
+            &seed,
+            &KernelScheduleAction::split(0, 8, KernelActionMaterialization::Existing),
+        )
+        .expect("existing row split should produce candidate metadata");
+    let existing_spaces = problem.action_spaces(&existing_rows8);
+    assert_eq!(existing_spaces.spaces.len(), 1);
+    let KernelActionSpace::LocalTile { axis, factors } = &existing_spaces.spaces[0] else {
+        panic!("existing matvec row split should expose local-tile metadata");
+    };
+    assert_eq!(*axis, 0);
+    assert_eq!(factors.as_slice(), &[2, 3, 4, 13, 16, 24, 29, 32]);
+    let retiled_existing = problem
+        .apply_schedule_action(&existing_rows8, &KernelScheduleAction::local_tile(0, 13))
+        .expect("local-tile action should turn existing matvec row split into generated metadata");
+    assert_eq!(retiled_existing.launch.kernel, "matvec_bf16_rows13");
+    assert_eq!(
+        schedule_rows_per_block(&retiled_existing.schedule),
+        Some(13)
+    );
+    assert_eq!(
+        retiled_existing.action_trace,
+        vec![
+            KernelScheduleAction::split(0, 8, KernelActionMaterialization::Existing),
+            KernelScheduleAction::local_tile(0, 13),
+        ]
+    );
+    assert_eq!(
+        retiled_existing.generated.materialization,
+        KernelMaterialization::Generated {
+            symbol: "matvec_bf16_rows13".to_string()
+        }
+    );
 }
 
 #[test]
@@ -105,9 +145,17 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
     let spaces = problem.action_spaces(&rows8);
     let actions = problem.schedule_actions(&rows8);
 
-    assert_eq!(spaces.spaces.len(), 4);
+    assert_eq!(spaces.spaces.len(), 5);
     assert_eq!(spaces.actions(), actions);
-    let KernelActionSpace::Upcast { axis, factors } = &spaces.spaces[0] else {
+    let KernelActionSpace::LocalTile { axis, factors } = &spaces.spaces[0] else {
+        panic!("generated matvec split should expose local-tile action-space metadata");
+    };
+    assert_eq!(*axis, 0);
+    assert_eq!(factors.as_slice(), &[2, 3, 4, 13, 16, 24, 29, 32]);
+    assert!(actions.contains(&KernelScheduleAction::local_tile(0, 13)));
+    assert!(!actions.contains(&KernelScheduleAction::local_tile(0, 8)));
+
+    let KernelActionSpace::Upcast { axis, factors } = &spaces.spaces[1] else {
         panic!("generated matvec split should expose upcast action-space metadata");
     };
     assert_eq!(*axis, 0);
@@ -118,7 +166,7 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
     assert!(actions.contains(&KernelScheduleAction::upcast(0, 2)));
     assert!(actions.contains(&KernelScheduleAction::upcast(0, 4)));
 
-    let KernelActionSpace::Unroll { axis, factors } = &spaces.spaces[1] else {
+    let KernelActionSpace::Unroll { axis, factors } = &spaces.spaces[2] else {
         panic!("generated matvec split should expose unroll action-space metadata");
     };
     assert_eq!(*axis, 1);
@@ -131,14 +179,14 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
     assert!(actions.contains(&KernelScheduleAction::unroll(1, 2)));
     assert!(actions.contains(&KernelScheduleAction::unroll(1, 7)));
     assert!(actions.contains(&KernelScheduleAction::unroll(1, 32)));
-    let KernelActionSpace::GroupTop { axis, factors } = &spaces.spaces[2] else {
+    let KernelActionSpace::GroupTop { axis, factors } = &spaces.spaces[3] else {
         panic!("generated matvec split should expose reduce group-top action-space metadata");
     };
     assert_eq!(*axis, 1);
     assert_eq!(factors.as_slice(), &[13, 16, 28, 29, 32, 49, 64, 256]);
     assert!(actions.contains(&KernelScheduleAction::group_top(1, 64)));
 
-    let KernelActionSpace::Group { axis, factors } = &spaces.spaces[3] else {
+    let KernelActionSpace::Group { axis, factors } = &spaces.spaces[4] else {
         panic!("generated matvec split should expose group action-space metadata");
     };
     assert_eq!(*axis, 1);
@@ -183,6 +231,29 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
         ]
     );
     assert_ne!(rows8.artifact_key(), reduce_grouped.artifact_key());
+
+    let retiled = problem
+        .apply_schedule_action(&rows8, &KernelScheduleAction::local_tile(0, 13))
+        .expect("local-tile action should retile generated matvec candidate metadata");
+    assert_eq!(retiled.launch.kernel, "matvec_bf16_rows13");
+    assert_eq!(schedule_rows_per_block(&retiled.schedule), Some(13));
+    assert!(retiled.schedule.transforms.iter().any(|transform| {
+        matches!(
+            transform,
+            ScheduleTransform::GroupTop {
+                axis: 0,
+                factor: 13
+            }
+        )
+    }));
+    assert_eq!(
+        retiled.action_trace,
+        vec![
+            KernelScheduleAction::group_top(0, 8),
+            KernelScheduleAction::local_tile(0, 13),
+        ]
+    );
+    assert_ne!(rows8.artifact_key(), retiled.artifact_key());
 
     let upcast = problem
         .apply_schedule_action(&rows8, &KernelScheduleAction::upcast(0, 2))

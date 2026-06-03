@@ -73,10 +73,14 @@ fn artifact_store_writes_search_report_metadata_without_kernel_source() {
     );
     assert_eq!(
         report_json["action_space"]["spaces"][2]["op"].as_str(),
-        Some("upcast")
+        Some("local-tile")
     );
     assert_eq!(
         report_json["action_space"]["spaces"][3]["op"].as_str(),
+        Some("upcast")
+    );
+    assert_eq!(
+        report_json["action_space"]["spaces"][4]["op"].as_str(),
         Some("unroll")
     );
     assert_eq!(report_json["best"]["launchable"].as_bool(), Some(false));
