@@ -22,7 +22,7 @@ impl SassLiftedModule {
                     format_value_refs(&op.inputs),
                     format_value_refs(&op.outputs),
                     format_optional_display(op.predicate.as_ref()),
-                    op.source_operands.join(","),
+                    format_display_list(&op.source_operands),
                     op.semantics,
                     op.source
                 )
@@ -44,6 +44,14 @@ fn format_value_refs(values: &[SassLiftedValueRef]) -> String {
     values
         .iter()
         .map(SassLiftedValueRef::name)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_display_list<T: std::fmt::Display>(values: &[T]) -> String {
+    values
+        .iter()
+        .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",")
 }

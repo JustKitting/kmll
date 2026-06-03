@@ -1,6 +1,6 @@
 use super::super::sass::{SassInstruction, SassModule};
 use super::{
-    opcodes::{lift_kind, predicate_condition},
+    opcodes::{aggregate_operands, lift_kind, predicate_condition},
     types::{KernelIrFunction, KernelIrModule, KernelIrOp, SassModifier, SassOpcode},
 };
 
@@ -19,11 +19,7 @@ pub fn lift_sass_module(module: &SassModule) -> KernelIrModule {
 }
 
 fn lift_instruction(instruction: &SassInstruction) -> KernelIrOp {
-    let source_operands = instruction
-        .operands
-        .iter()
-        .map(|operand| operand.raw.clone())
-        .collect::<Vec<_>>();
+    let source_operands = aggregate_operands(instruction);
     let (kind, confidence) = lift_kind(instruction);
     KernelIrOp {
         address: instruction.address,

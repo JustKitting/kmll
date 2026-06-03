@@ -9,14 +9,14 @@ use std::{
 use nn_rust_inference::runtime;
 
 use super::{
-    ControlTarget, KernelIrModule, KernelIrOpKind, KnownSassOpcode, MemoryAddress,
-    MemoryAddressBase, MemoryAddressImmediate, MemorySpace, PredicateCondition, RegisterRef,
-    SassAnalysisModule, SassBlockTerminator, SassCfgEdgeKind, SassLiftedModule, SassLiftedOpClass,
-    SassLiftedOpDetail, SassLiftedOpKind, SassLiftedSemantics, SassLiftedValueRef,
-    SassMemoryAccessKind, SassModifier, SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind,
-    SassOpcodeCatalogSource, SassPatternConfidence, SassPatternModule, SassRegionKind,
-    SassRegionPath, SassSemanticPatternCategory, SassSemanticPatternKind, SassValueOpKind,
-    analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass,
+    AggregateOperand, ControlTarget, KernelIrModule, KernelIrOpKind, KnownSassOpcode,
+    MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemorySpace, PredicateCondition,
+    RegisterRef, SassAnalysisModule, SassBlockTerminator, SassCfgEdgeKind, SassLiftedModule,
+    SassLiftedOpClass, SassLiftedOpDetail, SassLiftedOpKind, SassLiftedSemantics,
+    SassLiftedValueRef, SassMemoryAccessKind, SassModifier, SassOpcode, SassOpcodeCatalogClass,
+    SassOpcodeCatalogKind, SassOpcodeCatalogSource, SassPatternConfidence, SassPatternModule,
+    SassRegionKind, SassRegionPath, SassSemanticPatternCategory, SassSemanticPatternKind,
+    SassValueOpKind, analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass,
     recover_sass_patterns, render_sass_file_side_by_side,
 };
 
@@ -571,7 +571,7 @@ pub struct SassCoverageLiftedOp {
     pub semantics: SassLiftedSemantics,
     pub inputs: Vec<SassLiftedValueRef>,
     pub outputs: Vec<SassLiftedValueRef>,
-    pub source_operands: Vec<String>,
+    pub source_operands: Vec<AggregateOperand>,
     pub detail: SassLiftedOpDetail,
     pub source: String,
 }
@@ -2031,7 +2031,7 @@ fn render_lifted_ops_tsv(report: &SassCoverageReport) -> String {
             tsv(&op.semantics.to_string()),
             tsv(&display_lifted_value_refs(&op.inputs)),
             tsv(&display_lifted_value_refs(&op.outputs)),
-            tsv(&op.source_operands.join(",")),
+            tsv(&display_list(&op.source_operands)),
             tsv(&op.detail.to_string()),
             tsv(&op.source),
         )

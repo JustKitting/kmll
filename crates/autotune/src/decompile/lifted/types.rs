@@ -1,5 +1,6 @@
 use std::fmt;
 
+use super::super::AggregateOperand;
 use super::super::{PredicateCondition, RegisterRef, SassOpcode};
 use super::semantics::SassLiftedSemantics;
 
@@ -35,7 +36,7 @@ pub struct SassLiftedOp {
     pub semantics: SassLiftedSemantics,
     pub inputs: Vec<SassLiftedValueRef>,
     pub outputs: Vec<SassLiftedValueRef>,
-    pub source_operands: Vec<String>,
+    pub source_operands: Vec<AggregateOperand>,
     pub detail: SassLiftedOpDetail,
     pub source: String,
 }

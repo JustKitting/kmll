@@ -60,7 +60,7 @@ pub struct KernelIrOp {
     pub confidence: SassMappingConfidence,
     pub source_opcode: SassOpcode,
     pub source_modifiers: Vec<SassModifier>,
-    pub source_operands: Vec<String>,
+    pub source_operands: Vec<AggregateOperand>,
     pub source: String,
 }
 

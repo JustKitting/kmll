@@ -583,6 +583,21 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
             && modifiers.as_slice() == [SassMemoryModifier::E]
     ));
     assert!(load.outputs.iter().any(|value| value.register == reg("R2")));
+    assert!(load.source_operands.iter().any(|operand| {
+        matches!(
+            &operand.kind,
+            AggregateOperandKind::Memory(address)
+                if matches!(
+                    &address.kind,
+                    MemoryAddressKind::Descriptor {
+                        descriptor,
+                        address,
+                        address_width: Some(64),
+                        offset: None,
+                    } if descriptor == &reg("UR4") && address == &reg("R0")
+                )
+        )
+    }));
 
     let add = function
         .ops
@@ -1733,6 +1748,21 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
                     && address.to_string() == "desc[UR4][R0.64]"
                     && modifiers.iter().any(|modifier| modifier.to_string() == "E")
             )
+            && op.source_operands.iter().any(|operand| {
+                matches!(
+                    &operand.kind,
+                    AggregateOperandKind::Memory(address)
+                        if matches!(
+                            &address.kind,
+                            MemoryAddressKind::Descriptor {
+                                descriptor,
+                                address,
+                                address_width: Some(64),
+                                offset: None,
+                            } if descriptor == &reg("UR4") && address == &reg("R0")
+                        )
+                )
+            })
     }));
     let lifted_ops_tsv =
         fs::read_to_string(&report.lifted_ops_path).expect("lifted ops TSV should be readable");

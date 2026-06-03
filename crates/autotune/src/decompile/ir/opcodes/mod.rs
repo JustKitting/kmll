@@ -11,12 +11,18 @@ mod tensor;
 mod warp;
 
 use super::super::sass::{SassInstruction, SassPredicate};
-use super::types::{KernelIrOpKind, PredicateCondition, SassMappingConfidence, SassOpcode};
+use super::types::{
+    AggregateOperand, KernelIrOpKind, PredicateCondition, SassMappingConfidence, SassOpcode,
+};
 
 pub(super) type LiftResult = (KernelIrOpKind, SassMappingConfidence);
 
 pub(super) fn predicate_condition(predicate: &SassPredicate) -> PredicateCondition {
     operands::predicate_condition(predicate)
+}
+
+pub(super) fn aggregate_operands(instruction: &SassInstruction) -> Vec<AggregateOperand> {
+    operands::aggregate_operands(instruction)
 }
 
 pub(super) fn lift_kind(instruction: &SassInstruction) -> LiftResult {
