@@ -189,6 +189,58 @@ fn operation_auto_optimize_with_scorer_can_drive_gemm_generation() {
     );
 }
 
+fn score_gemm_threads(candidate: &KernelCandidateMetadata) -> Option<SearchScore> {
+    let threads = candidate.resources?.threads_per_block;
+    if threads > 128 {
+        SearchScore::measured(1.0)
+    } else {
+        SearchScore::measured(10.0 + f64::from(threads))
+    }
+}
+
+#[test]
+fn operation_auto_optimize_with_policy_filters_overbudget_gemm_candidates() {
+    let operation = gemm_operation(128, 128, 256);
+    let config = AutoOptimizeConfig {
+        beam_width: 4,
+        max_steps: 1,
+        require_launchable: false,
+        min_score_improvement: 0.0,
+    };
+    let default_policy = KernelExpansionPolicy::for_search_config(false);
+    let capped_policy = default_policy.with_max_threads_per_block(Some(128));
+
+    let uncapped = auto_optimize_inference_kernel_with_policy_scorer(
+        &operation,
+        config,
+        default_policy,
+        |candidate, _problem| score_gemm_threads(candidate),
+    )
+    .expect("uncapped operation-level GEMM optimization should run");
+    let uncapped_threads = uncapped
+        .best_candidate()
+        .and_then(|candidate| candidate.resources)
+        .expect("uncapped best should carry resource metadata")
+        .threads_per_block;
+
+    let capped = auto_optimize_inference_kernel_with_policy_scorer(
+        &operation,
+        config,
+        capped_policy,
+        |candidate, _problem| score_gemm_threads(candidate),
+    )
+    .expect("policy-capped operation-level GEMM optimization should run");
+    let capped_threads = capped
+        .best_candidate()
+        .and_then(|candidate| candidate.resources)
+        .expect("capped best should carry resource metadata")
+        .threads_per_block;
+
+    assert!(uncapped_threads > 128);
+    assert!(capped_threads <= 128);
+    assert!(capped.result.rejected > 0);
+}
+
 #[test]
 fn operation_generation_reuses_selection_cache() {
     let root = test_generated_root();
@@ -232,6 +284,55 @@ fn operation_generation_reuses_selection_cache() {
             .source
             .source
             .contains(&format!("pub fn {}(", second.source.symbol))
+    );
+
+    remove_test_generated_root(&root);
+}
+
+#[test]
+fn operation_generation_selection_cache_is_policy_specific() {
+    let root = test_generated_root();
+    let store = KernelArtifactStore::new(&root);
+    let operation = matvec_operation(128, 256);
+    let config = AutoOptimizeConfig {
+        beam_width: 4,
+        max_steps: 1,
+        require_launchable: false,
+        min_score_improvement: 0.0,
+    };
+    let capped_policy =
+        KernelExpansionPolicy::for_search_config(false).with_max_threads_per_block(Some(64));
+
+    let default = generate_inference_kernel_source_with_selection_cache(
+        &store,
+        &operation,
+        config,
+        "heuristic",
+    )
+    .expect("default operation-level generation should write selection cache");
+    let capped = generate_inference_kernel_source_with_selection_cache_and_policy(
+        &store,
+        &operation,
+        config,
+        capped_policy,
+        "heuristic",
+    )
+    .expect("policy-capped operation-level generation should write selection cache");
+
+    assert_eq!(
+        default.optimization.cache_status,
+        SelectionCacheStatus::Miss
+    );
+    assert_eq!(capped.optimization.cache_status, SelectionCacheStatus::Miss);
+    assert_ne!(
+        default.optimization.cache_key,
+        capped.optimization.cache_key
+    );
+    assert!(
+        capped.candidate.launch.block_dim.x
+            <= capped_policy
+                .max_threads_per_block
+                .expect("policy should cap threads")
     );
 
     remove_test_generated_root(&root);

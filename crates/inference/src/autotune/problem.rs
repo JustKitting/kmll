@@ -81,8 +81,20 @@ pub fn auto_optimize_inference_kernel(
     operation: &TypedOperationSpec,
     config: AutoOptimizeConfig,
 ) -> Result<InferenceKernelAutoOptimize, KernelGenerationError> {
+    auto_optimize_inference_kernel_with_policy(
+        operation,
+        config,
+        KernelExpansionPolicy::for_search_config(config.require_launchable),
+    )
+}
+
+pub fn auto_optimize_inference_kernel_with_policy(
+    operation: &TypedOperationSpec,
+    config: AutoOptimizeConfig,
+    policy: KernelExpansionPolicy,
+) -> Result<InferenceKernelAutoOptimize, KernelGenerationError> {
     let problem = InferenceKernelOptimizationProblem::from_operation(operation)?;
-    let result = auto_optimize_metadata(&problem, config);
+    let result = auto_optimize_metadata_with_policy(&problem, config, policy);
     Ok(InferenceKernelAutoOptimize {
         operation: operation.clone(),
         problem,
@@ -98,9 +110,26 @@ pub fn auto_optimize_inference_kernel_with_scorer<F>(
 where
     F: FnMut(&KernelCandidateMetadata) -> Option<SearchScore>,
 {
+    auto_optimize_inference_kernel_with_policy_scorer(
+        operation,
+        config,
+        KernelExpansionPolicy::for_search_config(config.require_launchable),
+        |candidate, _problem| score_candidate(candidate),
+    )
+}
+
+pub fn auto_optimize_inference_kernel_with_policy_scorer<F>(
+    operation: &TypedOperationSpec,
+    config: AutoOptimizeConfig,
+    policy: KernelExpansionPolicy,
+    mut score_candidate: F,
+) -> Result<InferenceKernelAutoOptimize, KernelGenerationError>
+where
+    F: FnMut(&KernelCandidateMetadata, &InferenceKernelOptimizationProblem) -> Option<SearchScore>,
+{
     let problem = InferenceKernelOptimizationProblem::from_operation(operation)?;
-    let result = auto_optimize_metadata_with_scorer(&problem, config, |candidate| {
-        score_candidate(candidate)
+    let result = auto_optimize_metadata_with_policy_scorer(&problem, config, policy, |candidate| {
+        score_candidate(candidate, &problem)
     });
     Ok(InferenceKernelAutoOptimize {
         operation: operation.clone(),
@@ -115,10 +144,27 @@ pub fn auto_optimize_inference_kernel_with_selection_cache(
     config: AutoOptimizeConfig,
     score_namespace: &str,
 ) -> Result<CachedInferenceKernelAutoOptimize, KernelGenerationError> {
-    auto_optimize_inference_kernel_with_selection_cache_scorer(
+    auto_optimize_inference_kernel_with_selection_cache_and_policy(
         store,
         operation,
         config,
+        KernelExpansionPolicy::for_search_config(config.require_launchable),
+        score_namespace,
+    )
+}
+
+pub fn auto_optimize_inference_kernel_with_selection_cache_and_policy(
+    store: &KernelArtifactStore,
+    operation: &TypedOperationSpec,
+    config: AutoOptimizeConfig,
+    policy: KernelExpansionPolicy,
+    score_namespace: &str,
+) -> Result<CachedInferenceKernelAutoOptimize, KernelGenerationError> {
+    auto_optimize_inference_kernel_with_selection_cache_and_policy_scorer(
+        store,
+        operation,
+        config,
+        policy,
         score_namespace,
         |candidate, problem| problem.score(candidate),
     )
@@ -129,16 +175,38 @@ pub fn auto_optimize_inference_kernel_with_selection_cache_scorer<F>(
     operation: &TypedOperationSpec,
     config: AutoOptimizeConfig,
     score_namespace: &str,
+    score_candidate: F,
+) -> Result<CachedInferenceKernelAutoOptimize, KernelGenerationError>
+where
+    F: FnMut(&KernelCandidateMetadata, &InferenceKernelOptimizationProblem) -> Option<SearchScore>,
+{
+    auto_optimize_inference_kernel_with_selection_cache_and_policy_scorer(
+        store,
+        operation,
+        config,
+        KernelExpansionPolicy::for_search_config(config.require_launchable),
+        score_namespace,
+        score_candidate,
+    )
+}
+
+pub fn auto_optimize_inference_kernel_with_selection_cache_and_policy_scorer<F>(
+    store: &KernelArtifactStore,
+    operation: &TypedOperationSpec,
+    config: AutoOptimizeConfig,
+    policy: KernelExpansionPolicy,
+    score_namespace: &str,
     mut score_candidate: F,
 ) -> Result<CachedInferenceKernelAutoOptimize, KernelGenerationError>
 where
     F: FnMut(&KernelCandidateMetadata, &InferenceKernelOptimizationProblem) -> Option<SearchScore>,
 {
     let problem = InferenceKernelOptimizationProblem::from_operation(operation)?;
-    let cached = auto_optimize_metadata_with_selection_cache(
+    let cached = auto_optimize_metadata_with_selection_cache_and_policy(
         store,
         &problem,
         config,
+        policy,
         score_namespace,
         |candidate| score_candidate(candidate, &problem),
     )?;
@@ -158,7 +226,19 @@ pub fn generate_inference_kernel_source(
     operation: &TypedOperationSpec,
     config: AutoOptimizeConfig,
 ) -> Result<GeneratedInferenceKernelSource, KernelGenerationError> {
-    let optimization = auto_optimize_inference_kernel(operation, config)?;
+    generate_inference_kernel_source_with_policy(
+        operation,
+        config,
+        KernelExpansionPolicy::for_search_config(config.require_launchable),
+    )
+}
+
+pub fn generate_inference_kernel_source_with_policy(
+    operation: &TypedOperationSpec,
+    config: AutoOptimizeConfig,
+    policy: KernelExpansionPolicy,
+) -> Result<GeneratedInferenceKernelSource, KernelGenerationError> {
+    let optimization = auto_optimize_inference_kernel_with_policy(operation, config, policy)?;
     let candidate = optimization.best_candidate().cloned().ok_or_else(|| {
         KernelGenerationError::NoOptimizationCandidate {
             name: operation.name.clone(),
@@ -179,10 +259,27 @@ pub fn generate_inference_kernel_source_with_selection_cache(
     config: AutoOptimizeConfig,
     score_namespace: &str,
 ) -> Result<CachedGeneratedInferenceKernelSource, KernelGenerationError> {
-    let optimization = auto_optimize_inference_kernel_with_selection_cache(
+    generate_inference_kernel_source_with_selection_cache_and_policy(
         store,
         operation,
         config,
+        KernelExpansionPolicy::for_search_config(config.require_launchable),
+        score_namespace,
+    )
+}
+
+pub fn generate_inference_kernel_source_with_selection_cache_and_policy(
+    store: &KernelArtifactStore,
+    operation: &TypedOperationSpec,
+    config: AutoOptimizeConfig,
+    policy: KernelExpansionPolicy,
+    score_namespace: &str,
+) -> Result<CachedGeneratedInferenceKernelSource, KernelGenerationError> {
+    let optimization = auto_optimize_inference_kernel_with_selection_cache_and_policy(
+        store,
+        operation,
+        config,
+        policy,
         score_namespace,
     )?;
     let candidate = optimization.best_candidate().cloned().ok_or_else(|| {
