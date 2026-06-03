@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::{
     super::{KernelIrFunction, KernelIrOp, KernelIrOpKind},
     cfg::{block_id_for_op_index, predecessors_by_block},
-    registers::push_registers,
+    registers::{push_register_refs, push_registers},
     types::{
         SassBasicBlock, SassCfgEdge, SassDataflowOp, SassDefUseEdge, SassLiveRange,
         SassReachingUse, SassSsaValue, SassValueOp,
@@ -347,7 +347,7 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
     let mut defines = Vec::new();
     let mut uses = Vec::new();
     if let Some(predicate) = &op.predicate {
-        push_predicate_registers(predicate.registers(), &mut uses);
+        push_register_refs(predicate.registers(), &mut uses);
     }
     match &op.kind {
         KernelIrOpKind::ReadSpecialRegister { dst, special } => {
@@ -360,20 +360,14 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
         }
         KernelIrOpKind::LoadConst { dst, source } => {
             push_registers(dst, &mut defines);
-            for register in source.registers() {
-                push_registers(&register, &mut uses);
-            }
+            push_register_refs(source.registers(), &mut uses);
         }
         KernelIrOpKind::Load { dst, address, .. } => {
             push_registers(dst, &mut defines);
-            for register in address.registers() {
-                push_registers(&register, &mut uses);
-            }
+            push_register_refs(address.registers(), &mut uses);
         }
         KernelIrOpKind::Store { address, value, .. } => {
-            for register in address.registers() {
-                push_registers(&register, &mut uses);
-            }
+            push_register_refs(address.registers(), &mut uses);
             push_registers(value, &mut uses);
         }
         KernelIrOpKind::IntegerAdd { dst, inputs, .. }
@@ -407,7 +401,7 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
         }
         KernelIrOpKind::Branch { condition, .. } | KernelIrOpKind::Exit { condition } => {
             if let Some(condition) = condition {
-                push_predicate_registers(condition.registers(), &mut uses);
+                push_register_refs(condition.registers(), &mut uses);
             }
         }
         KernelIrOpKind::Call { operands, .. }
@@ -443,11 +437,5 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
         defines,
         uses,
         source: op.source.clone(),
-    }
-}
-
-fn push_predicate_registers(registers: Vec<String>, out: &mut Vec<String>) {
-    for register in registers {
-        push_registers(&register, out);
     }
 }

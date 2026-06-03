@@ -322,7 +322,7 @@ fn lift_simple_sass_maps_observed_core_ops() {
                     address,
                     address_width: Some(64),
                     offset: None,
-                } if descriptor == "UR4" && address == "R0"
+                } if descriptor.to_string() == "UR4" && address.to_string() == "R0"
             )
     ));
     assert!(matches!(
@@ -349,7 +349,7 @@ fn lift_simple_sass_maps_observed_core_ops() {
                     address,
                     address_width: Some(64),
                     offset: None,
-                } if descriptor == "UR8" && address == "R0"
+                } if descriptor.to_string() == "UR8" && address.to_string() == "R0"
             )
     ));
     assert!(matches!(
@@ -414,14 +414,14 @@ memory_address_fixture:
             address: register,
             address_width: Some(64),
             offset: Some(offset),
-        } if descriptor == "UR4" && register == "R0" && offset == "0x4"
+        } if descriptor.to_string() == "UR4" && register.to_string() == "R0" && offset == "0x4"
     )));
     assert!(ordered_addresses.iter().any(|address| matches!(
         &address.kind,
         MemoryAddressKind::Indexed {
             base,
             offset: Some(offset),
-        } if base == "R2" && offset == "0x40"
+        } if base.to_string() == "R2" && offset == "0x40"
     )));
 }
 
@@ -578,7 +578,7 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
             PredicateConditionKind::Register {
                 register,
                 negated: false,
-            } if register == "P0"
+            } if register.to_string() == "P0"
         )
     )));
     assert!(ops.iter().any(|op| matches!(
@@ -615,7 +615,7 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
                 PredicateConditionKind::Register {
                     register,
                     negated: false,
-                } if register == "P0"
+                } if register.to_string() == "P0"
             )
     )));
     assert!(ops.iter().any(|op| matches!(

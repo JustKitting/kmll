@@ -1,6 +1,6 @@
 use std::fmt::{self, Write as _};
 
-use super::super::sass::SassSourcePosition;
+use super::super::sass::{RegisterClass, SassRegister, SassSourcePosition};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelIrModule {
@@ -208,6 +208,130 @@ pub enum MemorySpace {
     Unknown,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RegisterRef {
+    pub kind: RegisterRefKind,
+    pub raw: String,
+}
+
+impl RegisterRef {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        Self {
+            kind: parse_register_ref_kind(&raw).unwrap_or(RegisterRefKind::Raw),
+            raw,
+        }
+    }
+
+    pub fn from_sass_register(raw: impl Into<String>, register: &SassRegister) -> Self {
+        let raw = raw.into();
+        let kind = match register.class {
+            RegisterClass::General => register
+                .index
+                .map(RegisterRefKind::General)
+                .unwrap_or(RegisterRefKind::Raw),
+            RegisterClass::Uniform => register
+                .index
+                .map(RegisterRefKind::Uniform)
+                .unwrap_or(RegisterRefKind::Raw),
+            RegisterClass::Predicate => register
+                .index
+                .map(RegisterRefKind::Predicate)
+                .unwrap_or(RegisterRefKind::Raw),
+            RegisterClass::UniformPredicate => register
+                .index
+                .map(RegisterRefKind::UniformPredicate)
+                .unwrap_or(RegisterRefKind::Raw),
+            RegisterClass::Special => {
+                RegisterRefKind::Special(register_base_without_modifiers(&raw).to_string())
+            }
+            RegisterClass::Barrier => register
+                .index
+                .map(RegisterRefKind::Barrier)
+                .unwrap_or(RegisterRefKind::Raw),
+            RegisterClass::Zero => RegisterRefKind::Zero,
+            RegisterClass::PredicateTrue => RegisterRefKind::PredicateTrue,
+            RegisterClass::UniformPredicateTrue => RegisterRefKind::UniformPredicateTrue,
+        };
+        Self { kind, raw }
+    }
+
+    pub fn is_pseudo(&self) -> bool {
+        matches!(
+            self.kind,
+            RegisterRefKind::Zero
+                | RegisterRefKind::PredicateTrue
+                | RegisterRefKind::UniformPredicateTrue
+        )
+    }
+}
+
+impl fmt::Display for RegisterRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RegisterRefKind {
+    General(u16),
+    Uniform(u16),
+    Predicate(u16),
+    UniformPredicate(u16),
+    Special(String),
+    Barrier(u16),
+    Zero,
+    PredicateTrue,
+    UniformPredicateTrue,
+    Raw,
+}
+
+fn parse_register_ref_kind(raw: &str) -> Option<RegisterRefKind> {
+    let base = register_base_without_modifiers(raw);
+    match base {
+        "RZ" | "URZ" => Some(RegisterRefKind::Zero),
+        "PT" => Some(RegisterRefKind::PredicateTrue),
+        "UPT" => Some(RegisterRefKind::UniformPredicateTrue),
+        _ => base
+            .strip_prefix("SR_")
+            .map(|_| RegisterRefKind::Special(base.to_string()))
+            .or_else(|| {
+                base.strip_prefix("UR")
+                    .and_then(|index| index.parse::<u16>().ok())
+                    .map(RegisterRefKind::Uniform)
+            })
+            .or_else(|| {
+                base.strip_prefix("UP")
+                    .and_then(|index| index.parse::<u16>().ok())
+                    .map(RegisterRefKind::UniformPredicate)
+            })
+            .or_else(|| {
+                base.strip_prefix('R')
+                    .and_then(|index| index.parse::<u16>().ok())
+                    .map(RegisterRefKind::General)
+            })
+            .or_else(|| {
+                base.strip_prefix('P')
+                    .and_then(|index| index.parse::<u16>().ok())
+                    .map(RegisterRefKind::Predicate)
+            })
+            .or_else(|| {
+                base.strip_prefix('B')
+                    .and_then(|index| index.parse::<u16>().ok())
+                    .map(RegisterRefKind::Barrier)
+            }),
+    }
+}
+
+fn register_base_without_modifiers(raw: &str) -> &str {
+    let text = raw
+        .trim()
+        .trim_start_matches('!')
+        .trim_start_matches('-')
+        .trim_matches('|');
+    text.split('.').next().unwrap_or(text)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PredicateCondition {
     pub kind: PredicateConditionKind,
@@ -215,7 +339,7 @@ pub struct PredicateCondition {
 }
 
 impl PredicateCondition {
-    pub fn register(raw: String, register: String, negated: bool) -> Self {
+    pub fn register(raw: String, register: RegisterRef, negated: bool) -> Self {
         Self {
             kind: PredicateConditionKind::Register { register, negated },
             raw,
@@ -229,7 +353,7 @@ impl PredicateCondition {
         }
     }
 
-    pub fn registers(&self) -> Vec<String> {
+    pub fn registers(&self) -> Vec<RegisterRef> {
         match &self.kind {
             PredicateConditionKind::Register { register, .. } => vec![register.clone()],
             PredicateConditionKind::Raw => Vec::new(),
@@ -245,7 +369,10 @@ impl fmt::Display for PredicateCondition {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PredicateConditionKind {
-    Register { register: String, negated: bool },
+    Register {
+        register: RegisterRef,
+        negated: bool,
+    },
     Raw,
 }
 
@@ -350,8 +477,8 @@ impl MemoryAddress {
     ) -> Self {
         Self {
             kind: MemoryAddressKind::Descriptor {
-                descriptor,
-                address,
+                descriptor: RegisterRef::parse(descriptor),
+                address: RegisterRef::parse(address),
                 address_width,
                 offset,
             },
@@ -361,7 +488,10 @@ impl MemoryAddress {
 
     pub fn indexed(raw: String, base: String, offset: Option<String>) -> Self {
         Self {
-            kind: MemoryAddressKind::Indexed { base, offset },
+            kind: MemoryAddressKind::Indexed {
+                base: RegisterRef::parse(base),
+                offset,
+            },
             raw,
         }
     }
@@ -376,8 +506,8 @@ impl MemoryAddress {
     pub fn base(&self) -> Option<&str> {
         match &self.kind {
             MemoryAddressKind::Constant { bank, .. } => Some(bank),
-            MemoryAddressKind::Descriptor { descriptor, .. } => Some(descriptor),
-            MemoryAddressKind::Indexed { base, .. } => Some(base),
+            MemoryAddressKind::Descriptor { descriptor, .. } => Some(descriptor.raw.as_str()),
+            MemoryAddressKind::Indexed { base, .. } => Some(base.raw.as_str()),
             MemoryAddressKind::Raw => None,
         }
     }
@@ -391,7 +521,7 @@ impl MemoryAddress {
         }
     }
 
-    pub fn registers(&self) -> Vec<String> {
+    pub fn registers(&self) -> Vec<RegisterRef> {
         match &self.kind {
             MemoryAddressKind::Descriptor {
                 descriptor,
@@ -417,13 +547,13 @@ pub enum MemoryAddressKind {
         offset: String,
     },
     Descriptor {
-        descriptor: String,
-        address: String,
+        descriptor: RegisterRef,
+        address: RegisterRef,
         address_width: Option<u32>,
         offset: Option<String>,
     },
     Indexed {
-        base: String,
+        base: RegisterRef,
         offset: Option<String>,
     },
     Raw,

@@ -51,7 +51,8 @@ pub use self::{
     ir::{
         ControlTarget, ControlTargetKind, KernelIrFunction, KernelIrModule, KernelIrOp,
         KernelIrOpKind, MemoryAccessInfo, MemoryAddress, MemoryAddressKind, MemorySpace,
-        PredicateCondition, PredicateConditionKind, SassMappingConfidence, lift_sass_module,
+        PredicateCondition, PredicateConditionKind, RegisterRef, RegisterRefKind,
+        SassMappingConfidence, lift_sass_module,
     },
     known_opcodes::{KnownSassOpcode, known_sass_opcodes},
     lifted::{

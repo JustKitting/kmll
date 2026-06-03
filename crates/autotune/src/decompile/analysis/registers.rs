@@ -1,5 +1,22 @@
+use super::super::RegisterRef;
+
 pub(super) fn push_registers(text: &str, out: &mut Vec<String>) {
     for register in extract_registers(text) {
+        if !out.contains(&register) {
+            out.push(register);
+        }
+    }
+}
+
+pub(super) fn push_register_refs(
+    registers: impl IntoIterator<Item = RegisterRef>,
+    out: &mut Vec<String>,
+) {
+    for register in registers {
+        if register.is_pseudo() {
+            continue;
+        }
+        let register = register.to_string();
         if !out.contains(&register) {
             out.push(register);
         }

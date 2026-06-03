@@ -2,7 +2,7 @@ use super::super::super::sass::{
     RegisterClass, SassInstruction, SassOperandKind, SassPredicate, SassRegister, label_in_text,
 };
 use super::super::types::{
-    ControlTarget, KernelIrOpKind, PredicateCondition, SassMappingConfidence,
+    ControlTarget, KernelIrOpKind, PredicateCondition, RegisterRef, SassMappingConfidence,
 };
 use super::LiftResult;
 
@@ -105,13 +105,13 @@ pub(super) fn predicate_condition(predicate: &SassPredicate) -> PredicateConditi
     if predicate.negated {
         PredicateCondition::register(
             format!("!{}", predicate.register),
-            predicate.register.clone(),
+            RegisterRef::parse(predicate.register.clone()),
             true,
         )
     } else {
         PredicateCondition::register(
             predicate.register.clone(),
-            predicate.register.clone(),
+            RegisterRef::parse(predicate.register.clone()),
             false,
         )
     }
@@ -160,11 +160,11 @@ pub(super) fn branch_condition_operand(
         else {
             return None;
         };
-        let register_text = predicate_register_text(register)
-            .unwrap_or_else(|| operand.raw.trim_start_matches('!').to_string());
+        let register_text =
+            predicate_register_text(register).unwrap_or_else(|| register_text(&operand.raw));
         Some(PredicateCondition::register(
             operand.raw.clone(),
-            register_text,
+            RegisterRef::from_sass_register(register_text, register),
             register.negated,
         ))
     })
@@ -178,6 +178,14 @@ fn predicate_register_text(register: &SassRegister) -> Option<String> {
         RegisterClass::UniformPredicateTrue => Some("UPT".to_string()),
         _ => None,
     }
+}
+
+fn register_text(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches('!')
+        .trim_start_matches('-')
+        .trim_matches('|')
+        .to_string()
 }
 
 pub(super) fn has_modifier(modifiers: &[String], expected: &str) -> bool {
