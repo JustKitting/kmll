@@ -1,4 +1,8 @@
-use std::fmt::{self, Write as _};
+use std::{
+    cmp::Ordering,
+    fmt::{self, Write as _},
+    hash::{Hash, Hasher},
+};
 
 use super::super::sass::{RegisterClass, SassRegister, SassSourcePosition};
 
@@ -61,66 +65,66 @@ pub struct KernelIrOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KernelIrOpKind {
     ReadSpecialRegister {
-        dst: String,
-        special: String,
+        dst: RegisterRef,
+        special: RegisterRef,
     },
     Move {
-        dst: String,
-        src: String,
+        dst: RegisterRef,
+        src: ScalarOperand,
     },
     LoadConst {
-        dst: String,
+        dst: RegisterRef,
         source: MemoryAddress,
     },
     Load {
-        dst: String,
+        dst: RegisterRef,
         address: MemoryAddress,
         space: MemorySpace,
         access: MemoryAccessInfo,
     },
     Store {
         address: MemoryAddress,
-        value: String,
+        value: RegisterRef,
         space: MemorySpace,
         access: MemoryAccessInfo,
     },
     IntegerAdd {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
         width_bits: Option<u32>,
     },
     FloatAdd {
-        dst: String,
-        lhs: String,
-        rhs: String,
+        dst: RegisterRef,
+        lhs: ScalarOperand,
+        rhs: ScalarOperand,
     },
     FloatMul {
-        dst: String,
-        lhs: String,
-        rhs: String,
+        dst: RegisterRef,
+        lhs: ScalarOperand,
+        rhs: ScalarOperand,
     },
     PackedHalfAdd {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
         lanes: u32,
     },
     PackedHalfMul {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
         lanes: u32,
     },
     FusedMultiplyAdd {
-        dst: String,
-        a: String,
-        b: String,
-        c: String,
+        dst: RegisterRef,
+        a: ScalarOperand,
+        b: ScalarOperand,
+        c: ScalarOperand,
         lane_bits: Option<u32>,
     },
     IntegerMad {
-        dst: String,
-        a: String,
-        b: String,
-        c: String,
+        dst: RegisterRef,
+        a: ScalarOperand,
+        b: ScalarOperand,
+        c: ScalarOperand,
         wide: bool,
     },
     TensorCoreMma {
@@ -142,11 +146,11 @@ pub enum KernelIrOpKind {
         operands: Vec<String>,
     },
     CompareSet {
-        dst: String,
+        dst: RegisterRef,
         comparison: Option<String>,
         dtype: Option<String>,
-        lhs: String,
-        rhs: String,
+        lhs: ScalarOperand,
+        rhs: ScalarOperand,
     },
     Branch {
         target: Option<ControlTarget>,
@@ -165,27 +169,27 @@ pub enum KernelIrOpKind {
     },
     WarpShuffle {
         mode: Option<String>,
-        predicate: String,
-        dst: String,
-        src: String,
-        offset: String,
-        mask: String,
+        predicate: RegisterRef,
+        dst: RegisterRef,
+        src: ScalarOperand,
+        offset: ScalarOperand,
+        mask: ScalarOperand,
     },
     Shift {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
     },
     LogicLut {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
     },
     Permute {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
     },
     AddressCalc {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
     },
     Sync {
         kind: String,
@@ -208,7 +212,7 @@ pub enum MemorySpace {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone)]
 pub struct RegisterRef {
     pub kind: RegisterRefKind,
     pub raw: String,
@@ -217,9 +221,10 @@ pub struct RegisterRef {
 impl RegisterRef {
     pub fn parse(raw: impl Into<String>) -> Self {
         let raw = raw.into();
+        let kind = parse_register_ref_kind(&raw).unwrap_or(RegisterRefKind::Raw);
         Self {
-            kind: parse_register_ref_kind(&raw).unwrap_or(RegisterRefKind::Raw),
-            raw,
+            raw: canonical_register_ref_text(&kind, &raw),
+            kind,
         }
     }
 
@@ -249,17 +254,24 @@ impl RegisterRef {
                 .index
                 .map(RegisterRefKind::Barrier)
                 .unwrap_or(RegisterRefKind::Raw),
-            RegisterClass::Zero => RegisterRefKind::Zero,
+            RegisterClass::Zero => match register_base_without_modifiers(&raw) {
+                "URZ" => RegisterRefKind::UniformZero,
+                _ => RegisterRefKind::GeneralZero,
+            },
             RegisterClass::PredicateTrue => RegisterRefKind::PredicateTrue,
             RegisterClass::UniformPredicateTrue => RegisterRefKind::UniformPredicateTrue,
         };
-        Self { kind, raw }
+        Self {
+            raw: canonical_register_ref_text(&kind, &raw),
+            kind,
+        }
     }
 
     pub fn is_pseudo(&self) -> bool {
         matches!(
             self.kind,
-            RegisterRefKind::Zero
+            RegisterRefKind::GeneralZero
+                | RegisterRefKind::UniformZero
                 | RegisterRefKind::PredicateTrue
                 | RegisterRefKind::UniformPredicateTrue
         )
@@ -272,6 +284,42 @@ impl fmt::Display for RegisterRef {
     }
 }
 
+impl PartialEq for RegisterRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && (!matches!(self.kind, RegisterRefKind::Raw) || self.raw == other.raw)
+    }
+}
+
+impl Eq for RegisterRef {}
+
+impl PartialOrd for RegisterRef {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RegisterRef {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.kind.cmp(&other.kind).then_with(|| {
+            if matches!(self.kind, RegisterRefKind::Raw) {
+                self.raw.cmp(&other.raw)
+            } else {
+                Ordering::Equal
+            }
+        })
+    }
+}
+
+impl Hash for RegisterRef {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.kind.hash(state);
+        if matches!(self.kind, RegisterRefKind::Raw) {
+            self.raw.hash(state);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RegisterRefKind {
     General(u16),
@@ -280,7 +328,8 @@ pub enum RegisterRefKind {
     UniformPredicate(u16),
     Special(String),
     Barrier(u16),
-    Zero,
+    GeneralZero,
+    UniformZero,
     PredicateTrue,
     UniformPredicateTrue,
     Raw,
@@ -289,7 +338,8 @@ pub enum RegisterRefKind {
 fn parse_register_ref_kind(raw: &str) -> Option<RegisterRefKind> {
     let base = register_base_without_modifiers(raw);
     match base {
-        "RZ" | "URZ" => Some(RegisterRefKind::Zero),
+        "RZ" => Some(RegisterRefKind::GeneralZero),
+        "URZ" => Some(RegisterRefKind::UniformZero),
         "PT" => Some(RegisterRefKind::PredicateTrue),
         "UPT" => Some(RegisterRefKind::UniformPredicateTrue),
         _ => base
@@ -323,6 +373,22 @@ fn parse_register_ref_kind(raw: &str) -> Option<RegisterRefKind> {
     }
 }
 
+fn canonical_register_ref_text(kind: &RegisterRefKind, raw: &str) -> String {
+    match kind {
+        RegisterRefKind::General(index) => format!("R{index}"),
+        RegisterRefKind::Uniform(index) => format!("UR{index}"),
+        RegisterRefKind::Predicate(index) => format!("P{index}"),
+        RegisterRefKind::UniformPredicate(index) => format!("UP{index}"),
+        RegisterRefKind::Special(special) => special.clone(),
+        RegisterRefKind::Barrier(index) => format!("B{index}"),
+        RegisterRefKind::GeneralZero => "RZ".to_string(),
+        RegisterRefKind::UniformZero => "URZ".to_string(),
+        RegisterRefKind::PredicateTrue => "PT".to_string(),
+        RegisterRefKind::UniformPredicateTrue => "UPT".to_string(),
+        RegisterRefKind::Raw => raw.to_string(),
+    }
+}
+
 fn register_base_without_modifiers(raw: &str) -> &str {
     let text = raw
         .trim()
@@ -330,6 +396,90 @@ fn register_base_without_modifiers(raw: &str) -> &str {
         .trim_start_matches('-')
         .trim_matches('|');
     text.split('.').next().unwrap_or(text)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ScalarOperand {
+    pub kind: ScalarOperandKind,
+    pub raw: String,
+}
+
+impl ScalarOperand {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        let register = RegisterRef::parse(raw.clone());
+        let kind = if matches!(register.kind, RegisterRefKind::Raw) {
+            parse_immediate_operand(&raw)
+                .map(ScalarOperandKind::Immediate)
+                .unwrap_or(ScalarOperandKind::Raw)
+        } else {
+            ScalarOperandKind::Register(register)
+        };
+        Self { kind, raw }
+    }
+
+    pub fn registers(&self) -> Vec<RegisterRef> {
+        match &self.kind {
+            ScalarOperandKind::Register(register) => vec![register.clone()],
+            ScalarOperandKind::Immediate(_) | ScalarOperandKind::Raw => Vec::new(),
+        }
+    }
+
+    pub fn as_register(&self) -> Option<&RegisterRef> {
+        match &self.kind {
+            ScalarOperandKind::Register(register) => Some(register),
+            ScalarOperandKind::Immediate(_) | ScalarOperandKind::Raw => None,
+        }
+    }
+}
+
+impl fmt::Display for ScalarOperand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ScalarOperandKind {
+    Register(RegisterRef),
+    Immediate(ImmediateValue),
+    Raw,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ImmediateValue {
+    Integer(i128),
+    FloatBits(u64),
+}
+
+fn parse_immediate_operand(raw: &str) -> Option<ImmediateValue> {
+    let text = raw.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if text.contains('.') || text.contains('e') || text.contains('E') {
+        return text.parse::<f64>().ok().map(|value| {
+            if value.fract() == 0.0 {
+                ImmediateValue::Integer(value as i128)
+            } else {
+                ImmediateValue::FloatBits(value.to_bits())
+            }
+        });
+    }
+    let (negative, body) = text
+        .strip_prefix('-')
+        .map(|body| (true, body))
+        .unwrap_or((false, text));
+    let body = body.strip_prefix('+').unwrap_or(body);
+    if let Some(hex) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
+        let value = i128::from_str_radix(hex, 16).ok()?;
+        return Some(ImmediateValue::Integer(if negative {
+            value.saturating_neg()
+        } else {
+            value
+        }));
+    }
+    text.parse::<i128>().ok().map(ImmediateValue::Integer)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

@@ -1,6 +1,9 @@
 use std::{collections::BTreeSet, fmt::Write as _};
 
-use super::{KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind};
+use super::{
+    ImmediateValue, KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, RegisterRef,
+    RegisterRefKind, ScalarOperand, ScalarOperandKind,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassPatternModule {
@@ -150,16 +153,19 @@ fn recover_bf16_widen_bits(function: &KernelIrFunction, patterns: &mut Vec<SassS
         if *wide
             || op.source_opcode != "IMAD"
             || !op.source_modifiers.iter().any(|modifier| modifier == "U32")
-            || b != "0x10000"
-            || c != "RZ"
+            || !scalar_integer_eq(b, 0x10000)
+            || !scalar_is_zero_register(c)
         {
             continue;
         }
+        let Some(src_register) = a.as_register() else {
+            continue;
+        };
 
         let producer = function.ops[..index]
             .iter()
             .rev()
-            .find(|candidate| candidate.defines(a))
+            .find(|candidate| candidate.defines(src_register))
             .filter(|candidate| {
                 candidate.source_opcode == "LD"
                     && candidate
@@ -174,7 +180,8 @@ fn recover_bf16_widen_bits(function: &KernelIrFunction, patterns: &mut Vec<SassS
             .find(|candidate| {
                 matches!(
                     &candidate.kind,
-                    KernelIrOpKind::FloatMul { lhs, rhs, .. } if lhs == dst || rhs == dst
+                    KernelIrOpKind::FloatMul { lhs, rhs, .. }
+                        if scalar_register_eq(lhs, dst) || scalar_register_eq(rhs, dst)
                 )
             })
             .map(|candidate| candidate.source.clone());
@@ -184,8 +191,8 @@ fn recover_bf16_widen_bits(function: &KernelIrFunction, patterns: &mut Vec<SassS
             end_address: op.address,
             source_addresses: vec![op.address],
             kind: SassSemanticPatternKind::Bf16WidenBits {
-                src: a.clone(),
-                dst: dst.clone(),
+                src: a.to_string(),
+                dst: dst.to_string(),
                 producer,
                 consumer,
             },
@@ -214,11 +221,11 @@ fn recover_f32_mul_add_pairs(function: &KernelIrFunction, patterns: &mut Vec<Sas
             end_address: add.address,
             source_addresses: vec![op.address, add.address],
             kind: SassSemanticPatternKind::F32MulAddPair {
-                mul_dst: dst.clone(),
-                mul_lhs: lhs.clone(),
-                mul_rhs: rhs.clone(),
-                add_dst: add_dst.clone(),
-                add_other,
+                mul_dst: dst.to_string(),
+                mul_lhs: lhs.to_string(),
+                mul_rhs: rhs.to_string(),
+                add_dst: add_dst.to_string(),
+                add_other: add_other.to_string(),
             },
             confidence: SassPatternConfidence::HeuristicDataflow,
         });
@@ -267,10 +274,10 @@ fn recover_address_pairs(function: &KernelIrFunction, patterns: &mut Vec<SassSem
             end_address: high.address,
             source_addresses: vec![low.address, high.address],
             kind: SassSemanticPatternKind::AddressPair {
-                low_dst: low_dst.clone(),
-                high_dst: high_dst.clone(),
-                low_inputs: low_inputs.clone(),
-                high_inputs: high_inputs.clone(),
+                low_dst: low_dst.to_string(),
+                high_dst: high_dst.to_string(),
+                low_inputs: low_inputs.iter().map(ToString::to_string).collect(),
+                high_inputs: high_inputs.iter().map(ToString::to_string).collect(),
             },
             confidence: SassPatternConfidence::ExactOpcodeSequence,
         });
@@ -283,7 +290,27 @@ fn is_lea_high_x(op: &KernelIrOp) -> bool {
         && op.source_modifiers.iter().any(|modifier| modifier == "X")
 }
 
-fn stops_address_pair_scan(op: &KernelIrOp, low_dst: &str) -> bool {
+fn scalar_integer_eq(operand: &ScalarOperand, expected: i128) -> bool {
+    matches!(
+        operand.kind,
+        ScalarOperandKind::Immediate(ImmediateValue::Integer(value)) if value == expected
+    )
+}
+
+fn scalar_is_zero_register(operand: &ScalarOperand) -> bool {
+    matches!(
+        operand.as_register().map(|register| &register.kind),
+        Some(RegisterRefKind::GeneralZero | RegisterRefKind::UniformZero)
+    )
+}
+
+fn scalar_register_eq(operand: &ScalarOperand, register: &RegisterRef) -> bool {
+    operand
+        .as_register()
+        .is_some_and(|operand| operand == register)
+}
+
+fn stops_address_pair_scan(op: &KernelIrOp, low_dst: &RegisterRef) -> bool {
     matches!(
         &op.kind,
         KernelIrOpKind::Branch { .. }
@@ -293,40 +320,50 @@ fn stops_address_pair_scan(op: &KernelIrOp, low_dst: &str) -> bool {
     ) || op.defines(low_dst)
 }
 
-fn lea_carry_matches(low_inputs: &[String], high_inputs: &[String]) -> bool {
+fn lea_carry_matches(low_inputs: &[ScalarOperand], high_inputs: &[ScalarOperand]) -> bool {
     let Some(low_carry) = low_inputs
         .first()
-        .filter(|input| is_predicate_register(input))
+        .filter(|input| is_predicate_operand(input))
     else {
         return true;
     };
     high_inputs.last() == Some(low_carry)
 }
 
-fn is_predicate_register(input: &str) -> bool {
-    let input = input.trim_start_matches('!');
-    input == "PT" || input == "UPT" || input.starts_with('P') || input.starts_with("UP")
+fn is_predicate_operand(input: &ScalarOperand) -> bool {
+    matches!(
+        input.as_register().map(|register| &register.kind),
+        Some(
+            RegisterRefKind::Predicate(_)
+                | RegisterRefKind::UniformPredicate(_)
+                | RegisterRefKind::PredicateTrue
+                | RegisterRefKind::UniformPredicateTrue
+        )
+    )
 }
 
-fn is_next_register(low: &str, high: &str) -> bool {
-    let Some((low_prefix, low_index)) = split_numbered_register(low) else {
+fn is_next_register(low: &RegisterRef, high: &RegisterRef) -> bool {
+    let Some((low_class, low_index)) = numbered_register(low) else {
         return false;
     };
-    let Some((high_prefix, high_index)) = split_numbered_register(high) else {
+    let Some((high_class, high_index)) = numbered_register(high) else {
         return false;
     };
-    low_prefix == high_prefix && high_index == low_index + 1
+    low_class == high_class && high_index == low_index + 1
 }
 
-fn split_numbered_register(register: &str) -> Option<(&str, u32)> {
-    let register = register.split('.').next().unwrap_or(register);
-    for prefix in ["UR", "R"] {
-        if let Some(rest) = register.strip_prefix(prefix) {
-            let index = rest.parse::<u32>().ok()?;
-            return Some((prefix, index));
-        }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NumberedRegisterClass {
+    General,
+    Uniform,
+}
+
+fn numbered_register(register: &RegisterRef) -> Option<(NumberedRegisterClass, u16)> {
+    match register.kind {
+        RegisterRefKind::General(index) => Some((NumberedRegisterClass::General, index)),
+        RegisterRefKind::Uniform(index) => Some((NumberedRegisterClass::Uniform, index)),
+        _ => None,
     }
-    None
 }
 
 fn recover_warp_reduce_sum(function: &KernelIrFunction, patterns: &mut Vec<SassSemanticPattern>) {
@@ -385,10 +422,10 @@ fn recover_warp_reduce_sum(function: &KernelIrFunction, patterns: &mut Vec<SassS
     let mask = masks
         .iter()
         .all(|mask| mask == first_mask)
-        .then(|| first_mask.clone());
+        .then(|| first_mask.to_string());
     let offsets = pairs
         .iter()
-        .map(|(_, _, offset)| offset.clone())
+        .map(|(_, _, offset)| offset.to_string())
         .collect::<Vec<_>>();
     let source_addresses = pairs
         .iter()
@@ -400,8 +437,8 @@ fn recover_warp_reduce_sum(function: &KernelIrFunction, patterns: &mut Vec<SassS
         end_address: last_add.address,
         source_addresses,
         kind: SassSemanticPatternKind::WarpReduceSum {
-            input: src.clone(),
-            output: output.clone(),
+            input: src.to_string(),
+            output: output.to_string(),
             offsets,
             mask,
         },
@@ -418,26 +455,33 @@ fn format_addresses(addresses: &[u64]) -> String {
     format!("[{body}]")
 }
 
-fn fadd_consumes<'a>(op: &'a KernelIrOp, value: &str) -> Option<(&'a KernelIrOp, String)> {
+fn fadd_consumes<'a>(
+    op: &'a KernelIrOp,
+    value: &RegisterRef,
+) -> Option<(&'a KernelIrOp, ScalarOperand)> {
     match &op.kind {
-        KernelIrOpKind::FloatAdd { lhs, rhs, .. } if lhs == value => Some((op, rhs.clone())),
-        KernelIrOpKind::FloatAdd { lhs, rhs, .. } if rhs == value => Some((op, lhs.clone())),
+        KernelIrOpKind::FloatAdd { lhs, rhs, .. } if scalar_register_eq(lhs, value) => {
+            Some((op, rhs.clone()))
+        }
+        KernelIrOpKind::FloatAdd { lhs, rhs, .. } if scalar_register_eq(rhs, value) => {
+            Some((op, lhs.clone()))
+        }
         _ => None,
     }
 }
 
 trait KernelIrOpDef {
-    fn defines(&self, register: &str) -> bool;
-    fn defined_register(&self) -> Option<&str>;
+    fn defines(&self, register: &RegisterRef) -> bool;
+    fn defined_register(&self) -> Option<&RegisterRef>;
 }
 
 impl KernelIrOpDef for KernelIrOp {
-    fn defines(&self, register: &str) -> bool {
+    fn defines(&self, register: &RegisterRef) -> bool {
         self.defined_register()
             .is_some_and(|defined| defined == register)
     }
 
-    fn defined_register(&self) -> Option<&str> {
+    fn defined_register(&self) -> Option<&RegisterRef> {
         match &self.kind {
             KernelIrOpKind::ReadSpecialRegister { dst, .. }
             | KernelIrOpKind::Move { dst, .. }

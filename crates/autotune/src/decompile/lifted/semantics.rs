@@ -1,24 +1,27 @@
 use std::fmt;
 
-use super::super::{ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace, PredicateCondition};
+use super::super::{
+    ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace, PredicateCondition, RegisterRef,
+    ScalarOperand,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SassLiftedSemantics {
     SpecialRead {
-        dst: String,
-        special: String,
+        dst: RegisterRef,
+        special: RegisterRef,
     },
     Move {
-        dst: String,
-        src: String,
+        dst: RegisterRef,
+        src: ScalarOperand,
     },
     LoadConst {
-        dst: String,
+        dst: RegisterRef,
         source: MemoryAddress,
     },
     Load {
         space: MemorySpace,
-        dst: String,
+        dst: RegisterRef,
         address: MemoryAddress,
         width_bits: Option<u32>,
         modifiers: Vec<String>,
@@ -26,47 +29,47 @@ pub enum SassLiftedSemantics {
     Store {
         space: MemorySpace,
         address: MemoryAddress,
-        value: String,
+        value: RegisterRef,
         width_bits: Option<u32>,
         modifiers: Vec<String>,
     },
     IntegerAdd {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
         width_bits: Option<u32>,
     },
     FloatAdd {
-        dst: String,
-        lhs: String,
-        rhs: String,
+        dst: RegisterRef,
+        lhs: ScalarOperand,
+        rhs: ScalarOperand,
     },
     FloatMul {
-        dst: String,
-        lhs: String,
-        rhs: String,
+        dst: RegisterRef,
+        lhs: ScalarOperand,
+        rhs: ScalarOperand,
     },
     PackedHalfAdd {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
         lanes: u32,
     },
     PackedHalfMul {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
         lanes: u32,
     },
     FusedMultiplyAdd {
-        dst: String,
-        a: String,
-        b: String,
-        c: String,
+        dst: RegisterRef,
+        a: ScalarOperand,
+        b: ScalarOperand,
+        c: ScalarOperand,
         lane_bits: Option<u32>,
     },
     IntegerMad {
-        dst: String,
-        a: String,
-        b: String,
-        c: String,
+        dst: RegisterRef,
+        a: ScalarOperand,
+        b: ScalarOperand,
+        c: ScalarOperand,
         wide: bool,
     },
     TensorCoreMma {
@@ -88,11 +91,11 @@ pub enum SassLiftedSemantics {
         operands: Vec<String>,
     },
     CompareSet {
-        dst: String,
+        dst: RegisterRef,
         comparison: Option<String>,
         dtype: Option<String>,
-        lhs: String,
-        rhs: String,
+        lhs: ScalarOperand,
+        rhs: ScalarOperand,
     },
     Branch {
         target: Option<ControlTarget>,
@@ -111,27 +114,27 @@ pub enum SassLiftedSemantics {
     },
     WarpShuffle {
         mode: Option<String>,
-        predicate: String,
-        dst: String,
-        src: String,
-        offset: String,
-        mask: String,
+        predicate: RegisterRef,
+        dst: RegisterRef,
+        src: ScalarOperand,
+        offset: ScalarOperand,
+        mask: ScalarOperand,
     },
     Shift {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
     },
     LogicLut {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
     },
     Permute {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
     },
     AddressCalc {
-        dst: String,
-        inputs: Vec<String>,
+        dst: RegisterRef,
+        inputs: Vec<ScalarOperand>,
     },
     Sync {
         kind: String,
@@ -185,7 +188,7 @@ impl fmt::Display for SassLiftedSemantics {
             } => write!(
                 f,
                 "integer-add(dst={dst},inputs=[{}],width={})",
-                inputs.join(","),
+                format_display_list(inputs),
                 option_u32(*width_bits)
             ),
             Self::FloatAdd { dst, lhs, rhs } => {
@@ -197,12 +200,12 @@ impl fmt::Display for SassLiftedSemantics {
             Self::PackedHalfAdd { dst, inputs, lanes } => write!(
                 f,
                 "packed-half-add(dst={dst},inputs=[{}],lanes={lanes})",
-                inputs.join(",")
+                format_display_list(inputs)
             ),
             Self::PackedHalfMul { dst, inputs, lanes } => write!(
                 f,
                 "packed-half-mul(dst={dst},inputs=[{}],lanes={lanes})",
-                inputs.join(",")
+                format_display_list(inputs)
             ),
             Self::FusedMultiplyAdd {
                 dst,
@@ -293,16 +296,32 @@ impl fmt::Display for SassLiftedSemantics {
                 option_str(mode.as_deref())
             ),
             Self::Shift { dst, inputs } => {
-                write!(f, "shift(dst={dst},inputs=[{}])", inputs.join(","))
+                write!(
+                    f,
+                    "shift(dst={dst},inputs=[{}])",
+                    format_display_list(inputs)
+                )
             }
             Self::LogicLut { dst, inputs } => {
-                write!(f, "logic-lut(dst={dst},inputs=[{}])", inputs.join(","))
+                write!(
+                    f,
+                    "logic-lut(dst={dst},inputs=[{}])",
+                    format_display_list(inputs)
+                )
             }
             Self::Permute { dst, inputs } => {
-                write!(f, "permute(dst={dst},inputs=[{}])", inputs.join(","))
+                write!(
+                    f,
+                    "permute(dst={dst},inputs=[{}])",
+                    format_display_list(inputs)
+                )
             }
             Self::AddressCalc { dst, inputs } => {
-                write!(f, "address-calc(dst={dst},inputs=[{}])", inputs.join(","))
+                write!(
+                    f,
+                    "address-calc(dst={dst},inputs=[{}])",
+                    format_display_list(inputs)
+                )
             }
             Self::Sync { kind, operands } => {
                 write!(f, "sync(kind={kind},operands=[{}])", operands.join(","))
@@ -518,4 +537,12 @@ fn option_u32(value: Option<u32>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_display_list<T: fmt::Display>(values: &[T]) -> String {
+    values
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }

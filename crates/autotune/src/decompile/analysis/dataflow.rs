@@ -351,24 +351,24 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
     }
     match &op.kind {
         KernelIrOpKind::ReadSpecialRegister { dst, special } => {
-            push_registers(dst, &mut defines);
-            push_registers(special, &mut uses);
+            push_register_refs([dst.clone()], &mut defines);
+            push_register_refs([special.clone()], &mut uses);
         }
         KernelIrOpKind::Move { dst, src } => {
-            push_registers(dst, &mut defines);
-            push_registers(src, &mut uses);
+            push_register_refs([dst.clone()], &mut defines);
+            push_register_refs(src.registers(), &mut uses);
         }
         KernelIrOpKind::LoadConst { dst, source } => {
-            push_registers(dst, &mut defines);
+            push_register_refs([dst.clone()], &mut defines);
             push_register_refs(source.registers(), &mut uses);
         }
         KernelIrOpKind::Load { dst, address, .. } => {
-            push_registers(dst, &mut defines);
+            push_register_refs([dst.clone()], &mut defines);
             push_register_refs(address.registers(), &mut uses);
         }
         KernelIrOpKind::Store { address, value, .. } => {
             push_register_refs(address.registers(), &mut uses);
-            push_registers(value, &mut uses);
+            push_register_refs([value.clone()], &mut uses);
         }
         KernelIrOpKind::IntegerAdd { dst, inputs, .. }
         | KernelIrOpKind::PackedHalfAdd { dst, inputs, .. }
@@ -377,27 +377,27 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
         | KernelIrOpKind::LogicLut { dst, inputs }
         | KernelIrOpKind::Permute { dst, inputs }
         | KernelIrOpKind::AddressCalc { dst, inputs } => {
-            push_registers(dst, &mut defines);
+            push_register_refs([dst.clone()], &mut defines);
             for input in inputs {
-                push_registers(input, &mut uses);
+                push_register_refs(input.registers(), &mut uses);
             }
         }
         KernelIrOpKind::FloatAdd { dst, lhs, rhs } | KernelIrOpKind::FloatMul { dst, lhs, rhs } => {
-            push_registers(dst, &mut defines);
-            push_registers(lhs, &mut uses);
-            push_registers(rhs, &mut uses);
+            push_register_refs([dst.clone()], &mut defines);
+            push_register_refs(lhs.registers(), &mut uses);
+            push_register_refs(rhs.registers(), &mut uses);
         }
         KernelIrOpKind::FusedMultiplyAdd { dst, a, b, c, .. }
         | KernelIrOpKind::IntegerMad { dst, a, b, c, .. } => {
-            push_registers(dst, &mut defines);
-            push_registers(a, &mut uses);
-            push_registers(b, &mut uses);
-            push_registers(c, &mut uses);
+            push_register_refs([dst.clone()], &mut defines);
+            push_register_refs(a.registers(), &mut uses);
+            push_register_refs(b.registers(), &mut uses);
+            push_register_refs(c.registers(), &mut uses);
         }
         KernelIrOpKind::CompareSet { dst, lhs, rhs, .. } => {
-            push_registers(dst, &mut defines);
-            push_registers(lhs, &mut uses);
-            push_registers(rhs, &mut uses);
+            push_register_refs([dst.clone()], &mut defines);
+            push_register_refs(lhs.registers(), &mut uses);
+            push_register_refs(rhs.registers(), &mut uses);
         }
         KernelIrOpKind::Branch { condition, .. } | KernelIrOpKind::Exit { condition } => {
             if let Some(condition) = condition {
@@ -423,11 +423,11 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
             mask,
             ..
         } => {
-            push_registers(dst, &mut defines);
-            push_registers(predicate, &mut uses);
-            push_registers(src, &mut uses);
-            push_registers(offset, &mut uses);
-            push_registers(mask, &mut uses);
+            push_register_refs([dst.clone()], &mut defines);
+            push_register_refs([predicate.clone()], &mut uses);
+            push_register_refs(src.registers(), &mut uses);
+            push_register_refs(offset.registers(), &mut uses);
+            push_register_refs(mask.registers(), &mut uses);
         }
         KernelIrOpKind::NoOp | KernelIrOpKind::Unsupported { .. } => {}
     }

@@ -5,6 +5,18 @@ fn reg(raw: &str) -> RegisterRef {
     RegisterRef::parse(raw.to_string())
 }
 
+fn scalar(raw: &str) -> ScalarOperand {
+    ScalarOperand::parse(raw.to_string())
+}
+
+#[test]
+fn register_refs_canonicalize_modifier_spelling_for_identity() {
+    assert_eq!(reg("R13.reuse"), reg("R13"));
+    assert_eq!(reg("-RZ"), reg("RZ"));
+    assert_ne!(reg("URZ"), reg("RZ"));
+    assert_eq!(reg("R13.reuse").to_string(), "R13");
+}
+
 const SIMPLE_SASS: &str = r#"
         .target sm_120
 
@@ -257,7 +269,7 @@ fn lift_maps_control_special_register_read() {
     assert!(matches!(
         &op.kind,
         KernelIrOpKind::ReadSpecialRegister { dst, special }
-            if dst == "R6" && special == "SRZ"
+            if dst == &reg("R6") && special == &reg("SRZ")
     ));
 }
 
@@ -308,7 +320,7 @@ fn lift_simple_sass_maps_observed_core_ops() {
     assert!(matches!(
         kinds[0],
         KernelIrOpKind::ReadSpecialRegister { dst, special }
-            if dst == "R0" && special == "SR_TID.X"
+            if dst == &reg("R0") && special == &reg("SR_TID.X")
     ));
     assert!(matches!(
         kinds[1],
@@ -335,7 +347,7 @@ fn lift_simple_sass_maps_observed_core_ops() {
             dst,
             inputs,
             width_bits: None
-        } if dst == "R4" && inputs == &vec!["R2".to_string(), "R3".to_string()]
+        } if dst == &reg("R4") && inputs.as_slice() == [scalar("R2"), scalar("R3")]
     ));
     assert!(matches!(
         kinds[4],
@@ -358,7 +370,7 @@ fn lift_simple_sass_maps_observed_core_ops() {
     ));
     assert!(matches!(
         kinds[5],
-        KernelIrOpKind::Permute { dst, inputs } if dst == "R5" && inputs.len() == 3
+        KernelIrOpKind::Permute { dst, inputs } if dst == &reg("R5") && inputs.len() == 3
     ));
     assert!(matches!(kinds[6], KernelIrOpKind::Exit { condition: None }));
     assert!(matches!(
@@ -499,7 +511,7 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
             address,
             width_bits,
             modifiers
-        } if dst == "R2" && address.raw == "desc[UR4][R0.64]"
+        } if dst == &reg("R2") && address.raw == "desc[UR4][R0.64]"
             && width_bits.is_none()
             && modifiers.as_slice() == ["E"]
     ));
@@ -518,7 +530,7 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
             dst,
             inputs,
             width_bits: None
-        } if dst == "R4" && inputs == &vec!["R2".to_string(), "R3".to_string()]
+        } if dst == &reg("R4") && inputs.as_slice() == [scalar("R2"), scalar("R3")]
     ));
     assert!(add.inputs.iter().any(|value| value.register == reg("R2")));
     assert!(add.inputs.iter().any(|value| value.register == reg("R3")));
@@ -539,7 +551,7 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
             value,
             width_bits,
             modifiers
-        } if address.raw == "desc[UR8][R0.64]" && value == "R4"
+        } if address.raw == "desc[UR8][R0.64]" && value == &reg("R4")
             && width_bits.is_none()
             && modifiers.as_slice() == ["E"]
     ));
@@ -635,7 +647,7 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
             mode: Some(ref mode),
             offset: ref shuffle_offset,
             ..
-        } if mode == "DOWN" && shuffle_offset == "0x10"
+        } if mode == "DOWN" && shuffle_offset == &scalar("0x10")
     )));
     assert!(ops.iter().any(|op| matches!(
         op.kind,

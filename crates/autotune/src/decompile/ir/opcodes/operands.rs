@@ -3,6 +3,7 @@ use super::super::super::sass::{
 };
 use super::super::types::{
     ControlTarget, KernelIrOpKind, PredicateCondition, RegisterRef, SassMappingConfidence,
+    ScalarOperand,
 };
 use super::LiftResult;
 
@@ -14,15 +15,30 @@ pub(super) fn raw_operands(instruction: &SassInstruction) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn map_two_operands(
+pub(super) fn register_operand(raw: &str) -> RegisterRef {
+    RegisterRef::parse(raw.to_string())
+}
+
+pub(super) fn scalar_operand(raw: &str) -> ScalarOperand {
+    ScalarOperand::parse(raw.to_string())
+}
+
+pub(super) fn scalar_inputs(operands: &[String]) -> Vec<ScalarOperand> {
+    operands
+        .iter()
+        .map(|operand| scalar_operand(operand))
+        .collect()
+}
+
+pub(super) fn map_register_register_operands(
     instruction: &SassInstruction,
-    f: impl FnOnce(String, String) -> KernelIrOpKind,
+    f: impl FnOnce(RegisterRef, RegisterRef) -> KernelIrOpKind,
 ) -> LiftResult {
     if instruction.operands.len() == 2 {
         (
             f(
-                instruction.operands[0].raw.clone(),
-                instruction.operands[1].raw.clone(),
+                register_operand(&instruction.operands[0].raw),
+                register_operand(&instruction.operands[1].raw),
             ),
             SassMappingConfidence::OpcodeHeuristic,
         )
@@ -31,16 +47,33 @@ pub(super) fn map_two_operands(
     }
 }
 
-pub(super) fn map_three_operands(
+pub(super) fn map_register_scalar_operands(
     instruction: &SassInstruction,
-    f: impl FnOnce(String, String, String) -> KernelIrOpKind,
+    f: impl FnOnce(RegisterRef, ScalarOperand) -> KernelIrOpKind,
+) -> LiftResult {
+    if instruction.operands.len() == 2 {
+        (
+            f(
+                register_operand(&instruction.operands[0].raw),
+                scalar_operand(&instruction.operands[1].raw),
+            ),
+            SassMappingConfidence::OpcodeHeuristic,
+        )
+    } else {
+        unsupported_arity(instruction, 2)
+    }
+}
+
+pub(super) fn map_register_two_scalar_operands(
+    instruction: &SassInstruction,
+    f: impl FnOnce(RegisterRef, ScalarOperand, ScalarOperand) -> KernelIrOpKind,
 ) -> LiftResult {
     if instruction.operands.len() == 3 {
         (
             f(
-                instruction.operands[0].raw.clone(),
-                instruction.operands[1].raw.clone(),
-                instruction.operands[2].raw.clone(),
+                register_operand(&instruction.operands[0].raw),
+                scalar_operand(&instruction.operands[1].raw),
+                scalar_operand(&instruction.operands[2].raw),
             ),
             SassMappingConfidence::OpcodeHeuristic,
         )
@@ -49,17 +82,17 @@ pub(super) fn map_three_operands(
     }
 }
 
-pub(super) fn map_four_operands(
+pub(super) fn map_register_three_scalar_operands(
     instruction: &SassInstruction,
-    f: impl FnOnce(String, String, String, String) -> KernelIrOpKind,
+    f: impl FnOnce(RegisterRef, ScalarOperand, ScalarOperand, ScalarOperand) -> KernelIrOpKind,
 ) -> LiftResult {
     if instruction.operands.len() >= 4 {
         (
             f(
-                instruction.operands[0].raw.clone(),
-                instruction.operands[1].raw.clone(),
-                instruction.operands[2].raw.clone(),
-                instruction.operands[3].raw.clone(),
+                register_operand(&instruction.operands[0].raw),
+                scalar_operand(&instruction.operands[1].raw),
+                scalar_operand(&instruction.operands[2].raw),
+                scalar_operand(&instruction.operands[3].raw),
             ),
             SassMappingConfidence::OpcodeHeuristic,
         )
@@ -68,18 +101,24 @@ pub(super) fn map_four_operands(
     }
 }
 
-pub(super) fn map_five_operands(
+pub(super) fn map_warp_shuffle_operands(
     instruction: &SassInstruction,
-    f: impl FnOnce(String, String, String, String, String) -> KernelIrOpKind,
+    f: impl FnOnce(
+        RegisterRef,
+        RegisterRef,
+        ScalarOperand,
+        ScalarOperand,
+        ScalarOperand,
+    ) -> KernelIrOpKind,
 ) -> LiftResult {
     if instruction.operands.len() >= 5 {
         (
             f(
-                instruction.operands[0].raw.clone(),
-                instruction.operands[1].raw.clone(),
-                instruction.operands[2].raw.clone(),
-                instruction.operands[3].raw.clone(),
-                instruction.operands[4].raw.clone(),
+                register_operand(&instruction.operands[0].raw),
+                register_operand(&instruction.operands[1].raw),
+                scalar_operand(&instruction.operands[2].raw),
+                scalar_operand(&instruction.operands[3].raw),
+                scalar_operand(&instruction.operands[4].raw),
             ),
             SassMappingConfidence::OpcodeHeuristic,
         )
@@ -88,7 +127,7 @@ pub(super) fn map_five_operands(
     }
 }
 
-fn unsupported_arity(instruction: &SassInstruction, expected: usize) -> LiftResult {
+pub(super) fn unsupported_arity(instruction: &SassInstruction, expected: usize) -> LiftResult {
     (
         KernelIrOpKind::Unsupported {
             opcode: instruction.opcode.clone(),

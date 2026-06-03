@@ -1,6 +1,6 @@
 use super::super::super::sass::{SassInstruction, SassOperand, SassOperandKind};
 use super::super::types::{
-    KernelIrOpKind, MemoryAccessInfo, MemoryAddress, MemoryAddressKind, MemorySpace,
+    KernelIrOpKind, MemoryAccessInfo, MemoryAddress, MemoryAddressKind, MemorySpace, RegisterRef,
     SassMappingConfidence,
 };
 use super::LiftResult;
@@ -12,7 +12,7 @@ pub(super) fn lift(opcode: &str, instruction: &SassInstruction) -> Option<LiftRe
             if instruction.operands.len() != 2 {
                 unsupported_arity(instruction, 2)
             } else {
-                let dst = instruction.operands[0].raw.clone();
+                let dst = RegisterRef::parse(instruction.operands[0].raw.clone());
                 let address = memory_address(&instruction.operands[1]);
                 (
                     KernelIrOpKind::Load {
@@ -30,7 +30,7 @@ pub(super) fn lift(opcode: &str, instruction: &SassInstruction) -> Option<LiftRe
                 unsupported_arity(instruction, 2)
             } else {
                 let address = memory_address(&instruction.operands[0]);
-                let value = instruction.operands[1].raw.clone();
+                let value = RegisterRef::parse(instruction.operands[1].raw.clone());
                 (
                     KernelIrOpKind::Store {
                         space: memory_space(opcode, &address),
@@ -52,7 +52,7 @@ fn lift_load_const(instruction: &SassInstruction) -> LiftResult {
     }
     (
         KernelIrOpKind::LoadConst {
-            dst: instruction.operands[0].raw.clone(),
+            dst: RegisterRef::parse(instruction.operands[0].raw.clone()),
             source: memory_address(&instruction.operands[1]),
         },
         SassMappingConfidence::OpcodeHeuristic,

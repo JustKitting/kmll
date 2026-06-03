@@ -56,7 +56,7 @@ fn memory_access(
     kind: SassMemoryAccessKind,
     space: MemorySpace,
     width_bits: Option<u32>,
-    value_register: &str,
+    value_register: &RegisterRef,
     address: &MemoryAddress,
 ) -> SassMemoryAccess {
     SassMemoryAccess {
@@ -65,7 +65,7 @@ fn memory_access(
         kind,
         space,
         width_bits,
-        value_register: RegisterRef::parse(value_register.to_string()),
+        value_register: value_register.clone(),
         address_expr: address.raw.clone(),
         address_registers: address
             .registers()

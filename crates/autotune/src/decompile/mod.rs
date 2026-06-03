@@ -49,10 +49,10 @@ pub use self::{
         simple_kernel_fixtures,
     },
     ir::{
-        ControlTarget, ControlTargetKind, KernelIrFunction, KernelIrModule, KernelIrOp,
-        KernelIrOpKind, MemoryAccessInfo, MemoryAddress, MemoryAddressKind, MemorySpace,
-        PredicateCondition, PredicateConditionKind, RegisterRef, RegisterRefKind,
-        SassMappingConfidence, lift_sass_module,
+        ControlTarget, ControlTargetKind, ImmediateValue, KernelIrFunction, KernelIrModule,
+        KernelIrOp, KernelIrOpKind, MemoryAccessInfo, MemoryAddress, MemoryAddressKind,
+        MemorySpace, PredicateCondition, PredicateConditionKind, RegisterRef, RegisterRefKind,
+        SassMappingConfidence, ScalarOperand, ScalarOperandKind, lift_sass_module,
     },
     known_opcodes::{KnownSassOpcode, known_sass_opcodes},
     lifted::{
