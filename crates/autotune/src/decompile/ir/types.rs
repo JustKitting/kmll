@@ -58,7 +58,7 @@ pub struct KernelIrOp {
     pub predicate: Option<PredicateCondition>,
     pub kind: KernelIrOpKind,
     pub confidence: SassMappingConfidence,
-    pub source_opcode: String,
+    pub source_opcode: SassOpcode,
     pub source_modifiers: Vec<String>,
     pub source_operands: Vec<String>,
     pub source: String,
@@ -66,29 +66,200 @@ pub struct KernelIrOp {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SassOpcode {
+    kind: SassOpcodeKind,
     raw: String,
 }
 
 impl SassOpcode {
     pub fn new(raw: impl Into<String>) -> Self {
-        Self { raw: raw.into() }
+        let raw = raw.into();
+        Self {
+            kind: SassOpcodeKind::parse(raw.as_str()),
+            raw,
+        }
     }
 
     pub fn from_ir_op(op: &KernelIrOp) -> Self {
         match &op.kind {
             KernelIrOpKind::Unsupported { opcode, .. } => opcode.clone(),
-            _ => Self::new(op.source_opcode.clone()),
+            _ => op.source_opcode.clone(),
         }
     }
 
     pub fn as_str(&self) -> &str {
         &self.raw
     }
+
+    pub fn kind(&self) -> &SassOpcodeKind {
+        &self.kind
+    }
 }
 
 impl fmt::Display for SassOpcode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.raw)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassOpcodeKind {
+    Bar,
+    Bra,
+    Bssy,
+    Bsync,
+    Call,
+    Cs2r,
+    Exit,
+    Fadd,
+    Ffma,
+    Fmul,
+    Fsetp,
+    Hadd2,
+    Hfma2,
+    Hmul2,
+    Iadd,
+    Iadd3,
+    Imad,
+    Isetp,
+    Ld,
+    Ldc,
+    Ldcu,
+    Ldg,
+    Ldl,
+    Lds,
+    Lea,
+    Lop3,
+    Mov,
+    Nop,
+    Plop3,
+    Prmt,
+    Ret,
+    S2r,
+    S2ur,
+    Shf,
+    Shfl,
+    St,
+    Stg,
+    Stl,
+    Sts,
+    Uiadd3,
+    Uimad,
+    Uisetp,
+    Uldc,
+    Ulea,
+    Ulop3,
+    Umov,
+    Ushf,
+    Bgmma,
+    Bmma,
+    Dmma,
+    Hgmma,
+    Hmma,
+    Igmma,
+    Imma,
+    Omma,
+    Qgmma,
+    Qmma,
+    Ldt,
+    Ldtm,
+    Stt,
+    Sttm,
+    Ublkcp,
+    Ublkpf,
+    Ublkred,
+    Utchmma,
+    Utcimma,
+    Utcomma,
+    Utcqmma,
+    Utmaldg,
+    Utmapf,
+    Utmaredg,
+    Utmastg,
+    Warpgroup,
+    Warpgroupset,
+    Raw(String),
+}
+
+impl SassOpcodeKind {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        match raw.as_str() {
+            "BAR" => Self::Bar,
+            "BRA" => Self::Bra,
+            "BSSY" => Self::Bssy,
+            "BSYNC" => Self::Bsync,
+            "CALL" => Self::Call,
+            "CS2R" => Self::Cs2r,
+            "EXIT" => Self::Exit,
+            "FADD" => Self::Fadd,
+            "FFMA" => Self::Ffma,
+            "FMUL" => Self::Fmul,
+            "FSETP" => Self::Fsetp,
+            "HADD2" => Self::Hadd2,
+            "HFMA2" => Self::Hfma2,
+            "HMUL2" => Self::Hmul2,
+            "IADD" => Self::Iadd,
+            "IADD3" => Self::Iadd3,
+            "IMAD" => Self::Imad,
+            "ISETP" => Self::Isetp,
+            "LD" => Self::Ld,
+            "LDC" => Self::Ldc,
+            "LDCU" => Self::Ldcu,
+            "LDG" => Self::Ldg,
+            "LDL" => Self::Ldl,
+            "LDS" => Self::Lds,
+            "LEA" => Self::Lea,
+            "LOP3" => Self::Lop3,
+            "MOV" => Self::Mov,
+            "NOP" => Self::Nop,
+            "PLOP3" => Self::Plop3,
+            "PRMT" => Self::Prmt,
+            "RET" => Self::Ret,
+            "S2R" => Self::S2r,
+            "S2UR" => Self::S2ur,
+            "SHF" => Self::Shf,
+            "SHFL" => Self::Shfl,
+            "ST" => Self::St,
+            "STG" => Self::Stg,
+            "STL" => Self::Stl,
+            "STS" => Self::Sts,
+            "UIADD3" => Self::Uiadd3,
+            "UIMAD" => Self::Uimad,
+            "UISETP" => Self::Uisetp,
+            "ULDC" => Self::Uldc,
+            "ULEA" => Self::Ulea,
+            "ULOP3" => Self::Ulop3,
+            "UMOV" => Self::Umov,
+            "USHF" => Self::Ushf,
+            "BGMMA" => Self::Bgmma,
+            "BMMA" => Self::Bmma,
+            "DMMA" => Self::Dmma,
+            "HGMMA" => Self::Hgmma,
+            "HMMA" => Self::Hmma,
+            "IGMMA" => Self::Igmma,
+            "IMMA" => Self::Imma,
+            "OMMA" => Self::Omma,
+            "QGMMA" => Self::Qgmma,
+            "QMMA" => Self::Qmma,
+            "LDT" => Self::Ldt,
+            "LDTM" => Self::Ldtm,
+            "STT" => Self::Stt,
+            "STTM" => Self::Sttm,
+            "UBLKCP" => Self::Ublkcp,
+            "UBLKPF" => Self::Ublkpf,
+            "UBLKRED" => Self::Ublkred,
+            "UTCHMMA" => Self::Utchmma,
+            "UTCIMMA" => Self::Utcimma,
+            "UTCOMMA" => Self::Utcomma,
+            "UTCQMMA" => Self::Utcqmma,
+            "UTMALDG" => Self::Utmaldg,
+            "UTMAPF" => Self::Utmapf,
+            "UTMAREDG" => Self::Utmaredg,
+            "UTMASTG" => Self::Utmastg,
+            "WARPGROUP" => Self::Warpgroup,
+            "WARPGROUPSET" => Self::Warpgroupset,
+            _ => Self::Raw(raw),
+        }
     }
 }
 

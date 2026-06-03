@@ -376,6 +376,10 @@ fn lift_simple_sass_maps_observed_core_ops() {
             width_bits: None
         } if dst == &reg("R4") && inputs.as_slice() == [scalar("R2"), scalar("R3")]
     ));
+    assert_eq!(
+        ir.functions[0].ops[3].source_opcode.kind(),
+        &SassOpcodeKind::Iadd
+    );
     assert!(matches!(
         kinds[4],
         KernelIrOpKind::Store {

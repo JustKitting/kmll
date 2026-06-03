@@ -5,7 +5,7 @@ use std::{
 
 use super::{
     ImmediateValue, KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, RegisterRef,
-    RegisterRefKind, SassWarpShuffleMode, ScalarOperand, ScalarOperandKind,
+    RegisterRefKind, SassOpcodeKind, SassWarpShuffleMode, ScalarOperand, ScalarOperandKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,7 +211,7 @@ fn recover_bf16_widen_bits(function: &KernelIrFunction, patterns: &mut Vec<SassS
             continue;
         };
         if *wide
-            || op.source_opcode != "IMAD"
+            || op.source_opcode.kind() != &SassOpcodeKind::Imad
             || !op.source_modifiers.iter().any(|modifier| modifier == "U32")
             || !scalar_integer_eq(b, 0x10000)
             || !scalar_is_zero_register(c)
@@ -227,7 +227,7 @@ fn recover_bf16_widen_bits(function: &KernelIrFunction, patterns: &mut Vec<SassS
             .rev()
             .find(|candidate| candidate.defines(src_register))
             .filter(|candidate| {
-                candidate.source_opcode == "LD"
+                candidate.source_opcode.kind() == &SassOpcodeKind::Ld
                     && candidate
                         .source_modifiers
                         .iter()
@@ -302,7 +302,7 @@ fn recover_address_pairs(function: &KernelIrFunction, patterns: &mut Vec<SassSem
         else {
             continue;
         };
-        if low.source_opcode != "LEA" || is_lea_high_x(low) {
+        if low.source_opcode.kind() != &SassOpcodeKind::Lea || is_lea_high_x(low) {
             continue;
         }
         let Some((high_index, high, high_dst, high_inputs)) = function.ops[low_index + 1..]
@@ -345,7 +345,7 @@ fn recover_address_pairs(function: &KernelIrFunction, patterns: &mut Vec<SassSem
 }
 
 fn is_lea_high_x(op: &KernelIrOp) -> bool {
-    op.source_opcode == "LEA"
+    op.source_opcode.kind() == &SassOpcodeKind::Lea
         && op.source_modifiers.iter().any(|modifier| modifier == "HI")
         && op.source_modifiers.iter().any(|modifier| modifier == "X")
 }

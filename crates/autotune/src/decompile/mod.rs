@@ -55,8 +55,8 @@ pub use self::{
         MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemoryAddressImmediateKind,
         MemoryAddressKind, MemorySpace, PredicateCondition, PredicateConditionKind, RegisterRef,
         RegisterRefKind, SassCompareDType, SassComparisonKind, SassMappingConfidence,
-        SassMemoryModifier, SassOpcode, SassSyncKind, SassTensorElementType, SassTensorScope,
-        SassWarpShuffleMode, ScalarOperand, ScalarOperandKind, lift_sass_module,
+        SassMemoryModifier, SassOpcode, SassOpcodeKind, SassSyncKind, SassTensorElementType,
+        SassTensorScope, SassWarpShuffleMode, ScalarOperand, ScalarOperandKind, lift_sass_module,
     },
     known_opcodes::{KnownSassOpcode, known_sass_opcodes},
     lifted::{
