@@ -106,7 +106,7 @@ impl fmt::Display for SassParseError {
 
 impl Error for SassParseError {}
 
-pub fn parse_nvdisasm_sass(input: &str) -> Result<SassModule, SassParseError> {
+pub fn parse_nvidia_sass(input: &str) -> Result<SassModule, SassParseError> {
     let mut target = None;
     let mut functions = Vec::new();
     let mut current = None::<SassFunction>;
@@ -129,6 +129,19 @@ pub fn parse_nvdisasm_sass(input: &str) -> Result<SassModule, SassParseError> {
         }
         if let Some(global) = parse_global(trimmed) {
             pending_global = Some(global);
+            continue;
+        }
+        if let Some(function_name) = parse_cuobjdump_function(trimmed) {
+            if let Some(function) = current.take() {
+                functions.push(function);
+            }
+            current = Some(SassFunction {
+                name: function_name.clone(),
+                section: pending_section.clone().or(Some(function_name)),
+                instructions: Vec::new(),
+            });
+            pending_global = None;
+            pending_label = None;
             continue;
         }
         if is_label_line(trimmed) {
@@ -192,6 +205,12 @@ fn parse_global(line: &str) -> Option<String> {
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(str::to_string)
+}
+
+fn parse_cuobjdump_function(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("Function")?.trim_start();
+    let name = rest.strip_prefix(':')?.trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 fn is_label_line(line: &str) -> bool {

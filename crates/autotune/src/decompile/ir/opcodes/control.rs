@@ -2,7 +2,7 @@ use super::super::super::sass::SassInstruction;
 use super::super::types::{KernelIrOpKind, SassMappingConfidence};
 use super::{
     LiftResult,
-    operands::{branch_condition_operand, label_operand, predicate_text},
+    operands::{branch_condition_operand, predicate_text, target_operand},
 };
 
 pub(super) fn lift(
@@ -20,7 +20,7 @@ pub(super) fn lift(
         ),
         "BRA" => (
             KernelIrOpKind::Branch {
-                target: label_operand(instruction),
+                target: target_operand(instruction),
                 condition: instruction
                     .predicate
                     .as_ref()
@@ -31,14 +31,14 @@ pub(super) fn lift(
         ),
         "CALL" => (
             KernelIrOpKind::Call {
-                target: label_operand(instruction),
+                target: target_operand(instruction),
                 operands: operands.to_vec(),
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
         "RET" => (
             KernelIrOpKind::Return {
-                target: label_operand(instruction),
+                target: target_operand(instruction),
                 operands: operands.to_vec(),
             },
             SassMappingConfidence::OpcodeHeuristic,

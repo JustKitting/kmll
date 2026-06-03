@@ -19,6 +19,29 @@ sass_fixture_i32_add:
         /*0070*/                   BRA `(.L_x_0);                                /* 0x0 */
 "#;
 
+const CUOBJDUMP_SASS: &str = r#"
+	code for sm_120
+	.target	sm_120
+
+		Function : cuobjdump_fixture
+	.headerflags	@"EF_CUDA_SM120"
+        /*0000*/                   S2R R0, SR_TID.X ;                            /* 0x0 */
+        /*0010*/                   IADD R1, R0, 0x1 ;                            /* 0x0 */
+        /*0020*/                   EXIT ;                                        /* 0x0 */
+"#;
+
+const CUOBJDUMP_BRANCH_SASS: &str = r#"
+	code for sm_120
+	.target	sm_120
+
+		Function : cuobjdump_branch_fixture
+	.headerflags	@"EF_CUDA_SM120"
+        /*0000*/                   MOV R0, RZ ;                                  /* 0x0 */
+        /*0010*/                   IADD R0, R0, 0x1 ;                            /* 0x0 */
+        /*0020*/                   BRA 0x10 ;                                    /* 0x0 */
+        /*0030*/                   EXIT ;                                        /* 0x0 */
+"#;
+
 const ROWS17_SLICE: &str = r#"
         .target sm_120
 
@@ -123,8 +146,8 @@ loop_fixture:
 "#;
 
 #[test]
-fn parse_nvdisasm_sass_captures_function_and_operands() {
-    let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
+fn parse_nvidia_sass_captures_nvdisasm_function_and_operands() {
+    let module = parse_nvidia_sass(SIMPLE_SASS).expect("fixture SASS should parse");
 
     assert_eq!(module.target.as_deref(), Some("sm_120"));
     assert_eq!(module.functions.len(), 1);
@@ -146,8 +169,57 @@ fn parse_nvdisasm_sass_captures_function_and_operands() {
 }
 
 #[test]
+fn parse_nvidia_sass_captures_cuobjdump_function_header() {
+    let module = parse_nvidia_sass(CUOBJDUMP_SASS).expect("cuobjdump SASS should parse");
+
+    assert_eq!(module.target.as_deref(), Some("sm_120"));
+    assert_eq!(module.functions.len(), 1);
+    let function = &module.functions[0];
+    assert_eq!(function.name, "cuobjdump_fixture");
+    assert_eq!(function.section.as_deref(), Some("cuobjdump_fixture"));
+    assert_eq!(function.instructions.len(), 3);
+    assert_eq!(function.instructions[0].opcode, "S2R");
+    assert_eq!(function.instructions[1].opcode, "IADD");
+    assert_eq!(function.instructions[2].opcode, "EXIT");
+}
+
+#[test]
+fn analysis_resolves_cuobjdump_numeric_branch_targets() {
+    let module = parse_nvidia_sass(CUOBJDUMP_BRANCH_SASS).expect("cuobjdump SASS should parse");
+    let ir = lift_sass_module(&module);
+    let branch = ir.functions[0]
+        .ops
+        .iter()
+        .find(|op| op.address == 0x20)
+        .expect("branch op should exist");
+    assert!(matches!(
+        &branch.kind,
+        KernelIrOpKind::Branch {
+            target: Some(target),
+            condition: None
+        } if target == "0x10"
+    ));
+
+    let analysis = analyze_sass_ir(&ir);
+    let function = &analysis.functions[0];
+    let loop_block = function
+        .blocks
+        .iter()
+        .find(|block| block.start_address == 0x10)
+        .expect("numeric branch target should start a block");
+    assert!(function.edges.iter().any(|edge| {
+        edge.kind == SassCfgEdgeKind::Branch
+            && edge.from_block == loop_block.id
+            && edge.to_block == Some(loop_block.id)
+    }));
+    assert!(function.natural_loops.iter().any(|natural_loop| {
+        natural_loop.header_block == loop_block.id && natural_loop.latch_block == loop_block.id
+    }));
+}
+
+#[test]
 fn lift_simple_sass_maps_observed_core_ops() {
-    let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
+    let module = parse_nvidia_sass(SIMPLE_SASS).expect("fixture SASS should parse");
     let ir = lift_sass_module(&module);
     let kinds = ir.functions[0]
         .ops
@@ -187,7 +259,7 @@ fn lift_simple_sass_maps_observed_core_ops() {
 
 #[test]
 fn analysis_recovers_structured_memory_accesses() {
-    let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
+    let module = parse_nvidia_sass(SIMPLE_SASS).expect("fixture SASS should parse");
     let ir = lift_sass_module(&module);
     let analysis = analyze_sass_ir(&ir);
     let function = &analysis.functions[0];
@@ -232,7 +304,7 @@ fn analysis_recovers_structured_memory_accesses() {
 
 #[test]
 fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
-    let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
+    let module = parse_nvidia_sass(SIMPLE_SASS).expect("fixture SASS should parse");
     let ir = lift_sass_module(&module);
     let analysis = analyze_sass_ir(&ir);
     let lifted = lift_sass_value_ir(&ir, &analysis);
@@ -315,7 +387,7 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
 
 #[test]
 fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
-    let module = parse_nvdisasm_sass(ROWS17_SLICE).expect("rows17 slice should parse");
+    let module = parse_nvidia_sass(ROWS17_SLICE).expect("rows17 slice should parse");
     let ir = lift_sass_module(&module);
     let ops = &ir.functions[0].ops;
 
@@ -374,7 +446,7 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
 
 #[test]
 fn semantic_patterns_recover_bf16_widen_and_warp_reduce() {
-    let module = parse_nvdisasm_sass(ROWS17_SLICE).expect("rows17 slice should parse");
+    let module = parse_nvidia_sass(ROWS17_SLICE).expect("rows17 slice should parse");
     let ir = lift_sass_module(&module);
     let patterns = recover_sass_patterns(&ir);
     let flat = patterns
@@ -415,7 +487,7 @@ fn semantic_patterns_recover_bf16_widen_and_warp_reduce() {
 
 #[test]
 fn analysis_recovers_cfg_edges_and_register_dataflow() {
-    let module = parse_nvdisasm_sass(CFG_SASS).expect("cfg fixture should parse");
+    let module = parse_nvidia_sass(CFG_SASS).expect("cfg fixture should parse");
     let ir = lift_sass_module(&module);
     let analysis = analyze_sass_ir(&ir);
     let function = &analysis.functions[0];
@@ -553,7 +625,7 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
 
 #[test]
 fn analysis_recovers_dominators_and_natural_loops() {
-    let module = parse_nvdisasm_sass(LOOP_SASS).expect("loop fixture should parse");
+    let module = parse_nvidia_sass(LOOP_SASS).expect("loop fixture should parse");
     let ir = lift_sass_module(&module);
     let analysis = analyze_sass_ir(&ir);
     let function = &analysis.functions[0];
@@ -618,7 +690,7 @@ fn analysis_recovers_dominators_and_natural_loops() {
 #[test]
 fn analysis_keeps_fallthrough_after_predicated_exit() {
     let module =
-        parse_nvdisasm_sass(PREDICATED_EXIT_SASS).expect("predicated exit fixture should parse");
+        parse_nvidia_sass(PREDICATED_EXIT_SASS).expect("predicated exit fixture should parse");
     let ir = lift_sass_module(&module);
     let analysis = analyze_sass_ir(&ir);
     let function = &analysis.functions[0];
@@ -640,7 +712,7 @@ fn analysis_keeps_fallthrough_after_predicated_exit() {
 #[test]
 fn analysis_keeps_previous_definition_after_predicated_write() {
     let module =
-        parse_nvdisasm_sass(PREDICATED_WRITE_SASS).expect("predicated write fixture should parse");
+        parse_nvidia_sass(PREDICATED_WRITE_SASS).expect("predicated write fixture should parse");
     let ir = lift_sass_module(&module);
     let analysis = analyze_sass_ir(&ir);
     let function = &analysis.functions[0];
@@ -688,7 +760,7 @@ fn side_by_side_dump_contains_source_sass_and_ir_sections() {
         .into_iter()
         .find(|fixture| fixture.kind == SimpleKernelFixtureKind::I32Add)
         .expect("i32 add fixture should exist");
-    let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
+    let module = parse_nvidia_sass(SIMPLE_SASS).expect("fixture SASS should parse");
     let ir = lift_sass_module(&module);
     let dump = render_side_by_side(&fixture, SIMPLE_SASS, &ir);
 
@@ -705,9 +777,10 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     let nested = input.join("nested");
     let output = root.join("output");
     fs::create_dir_all(&nested).expect("test input dir should be created");
-    fs::write(input.join("simple.nvdisasm.sass"), SIMPLE_SASS)
-        .expect("simple test SASS should be written");
-    fs::write(nested.join("unsupported.nvdisasm.sass"), UNSUPPORTED_SASS)
+    fs::write(input.join("simple.sass"), SIMPLE_SASS).expect("simple test SASS should be written");
+    fs::write(input.join("simple.cuobjdump.sass"), CUOBJDUMP_SASS)
+        .expect("cuobjdump test SASS should be written");
+    fs::write(nested.join("unsupported.sass"), UNSUPPORTED_SASS)
         .expect("unsupported test SASS should be written");
 
     let report = run_sass_coverage_scan(&SassCoverageOptions {
@@ -716,8 +789,8 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     })
     .expect("coverage scan should complete");
 
-    assert_eq!(report.files.len(), 2);
-    assert_eq!(report.parsed_file_count, 2);
+    assert_eq!(report.files.len(), 3);
+    assert_eq!(report.parsed_file_count, 3);
     assert_eq!(report.parse_error_count, 0);
     assert_eq!(report.unsupported_instruction_count, 1);
     assert!(
@@ -732,6 +805,10 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
             .iter()
             .any(|instruction| instruction.opcode == "MYSTERY")
     );
+    assert!(report.files.iter().any(
+        |file| file.sass_path.file_name().and_then(|name| name.to_str())
+            == Some("simple.cuobjdump.sass")
+    ));
     assert!(report.summary_path.exists());
     assert!(report.files_path.exists());
     assert!(report.opcode_frequency_path.exists());

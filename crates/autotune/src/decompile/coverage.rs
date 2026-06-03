@@ -10,7 +10,7 @@ use nn_rust_inference::runtime;
 
 use super::{
     KernelIrModule, KernelIrOpKind, SassAnalysisModule, SassLiftedModule, SassPatternModule,
-    analyze_sass_ir, lift_sass_value_ir, parse_nvdisasm_sass, recover_sass_patterns,
+    analyze_sass_ir, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
     render_sass_file_side_by_side,
 };
 
@@ -323,7 +323,7 @@ pub fn run_sass_coverage_scan(
     for sass_path in sass_paths {
         let sass = fs::read_to_string(&sass_path)?;
         let relative = relative_sass_path(&options.root, &sass_path);
-        match parse_nvdisasm_sass(&sass) {
+        match parse_nvidia_sass(&sass) {
             Ok(parsed) => {
                 for function in &parsed.functions {
                     for instruction in &function.instructions {
@@ -559,7 +559,7 @@ pub fn run_sass_coverage_scan(
 
 fn collect_sass_paths(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), Box<dyn Error>> {
     if root.is_file() {
-        if is_nvdisasm_sass(root) {
+        if is_sass_file(root) {
             out.push(root.to_path_buf());
         }
         return Ok(());
@@ -571,17 +571,17 @@ fn collect_sass_paths(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), Box<dyn
         let path = entry.path();
         if path.is_dir() {
             collect_sass_paths(&path, out)?;
-        } else if is_nvdisasm_sass(&path) {
+        } else if is_sass_file(&path) {
             out.push(path);
         }
     }
     Ok(())
 }
 
-fn is_nvdisasm_sass(path: &Path) -> bool {
+fn is_sass_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.ends_with(".nvdisasm.sass"))
+        .is_some_and(|name| name.ends_with(".sass"))
 }
 
 fn relative_sass_path(root: &Path, sass_path: &Path) -> PathBuf {
@@ -589,7 +589,7 @@ fn relative_sass_path(root: &Path, sass_path: &Path) -> PathBuf {
         return sass_path
             .file_name()
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("sass.nvdisasm.sass"));
+            .unwrap_or_else(|| PathBuf::from("sass.sass"));
     }
     sass_path
         .strip_prefix(root)
@@ -598,7 +598,7 @@ fn relative_sass_path(root: &Path, sass_path: &Path) -> PathBuf {
             sass_path
                 .file_name()
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("sass.nvdisasm.sass"))
+                .unwrap_or_else(|| PathBuf::from("sass.sass"))
         })
 }
 

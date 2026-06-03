@@ -107,12 +107,13 @@ pub(super) fn predicate_text(predicate: &SassPredicate) -> String {
     }
 }
 
-pub(super) fn label_operand(instruction: &SassInstruction) -> Option<String> {
+pub(super) fn target_operand(instruction: &SassInstruction) -> Option<String> {
     instruction
         .operands
         .iter()
         .find_map(|operand| match &operand.kind {
             SassOperandKind::Label(label) => Some(label.clone()),
+            SassOperandKind::Immediate(target) => Some(target.clone()),
             _ => label_in_text(&operand.raw),
         })
 }

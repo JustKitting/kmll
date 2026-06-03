@@ -386,10 +386,15 @@ fn branch_target(op: &KernelIrOp) -> Option<&str> {
 }
 
 fn label_index(function: &KernelIrFunction, label: &str) -> Option<usize> {
-    function
+    let label_match = function
         .ops
         .iter()
-        .position(|op| op.label.as_deref() == Some(label))
+        .position(|op| op.label.as_deref() == Some(label));
+    if label_match.is_some() {
+        return label_match;
+    }
+    let address = parse_address_target(label)?;
+    function.ops.iter().position(|op| op.address == address)
 }
 
 pub(super) fn block_id_for_op_index(blocks: &[SassBasicBlock], op_index: usize) -> Option<usize> {
@@ -397,4 +402,11 @@ pub(super) fn block_id_for_op_index(blocks: &[SassBasicBlock], op_index: usize) 
         .iter()
         .find(|block| block.start_op_index <= op_index && op_index <= block.end_op_index)
         .map(|block| block.id)
+}
+
+fn parse_address_target(target: &str) -> Option<u64> {
+    target
+        .strip_prefix("0x")
+        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+        .or_else(|| target.parse::<u64>().ok())
 }

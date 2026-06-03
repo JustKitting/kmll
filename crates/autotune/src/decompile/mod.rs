@@ -51,7 +51,7 @@ pub use self::{
     },
     sass::{
         RegisterClass, SassFunction, SassInstruction, SassModule, SassOperand, SassOperandKind,
-        SassParseError, SassPredicate, SassRegister, parse_nvdisasm_sass,
+        SassParseError, SassPredicate, SassRegister, parse_nvidia_sass,
     },
 };
 
@@ -162,7 +162,7 @@ pub fn run_sass_file_decompile(
         Some(path) => Some((path.clone(), fs::read_to_string(path)?)),
         None => None,
     };
-    let parsed = parse_nvdisasm_sass(&sass)?;
+    let parsed = parse_nvidia_sass(&sass)?;
     let project_ir = lift_sass_module(&parsed);
     let analysis = analyze_sass_ir(&project_ir);
     let lifted = lift_sass_value_ir(&project_ir, &analysis);
@@ -277,7 +277,7 @@ fn run_decompile_fixture(
     )?;
     fs::write(&sass_path, sass.as_bytes())?;
 
-    let parsed = parse_nvdisasm_sass(&sass)?;
+    let parsed = parse_nvidia_sass(&sass)?;
     let project_ir = lift_sass_module(&parsed);
     let analysis = analyze_sass_ir(&project_ir);
     let lifted = lift_sass_value_ir(&project_ir, &analysis);
