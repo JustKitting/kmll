@@ -799,6 +799,37 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
             .iter()
             .any(|count| count.opcode == "MYSTERY" && count.count == 1)
     );
+    let mystery_catalog = report
+        .opcode_catalog
+        .iter()
+        .find(|entry| entry.opcode == "MYSTERY")
+        .expect("unsupported opcode should be catalogued");
+    assert_eq!(mystery_catalog.support, "unsupported");
+    assert_eq!(mystery_catalog.unsupported_count, 1);
+    assert!(
+        mystery_catalog
+            .kinds
+            .iter()
+            .any(|kind| kind == "unsupported")
+    );
+    let iadd_catalog = report
+        .opcode_catalog
+        .iter()
+        .find(|entry| entry.opcode == "IADD")
+        .expect("IADD should be catalogued");
+    assert_eq!(iadd_catalog.support, "mapped");
+    assert!(
+        iadd_catalog
+            .source_formats
+            .iter()
+            .any(|format| format == "cuobjdump")
+    );
+    assert!(
+        iadd_catalog
+            .source_formats
+            .iter()
+            .any(|format| format == "sass")
+    );
     assert!(
         report
             .unsupported_instructions
@@ -811,6 +842,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     ));
     assert!(report.summary_path.exists());
     assert!(report.files_path.exists());
+    assert!(report.opcode_catalog_path.exists());
     assert!(report.opcode_frequency_path.exists());
     assert!(report.opcode_signature_frequency_path.exists());
     assert!(report.semantic_patterns_path.exists());
@@ -877,6 +909,12 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(lifted_ops_tsv.starts_with(
         "sass_path\tfunction\taddress\tblock_id\tpredicate\topcode\tclass\tkind\tsemantics"
     ));
+    let opcode_catalog_tsv =
+        fs::read_to_string(&report.opcode_catalog_path).expect("opcode catalog TSV should read");
+    assert!(opcode_catalog_tsv.starts_with(
+        "opcode\tinstruction_count\tsignature_count\tsignatures\tsource_formats\tclasses\tkinds\tsupport\tunsupported_count"
+    ));
+    assert!(opcode_catalog_tsv.contains("MYSTERY"));
     assert!(
         report
             .files

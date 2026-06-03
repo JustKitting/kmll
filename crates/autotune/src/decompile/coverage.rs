@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     error::Error,
     fmt::Write as _,
     fs,
@@ -36,6 +36,7 @@ pub struct SassCoverageReport {
     pub output_dir: PathBuf,
     pub summary_path: PathBuf,
     pub files_path: PathBuf,
+    pub opcode_catalog_path: PathBuf,
     pub opcode_frequency_path: PathBuf,
     pub opcode_signature_frequency_path: PathBuf,
     pub semantic_patterns_path: PathBuf,
@@ -54,6 +55,7 @@ pub struct SassCoverageReport {
     pub memory_accesses_path: PathBuf,
     pub unsupported_instructions_path: PathBuf,
     pub files: Vec<SassCoverageFileReport>,
+    pub opcode_catalog: Vec<SassOpcodeCatalogEntry>,
     pub opcode_counts: Vec<SassOpcodeCount>,
     pub opcode_signature_counts: Vec<SassOpcodeCount>,
     pub semantic_pattern_counts: Vec<SassOpcodeCount>,
@@ -119,6 +121,54 @@ pub struct SassCoverageFileReport {
 pub struct SassOpcodeCount {
     pub opcode: String,
     pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassOpcodeCatalogEntry {
+    pub opcode: String,
+    pub instruction_count: usize,
+    pub signature_count: usize,
+    pub signatures: Vec<String>,
+    pub source_formats: Vec<String>,
+    pub classes: Vec<String>,
+    pub kinds: Vec<String>,
+    pub support: String,
+    pub unsupported_count: usize,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct OpcodeCatalogBuilder {
+    instruction_count: usize,
+    signatures: BTreeSet<String>,
+    source_formats: BTreeSet<String>,
+    classes: BTreeSet<String>,
+    kinds: BTreeSet<String>,
+    unsupported_count: usize,
+}
+
+impl OpcodeCatalogBuilder {
+    fn into_entry(self, opcode: String) -> SassOpcodeCatalogEntry {
+        let support = if self.unsupported_count == 0 {
+            "mapped"
+        } else if self.unsupported_count == self.instruction_count {
+            "unsupported"
+        } else {
+            "mixed"
+        }
+        .to_string();
+        let signatures = self.signatures.into_iter().collect::<Vec<_>>();
+        SassOpcodeCatalogEntry {
+            opcode,
+            instruction_count: self.instruction_count,
+            signature_count: signatures.len(),
+            signatures,
+            source_formats: self.source_formats.into_iter().collect(),
+            classes: self.classes.into_iter().collect(),
+            kinds: self.kinds.into_iter().collect(),
+            support,
+            unsupported_count: self.unsupported_count,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,6 +351,7 @@ pub fn run_sass_coverage_scan(
 
     fs::create_dir_all(&options.output_dir)?;
     let mut files = Vec::new();
+    let mut opcode_catalog = BTreeMap::<String, OpcodeCatalogBuilder>::new();
     let mut opcode_counts = BTreeMap::<String, usize>::new();
     let mut opcode_signature_counts = BTreeMap::<String, usize>::new();
     let mut semantic_pattern_counts = BTreeMap::<String, usize>::new();
@@ -323,17 +374,25 @@ pub fn run_sass_coverage_scan(
     for sass_path in sass_paths {
         let sass = fs::read_to_string(&sass_path)?;
         let relative = relative_sass_path(&options.root, &sass_path);
+        let source_format = sass_source_format(&sass_path);
         match parse_nvidia_sass(&sass) {
             Ok(parsed) => {
                 for function in &parsed.functions {
                     for instruction in &function.instructions {
+                        let signature =
+                            opcode_signature(&instruction.opcode, &instruction.modifiers);
                         *opcode_counts.entry(instruction.opcode.clone()).or_default() += 1;
                         *opcode_signature_counts
-                            .entry(opcode_signature(
-                                &instruction.opcode,
-                                &instruction.modifiers,
-                            ))
+                            .entry(signature.clone())
                             .or_default() += 1;
+                        let catalog_entry = opcode_catalog
+                            .entry(instruction.opcode.clone())
+                            .or_default();
+                        catalog_entry.instruction_count += 1;
+                        catalog_entry.signatures.insert(signature);
+                        catalog_entry
+                            .source_formats
+                            .insert(source_format.to_string());
                     }
                 }
 
@@ -367,6 +426,8 @@ pub fn run_sass_coverage_scan(
                 );
                 append_semantic_patterns(&sass_path, &patterns, &mut semantic_patterns);
                 append_unsupported(&sass_path, &project_ir, &mut unsupported_instructions);
+                append_opcode_catalog_lifted_ops(&lifted, &mut opcode_catalog);
+                append_opcode_catalog_unsupported(&project_ir, &mut opcode_catalog);
 
                 let ir_path = files_output_root
                     .join(&relative)
@@ -450,6 +511,7 @@ pub fn run_sass_coverage_scan(
         }
     }
 
+    let opcode_catalog = opcode_catalog_entries(opcode_catalog);
     let opcode_counts = sorted_counts(opcode_counts);
     let opcode_signature_counts = sorted_counts(opcode_signature_counts);
     let semantic_pattern_counts = sorted_counts(semantic_pattern_counts);
@@ -476,6 +538,7 @@ pub fn run_sass_coverage_scan(
 
     let summary_path = options.output_dir.join("summary.txt");
     let files_path = options.output_dir.join("files.tsv");
+    let opcode_catalog_path = options.output_dir.join("opcode-catalog.tsv");
     let opcode_frequency_path = options.output_dir.join("opcode-frequency.tsv");
     let opcode_signature_frequency_path = options.output_dir.join("opcode-signature-frequency.tsv");
     let semantic_patterns_path = options.output_dir.join("semantic-patterns.tsv");
@@ -499,6 +562,7 @@ pub fn run_sass_coverage_scan(
         output_dir: options.output_dir.clone(),
         summary_path,
         files_path,
+        opcode_catalog_path,
         opcode_frequency_path,
         opcode_signature_frequency_path,
         semantic_patterns_path,
@@ -517,6 +581,7 @@ pub fn run_sass_coverage_scan(
         memory_accesses_path,
         unsupported_instructions_path,
         files,
+        opcode_catalog,
         opcode_counts,
         opcode_signature_counts,
         semantic_pattern_counts,
@@ -608,6 +673,59 @@ fn opcode_signature(opcode: &str, modifiers: &[String]) -> String {
     } else {
         format!("{}.{}", opcode, modifiers.join("."))
     }
+}
+
+fn sass_source_format(path: &Path) -> &'static str {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if name.ends_with(".cuobjdump.sass") {
+        "cuobjdump"
+    } else if name.ends_with(".nvdisasm.sass") {
+        "nvdisasm"
+    } else {
+        "sass"
+    }
+}
+
+fn append_opcode_catalog_lifted_ops(
+    lifted: &SassLiftedModule,
+    opcode_catalog: &mut BTreeMap<String, OpcodeCatalogBuilder>,
+) {
+    for function in &lifted.functions {
+        for op in &function.ops {
+            let entry = opcode_catalog.entry(op.opcode.clone()).or_default();
+            entry.classes.insert(op.class.to_string());
+            entry.kinds.insert(op.kind.to_string());
+        }
+    }
+}
+
+fn append_opcode_catalog_unsupported(
+    project_ir: &KernelIrModule,
+    opcode_catalog: &mut BTreeMap<String, OpcodeCatalogBuilder>,
+) {
+    for function in &project_ir.functions {
+        for op in &function.ops {
+            let KernelIrOpKind::Unsupported { opcode, .. } = &op.kind else {
+                continue;
+            };
+            opcode_catalog
+                .entry(opcode.clone())
+                .or_default()
+                .unsupported_count += 1;
+        }
+    }
+}
+
+fn opcode_catalog_entries(
+    opcode_catalog: BTreeMap<String, OpcodeCatalogBuilder>,
+) -> Vec<SassOpcodeCatalogEntry> {
+    opcode_catalog
+        .into_iter()
+        .map(|(opcode, entry)| entry.into_entry(opcode))
+        .collect()
 }
 
 fn append_unsupported(
@@ -849,6 +967,10 @@ fn write_coverage_reports(report: &SassCoverageReport) -> Result<(), Box<dyn Err
     )?;
     fs::write(&report.files_path, render_files_tsv(report).as_bytes())?;
     fs::write(
+        &report.opcode_catalog_path,
+        render_opcode_catalog_tsv(report).as_bytes(),
+    )?;
+    fs::write(
         &report.opcode_frequency_path,
         render_counts_tsv("opcode", &report.opcode_counts).as_bytes(),
     )?;
@@ -954,6 +1076,12 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
     writeln!(out, "unique_opcodes={}", report.opcode_counts.len()).expect("write to string");
     writeln!(
         out,
+        "opcode_catalog={}",
+        report.opcode_catalog_path.display()
+    )
+    .expect("write to string");
+    writeln!(
+        out,
         "unique_opcode_signatures={}",
         report.opcode_signature_counts.len()
     )
@@ -980,6 +1108,32 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
         for count in sorted_counts(by_opcode) {
             writeln!(out, "{}\t{}", count.opcode, count.count).expect("write to string");
         }
+    }
+    out
+}
+
+fn render_opcode_catalog_tsv(report: &SassCoverageReport) -> String {
+    let mut out = String::new();
+    writeln!(
+        out,
+        "opcode\tinstruction_count\tsignature_count\tsignatures\tsource_formats\tclasses\tkinds\tsupport\tunsupported_count"
+    )
+    .expect("write to string");
+    for entry in &report.opcode_catalog {
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            tsv(&entry.opcode),
+            entry.instruction_count,
+            entry.signature_count,
+            tsv(&entry.signatures.join(",")),
+            tsv(&entry.source_formats.join(",")),
+            tsv(&entry.classes.join(",")),
+            tsv(&entry.kinds.join(",")),
+            tsv(&entry.support),
+            entry.unsupported_count,
+        )
+        .expect("write to string");
     }
     out
 }
