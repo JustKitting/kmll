@@ -17,9 +17,10 @@ use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
     autotune::{
         AutoOptimizeConfig, BeamSearchConfig, EmittedKernelOptimizationSelection,
-        GemmRustCudaGenerator, GemmSearchProblem, KernelActionSearchProblem, KernelArtifactStore,
-        KernelCandidateMetadata, KernelMaterialization, KernelMetadataSearchProblem,
-        KernelOptimizationCacheKey, KernelScheduleAction, KernelScheduleActionArg,
+        EmittedStandaloneKernelCrate, GemmRustCudaGenerator, GemmSearchProblem,
+        KernelActionSearchProblem, KernelArtifactStore, KernelCandidateMetadata,
+        KernelMaterialization, KernelMetadataSearchProblem, KernelOptimizationCacheKey,
+        KernelScheduleAction, KernelScheduleActionArg, KernelSourceGenerator,
         MatvecRustCudaGenerator, MatvecSearchProblem, ScheduleTransform, SearchScore,
         SearchScoreSource, SelectionCacheStatus, auto_optimize_metadata_with_selection_cache,
     },
@@ -1036,21 +1037,12 @@ impl<'a> MatvecAutotuneBench<'a> {
             return Ok(Vec::new());
         }
 
-        let timer = ProfileTimer::start();
-        let emitted = self
-            .generated_store
-            .emit_standalone_crate(candidate, &MatvecRustCudaGenerator)?;
-        let emit_duration = timer.elapsed();
-
-        let output_dir = self.generated_store.paths_for(candidate).directory;
-        let timer = ProfileTimer::start();
-        let compiled = compile_standalone_kernel_crate(
-            &emitted.paths.crate_dir,
-            &output_dir,
-            &emitted.package_name,
-            None,
-        )?;
-        let compile_duration = timer.elapsed();
+        let (emitted, compiled, scratch, mut setup_segments) =
+            emit_and_compile_generated_kernel_scratch(
+                &self.generated_store,
+                candidate,
+                &MatvecRustCudaGenerator,
+            )?;
 
         let ptx_path = compiled
             .ptx_path
@@ -1058,11 +1050,26 @@ impl<'a> MatvecAutotuneBench<'a> {
             .ok_or_else(|| invalid_input("generated PTX path is not valid UTF-8"))?;
         let timer = ProfileTimer::start();
         let module = self.stream.context().load_module_from_file(ptx_path)?;
-        let module_load_duration = timer.elapsed();
+        setup_segments.push(OptimizationTimingSegment::new(
+            "load-generated-module",
+            ProfileTimeSource::WallClock,
+            timer.elapsed(),
+        ));
 
         let timer = ProfileTimer::start();
         let function = module.load_function(&emitted.symbol)?;
-        let function_load_duration = timer.elapsed();
+        setup_segments.push(OptimizationTimingSegment::new(
+            "load-generated-symbol",
+            ProfileTimeSource::WallClock,
+            timer.elapsed(),
+        ));
+
+        setup_segments.push(OptimizationTimingSegment::new(
+            "cleanup-compile-scratch",
+            ProfileTimeSource::WallClock,
+            scratch.cleanup()?,
+        ));
+
         self.generated_modules.insert(
             artifact_key.clone(),
             GeneratedMatvecModule {
@@ -1071,28 +1078,7 @@ impl<'a> MatvecAutotuneBench<'a> {
             },
         );
 
-        Ok(vec![
-            OptimizationTimingSegment::new(
-                "emit-standalone-crate",
-                ProfileTimeSource::WallClock,
-                emit_duration,
-            ),
-            OptimizationTimingSegment::new(
-                "compile-standalone-crate",
-                ProfileTimeSource::WallClock,
-                compile_duration,
-            ),
-            OptimizationTimingSegment::new(
-                "load-generated-module",
-                ProfileTimeSource::WallClock,
-                module_load_duration,
-            ),
-            OptimizationTimingSegment::new(
-                "load-generated-symbol",
-                ProfileTimeSource::WallClock,
-                function_load_duration,
-            ),
-        ])
+        Ok(setup_segments)
     }
 
     fn launch_generated_bf16_matvec(
@@ -1367,21 +1353,12 @@ impl<'a> GemmAutotuneBench<'a> {
             return Ok(Vec::new());
         }
 
-        let timer = ProfileTimer::start();
-        let emitted = self
-            .generated_store
-            .emit_standalone_crate(candidate, &GemmRustCudaGenerator)?;
-        let emit_duration = timer.elapsed();
-
-        let output_dir = self.generated_store.paths_for(candidate).directory;
-        let timer = ProfileTimer::start();
-        let compiled = compile_standalone_kernel_crate(
-            &emitted.paths.crate_dir,
-            &output_dir,
-            &emitted.package_name,
-            None,
-        )?;
-        let compile_duration = timer.elapsed();
+        let (emitted, compiled, scratch, mut setup_segments) =
+            emit_and_compile_generated_kernel_scratch(
+                &self.generated_store,
+                candidate,
+                &GemmRustCudaGenerator,
+            )?;
 
         let ptx_path = compiled
             .ptx_path
@@ -1389,11 +1366,26 @@ impl<'a> GemmAutotuneBench<'a> {
             .ok_or_else(|| invalid_input("generated PTX path is not valid UTF-8"))?;
         let timer = ProfileTimer::start();
         let module = self.stream.context().load_module_from_file(ptx_path)?;
-        let module_load_duration = timer.elapsed();
+        setup_segments.push(OptimizationTimingSegment::new(
+            "load-generated-module",
+            ProfileTimeSource::WallClock,
+            timer.elapsed(),
+        ));
 
         let timer = ProfileTimer::start();
         let function = module.load_function(&emitted.symbol)?;
-        let function_load_duration = timer.elapsed();
+        setup_segments.push(OptimizationTimingSegment::new(
+            "load-generated-symbol",
+            ProfileTimeSource::WallClock,
+            timer.elapsed(),
+        ));
+
+        setup_segments.push(OptimizationTimingSegment::new(
+            "cleanup-compile-scratch",
+            ProfileTimeSource::WallClock,
+            scratch.cleanup()?,
+        ));
+
         self.generated_modules.insert(
             artifact_key.clone(),
             GeneratedGemmModule {
@@ -1402,28 +1394,7 @@ impl<'a> GemmAutotuneBench<'a> {
             },
         );
 
-        Ok(vec![
-            OptimizationTimingSegment::new(
-                "emit-standalone-crate",
-                ProfileTimeSource::WallClock,
-                emit_duration,
-            ),
-            OptimizationTimingSegment::new(
-                "compile-standalone-crate",
-                ProfileTimeSource::WallClock,
-                compile_duration,
-            ),
-            OptimizationTimingSegment::new(
-                "load-generated-module",
-                ProfileTimeSource::WallClock,
-                module_load_duration,
-            ),
-            OptimizationTimingSegment::new(
-                "load-generated-symbol",
-                ProfileTimeSource::WallClock,
-                function_load_duration,
-            ),
-        ])
+        Ok(setup_segments)
     }
 
     fn launch_generated_bf16_gemm(&mut self, candidate: &KernelCandidateMetadata) -> AppResult<()> {
@@ -1451,6 +1422,102 @@ impl<'a> GemmAutotuneBench<'a> {
 struct GeneratedGemmModule {
     _module: Arc<CudaModule>,
     function: CudaFunction,
+}
+
+fn emit_and_compile_generated_kernel_scratch<G>(
+    store: &KernelArtifactStore,
+    candidate: &KernelCandidateMetadata,
+    generator: &G,
+) -> AppResult<(
+    EmittedStandaloneKernelCrate,
+    CompiledStandaloneKernelCrate,
+    ScratchKernelBuild,
+    Vec<OptimizationTimingSegment>,
+)>
+where
+    G: KernelSourceGenerator,
+{
+    let scratch = ScratchKernelBuild::new(
+        store
+            .root()
+            .join("compile-scratch")
+            .join(candidate.artifact_key().hex()),
+    )?;
+
+    let timer = ProfileTimer::start();
+    let emitted = store.emit_standalone_crate_to_dir(candidate, generator, scratch.crate_dir())?;
+    let emit_duration = timer.elapsed();
+
+    let output_dir = scratch.output_dir();
+    let timer = ProfileTimer::start();
+    let compiled = compile_standalone_kernel_crate(
+        &emitted.paths.crate_dir,
+        &output_dir,
+        &emitted.package_name,
+        None,
+    )?;
+    let compile_duration = timer.elapsed();
+
+    Ok((
+        emitted,
+        compiled,
+        scratch,
+        vec![
+            OptimizationTimingSegment::new(
+                "emit-standalone-crate",
+                ProfileTimeSource::WallClock,
+                emit_duration,
+            ),
+            OptimizationTimingSegment::new(
+                "compile-standalone-crate",
+                ProfileTimeSource::WallClock,
+                compile_duration,
+            ),
+        ],
+    ))
+}
+
+struct ScratchKernelBuild {
+    root: PathBuf,
+    cleaned: bool,
+}
+
+impl ScratchKernelBuild {
+    fn new(root: PathBuf) -> AppResult<Self> {
+        if root.exists() {
+            fs::remove_dir_all(&root)?;
+        }
+        fs::create_dir_all(&root)?;
+        Ok(Self {
+            root,
+            cleaned: false,
+        })
+    }
+
+    fn crate_dir(&self) -> PathBuf {
+        self.root.join("standalone-crate")
+    }
+
+    fn output_dir(&self) -> PathBuf {
+        self.root.join("ptx")
+    }
+
+    fn cleanup(mut self) -> AppResult<ProfileDuration> {
+        let timer = ProfileTimer::start();
+        if self.root.exists() {
+            fs::remove_dir_all(&self.root)?;
+        }
+        self.cleaned = true;
+        Ok(timer.elapsed())
+    }
+}
+
+impl Drop for ScratchKernelBuild {
+    fn drop(&mut self) {
+        if !self.cleaned {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
 }
 
 fn launch_generated_gemm_symbol(

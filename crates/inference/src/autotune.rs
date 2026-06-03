@@ -359,11 +359,7 @@ impl KernelArtifactStore {
         candidate: &KernelCandidateMetadata,
     ) -> StandaloneKernelCratePaths {
         let crate_dir = self.paths_for(candidate).directory.join("standalone-crate");
-        StandaloneKernelCratePaths {
-            cargo_toml_path: crate_dir.join("Cargo.toml"),
-            source_path: crate_dir.join("src").join("main.rs"),
-            crate_dir,
-        }
+        standalone_crate_paths(crate_dir)
     }
 
     pub fn search_report_path_for(&self, report: &OptimizationSearchReport) -> PathBuf {
@@ -532,8 +528,33 @@ impl KernelArtifactStore {
     where
         G: KernelSourceGenerator,
     {
-        let generated = generator.source_for(candidate)?;
         let paths = self.standalone_crate_paths_for(candidate);
+        self.emit_standalone_crate_to_paths(candidate, generator, paths)
+    }
+
+    pub fn emit_standalone_crate_to_dir<G>(
+        &self,
+        candidate: &KernelCandidateMetadata,
+        generator: &G,
+        crate_dir: impl Into<PathBuf>,
+    ) -> Result<EmittedStandaloneKernelCrate, KernelGenerationError>
+    where
+        G: KernelSourceGenerator,
+    {
+        let paths = standalone_crate_paths(crate_dir.into());
+        self.emit_standalone_crate_to_paths(candidate, generator, paths)
+    }
+
+    fn emit_standalone_crate_to_paths<G>(
+        &self,
+        candidate: &KernelCandidateMetadata,
+        generator: &G,
+        paths: StandaloneKernelCratePaths,
+    ) -> Result<EmittedStandaloneKernelCrate, KernelGenerationError>
+    where
+        G: KernelSourceGenerator,
+    {
+        let generated = generator.source_for(candidate)?;
         let package_name = standalone_package_name(candidate);
         let cargo_toml = standalone_cargo_toml(&package_name);
         let source = standalone_main_source(&generated.source);
@@ -553,6 +574,14 @@ impl KernelArtifactStore {
             cargo_toml_bytes: cargo_toml.len(),
             source_bytes: source.len(),
         })
+    }
+}
+
+fn standalone_crate_paths(crate_dir: PathBuf) -> StandaloneKernelCratePaths {
+    StandaloneKernelCratePaths {
+        cargo_toml_path: crate_dir.join("Cargo.toml"),
+        source_path: crate_dir.join("src").join("main.rs"),
+        crate_dir,
     }
 }
 
@@ -3033,6 +3062,7 @@ fn parse_timing_segment_name(
         "compile-standalone-crate" => Ok("compile-standalone-crate"),
         "load-generated-module" => Ok("load-generated-module"),
         "load-generated-symbol" => Ok("load-generated-symbol"),
+        "cleanup-compile-scratch" => Ok("cleanup-compile-scratch"),
         name => Err(invalid_selection(format!(
             "score.timing.setup_segments[{index}].name is unsupported: {name:?}"
         ))),
@@ -5121,6 +5151,12 @@ mod tests {
             ProfileTimeSource::WallClock,
             ProfileDuration::from_seconds_f64(0.125)
                 .expect("setup segment duration should be valid"),
+        ))
+        .with_setup_segment(OptimizationTimingSegment::new(
+            "cleanup-compile-scratch",
+            ProfileTimeSource::WallClock,
+            ProfileDuration::from_seconds_f64(0.015625)
+                .expect("cleanup segment duration should be valid"),
         ));
         candidate.score = SearchScore::measured_with_timing(samples.median, timing);
 
@@ -5152,6 +5188,10 @@ mod tests {
         assert_eq!(
             manifest["score"]["timing"]["setup_segments"][0]["source"].as_str(),
             Some("wall-clock")
+        );
+        assert_eq!(
+            manifest["score"]["timing"]["setup_segments"][1]["name"].as_str(),
+            Some("cleanup-compile-scratch")
         );
 
         remove_test_generated_root(&root);
@@ -5861,6 +5901,38 @@ mod tests {
         assert!(source.contains("pub fn matvec_bf16_rows8("));
         assert!(source.contains("const ROWS_PER_BLOCK: u32 = 8;"));
         assert!(source.contains("fn main() {}"));
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn artifact_store_writes_standalone_crate_to_scratch_dir_without_persistent_source() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let candidate = problem.generated_candidate_for_rows(RowMajorWarpRows::Rows8);
+        let persistent_paths = store.standalone_crate_paths_for(&candidate);
+        let scratch_root = root
+            .join("compile-scratch")
+            .join(candidate.artifact_key().hex());
+        let scratch_crate_dir = scratch_root.join("standalone-crate");
+
+        let emitted = store
+            .emit_standalone_crate_to_dir(&candidate, &MatvecRustCudaGenerator, &scratch_crate_dir)
+            .expect("artifact store should write scratch standalone generated matvec crate");
+
+        assert_eq!(emitted.artifact_key, candidate.artifact_key());
+        assert_eq!(emitted.symbol, "matvec_bf16_rows8");
+        assert_eq!(emitted.paths.crate_dir, scratch_crate_dir);
+        assert!(emitted.paths.cargo_toml_path.starts_with(&scratch_root));
+        assert!(emitted.paths.source_path.starts_with(&scratch_root));
+        assert!(!persistent_paths.crate_dir.exists());
+        assert!(!persistent_paths.cargo_toml_path.exists());
+        assert!(!persistent_paths.source_path.exists());
+
+        let source = fs::read_to_string(&emitted.paths.source_path)
+            .expect("scratch standalone matvec main.rs should be readable");
+        assert!(source.contains("pub fn matvec_bf16_rows8("));
 
         remove_test_generated_root(&root);
     }
