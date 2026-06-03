@@ -2,7 +2,7 @@ use std::fmt;
 
 use super::super::{
     AggregateOperand, ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace,
-    PredicateCondition, RegisterRef, ScalarOperand,
+    PredicateCondition, RegisterRef, SassOpcode, ScalarOperand,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,21 +73,21 @@ pub enum SassLiftedSemantics {
         wide: bool,
     },
     TensorCoreMma {
-        opcode: String,
+        opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
         element_type: Option<String>,
         scope: Option<String>,
     },
     TensorCoreMemory {
-        opcode: String,
+        opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
     },
     TensorMemoryAccess {
-        opcode: String,
+        opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
     },
     WarpGroup {
-        opcode: String,
+        opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
     },
     CompareSet {
@@ -142,7 +142,7 @@ pub enum SassLiftedSemantics {
     },
     NoOp,
     Unsupported {
-        opcode: String,
+        opcode: SassOpcode,
         reason: String,
     },
 }
@@ -435,25 +435,25 @@ pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
             element_type,
             scope,
         } => SassLiftedSemantics::TensorCoreMma {
-            opcode: opcode.clone(),
+            opcode: SassOpcode::new(opcode.clone()),
             operands: operands.clone(),
             element_type: element_type.clone(),
             scope: scope.clone(),
         },
         KernelIrOpKind::TensorCoreMemory { opcode, operands } => {
             SassLiftedSemantics::TensorCoreMemory {
-                opcode: opcode.clone(),
+                opcode: SassOpcode::new(opcode.clone()),
                 operands: operands.clone(),
             }
         }
         KernelIrOpKind::TensorMemoryAccess { opcode, operands } => {
             SassLiftedSemantics::TensorMemoryAccess {
-                opcode: opcode.clone(),
+                opcode: SassOpcode::new(opcode.clone()),
                 operands: operands.clone(),
             }
         }
         KernelIrOpKind::WarpGroup { opcode, operands } => SassLiftedSemantics::WarpGroup {
-            opcode: opcode.clone(),
+            opcode: SassOpcode::new(opcode.clone()),
             operands: operands.clone(),
         },
         KernelIrOpKind::CompareSet {
@@ -521,7 +521,7 @@ pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
         },
         KernelIrOpKind::NoOp => SassLiftedSemantics::NoOp,
         KernelIrOpKind::Unsupported { opcode, reason } => SassLiftedSemantics::Unsupported {
-            opcode: opcode.clone(),
+            opcode: SassOpcode::new(opcode.clone()),
             reason: reason.clone(),
         },
     }
