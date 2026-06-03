@@ -34,6 +34,17 @@ use crate::{
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
+fn bounded_unroll_factors(
+    extent: usize,
+    max_factor: u32,
+    excluded_factor: Option<u32>,
+) -> Vec<u32> {
+    let upper = extent.min(max_factor as usize) as u32;
+    (1..=upper)
+        .filter(|factor| Some(*factor) != excluded_factor)
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KernelAxisKind {
     Spatial,
@@ -1633,7 +1644,7 @@ pub struct MatvecSearchProblem {
 }
 
 impl MatvecSearchProblem {
-    const REDUCE_UNROLL_FACTORS: [u32; 3] = [1, 2, 8];
+    const MAX_REDUCE_UNROLL_FACTOR: u32 = 32;
 
     pub const fn bf16_row_major(rows: usize, cols: usize) -> Self {
         Self {
@@ -1741,6 +1752,14 @@ impl MatvecSearchProblem {
             KernelAxis::reduction(1, "col", self.cols, Some(1)),
         ]
     }
+
+    fn reduce_unroll_factors(&self) -> Vec<u32> {
+        bounded_unroll_factors(
+            self.cols,
+            Self::MAX_REDUCE_UNROLL_FACTOR,
+            Some(MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL),
+        )
+    }
 }
 
 impl KernelActionSearchProblem for MatvecSearchProblem {
@@ -1763,10 +1782,7 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 ]
             })
             .collect();
-        let unroll_factors = Self::REDUCE_UNROLL_FACTORS
-            .into_iter()
-            .filter(|factor| *factor <= self.cols as u32)
-            .collect();
+        let unroll_factors = self.reduce_unroll_factors();
         KernelActionSpaceSet::new(vec![
             KernelActionSpace::Split {
                 variants: split_variants,
@@ -1811,10 +1827,7 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
         {
             return KernelActionSpaceSet::default();
         }
-        let factors = Self::REDUCE_UNROLL_FACTORS
-            .into_iter()
-            .filter(|factor| *factor <= self.cols as u32)
-            .collect();
+        let factors = self.reduce_unroll_factors();
         KernelActionSpaceSet::new(vec![KernelActionSpace::Unroll { axis: 1, factors }])
     }
 
@@ -1851,7 +1864,7 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 arg: KernelScheduleActionArg::Factor(factor),
                 materialization: KernelActionMaterialization::DeferredGenerated,
             } => {
-                if candidate.is_launchable() || *factor == 0 || *factor > self.cols as u32 {
+                if candidate.is_launchable() || !self.reduce_unroll_factors().contains(factor) {
                     return None;
                 }
                 let plan = schedule_matvec_plan(&candidate.schedule)?;
@@ -2039,7 +2052,7 @@ impl GemmSearchProblem {
         GemmTileShape::new(16, 32, 16),
         GemmTileShape::new(32, 16, 16),
     ];
-    const REDUCE_UNROLL_FACTORS: [u32; 3] = [2, 4, 8];
+    const MAX_REDUCE_UNROLL_FACTOR: u32 = 32;
     const B_LOAD_ORDERS: [GemmBTileLoadOrder; 1] = [GemmBTileLoadOrder::KContiguous];
 
     pub const fn f32_bf16_row_col_row(m: usize, n: usize, k: usize) -> Self {
@@ -2171,6 +2184,20 @@ impl GemmSearchProblem {
             KernelActionMaterialization::DeferredGenerated
         }
     }
+
+    fn reduce_unroll_factors(&self) -> Vec<u32> {
+        let mut factors = Vec::new();
+        for tile in Self::TILE_SHAPES {
+            factors.extend(Self::reduce_unroll_factors_for_tile(tile));
+        }
+        factors.sort_unstable();
+        factors.dedup();
+        factors
+    }
+
+    fn reduce_unroll_factors_for_tile(tile: GemmTileShape) -> Vec<u32> {
+        bounded_unroll_factors(tile.k as usize, Self::MAX_REDUCE_UNROLL_FACTOR, Some(1))
+    }
 }
 
 impl KernelActionSearchProblem for GemmSearchProblem {
@@ -2184,7 +2211,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 )
             })
             .collect();
-        let unroll_factors = Self::REDUCE_UNROLL_FACTORS.into_iter().collect();
+        let unroll_factors = self.reduce_unroll_factors();
         let stride_orders = Self::B_LOAD_ORDERS
             .into_iter()
             .map(GemmBTileLoadOrder::action_axes)
@@ -2219,10 +2246,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
 
         if plan.reduce_unroll == 1 {
             let mut spaces = Vec::new();
-            let factors = Self::REDUCE_UNROLL_FACTORS
-                .into_iter()
-                .filter(|factor| *factor <= plan.tile.k && plan.tile.k % *factor == 0)
-                .collect::<Vec<_>>();
+            let factors = Self::reduce_unroll_factors_for_tile(plan.tile);
             spaces.push(KernelActionSpace::Unroll { axis: 2, factors });
             if plan.b_load_order == GemmBTileLoadOrder::TileLinear {
                 let orders = Self::B_LOAD_ORDERS
@@ -2277,7 +2301,9 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 materialization: KernelActionMaterialization::DeferredGenerated,
             } => {
                 let plan = schedule_gemm_plan(&candidate.schedule)?;
-                if plan.reduce_unroll != 1 || *factor > plan.tile.k || plan.tile.k % *factor != 0 {
+                if plan.reduce_unroll != 1
+                    || !Self::reduce_unroll_factors_for_tile(plan.tile).contains(factor)
+                {
                     return None;
                 }
                 Some(candidate_with_action_trace(
@@ -3823,25 +3849,57 @@ mod tests {
             panic!("generated matvec split should expose unroll action-space metadata");
         };
         assert_eq!(*axis, 1);
-        assert_eq!(factors.as_slice(), &[1, 2, 8]);
-        assert_eq!(actions.len(), 3);
+        assert_eq!(factors.len(), 31);
+        assert_eq!(factors.first().copied(), Some(1));
+        assert_eq!(factors.last().copied(), Some(32));
+        assert!(!factors.contains(&MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL));
+        assert!(factors.contains(&7));
         assert!(actions.contains(&KernelScheduleAction::unroll(1, 1)));
         assert!(actions.contains(&KernelScheduleAction::unroll(1, 2)));
-        assert!(actions.contains(&KernelScheduleAction::unroll(1, 8)));
+        assert!(actions.contains(&KernelScheduleAction::unroll(1, 7)));
+        assert!(actions.contains(&KernelScheduleAction::unroll(1, 32)));
 
         let unrolled = problem
-            .apply_schedule_action(&rows8, &KernelScheduleAction::unroll(1, 8))
+            .apply_schedule_action(&rows8, &KernelScheduleAction::unroll(1, 7))
             .expect("reduce unroll action should produce generated candidate metadata");
-        assert_eq!(unrolled.launch.kernel, "matvec_bf16_rows8_u8");
-        assert_eq!(schedule_matvec_reduce_unroll(&unrolled.schedule), Some(8));
+        assert_eq!(unrolled.launch.kernel, "matvec_bf16_rows8_u7");
+        assert_eq!(schedule_matvec_reduce_unroll(&unrolled.schedule), Some(7));
         assert_eq!(
             unrolled.action_trace,
             vec![
                 KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
-                KernelScheduleAction::unroll(1, 8),
+                KernelScheduleAction::unroll(1, 7),
             ]
         );
         assert_ne!(rows8.artifact_key(), unrolled.artifact_key());
+    }
+
+    #[test]
+    fn matvec_unroll_action_space_is_bounded_by_problem_shape() {
+        let problem = MatvecSearchProblem::bf16_row_major(16, 3);
+        let seed = problem.seed();
+        let rows8 = problem
+            .apply_schedule_action(
+                &seed,
+                &KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+            )
+            .expect("row split action should produce generated candidate metadata");
+        let KernelActionSpace::Unroll { factors, .. } = &problem.action_spaces(&rows8).spaces[0]
+        else {
+            panic!("generated matvec split should expose unroll metadata");
+        };
+
+        assert_eq!(factors.as_slice(), &[1, 2, 3]);
+        assert!(
+            problem
+                .apply_schedule_action(&rows8, &KernelScheduleAction::unroll(1, 3))
+                .is_some()
+        );
+        assert!(
+            problem
+                .apply_schedule_action(&rows8, &KernelScheduleAction::unroll(1, 5))
+                .is_none()
+        );
     }
 
     #[test]
@@ -3856,7 +3914,7 @@ mod tests {
             },
             |candidate| {
                 let plan = schedule_matvec_plan(&candidate.schedule)?;
-                if plan.rows == RowMajorWarpRows::Rows8 && plan.reduce_unroll == 8 {
+                if plan.rows == RowMajorWarpRows::Rows8 && plan.reduce_unroll == 7 {
                     SearchScore::measured(0.0)
                 } else {
                     SearchScore::measured(
@@ -3873,8 +3931,8 @@ mod tests {
         let plan = schedule_matvec_plan(&best.schedule).expect("best candidate should have plan");
 
         assert_eq!(plan.rows, RowMajorWarpRows::Rows8);
-        assert_eq!(plan.reduce_unroll, 8);
-        assert_eq!(best.launch.kernel, "matvec_bf16_rows8_u8");
+        assert_eq!(plan.reduce_unroll, 7);
+        assert_eq!(best.launch.kernel, "matvec_bf16_rows8_u7");
         assert_eq!(
             best.score.map(|score| score.source),
             Some(SearchScoreSource::Measured)
@@ -3932,7 +3990,7 @@ mod tests {
             |candidate| {
                 let plan = schedule_matvec_plan(&candidate.schedule)?;
                 match plan.reduce_unroll {
-                    8 => SearchScore::measured(1.0),
+                    7 => SearchScore::measured(1.0),
                     factor if factor == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL => {
                         SearchScore::measured(10.0)
                     }
@@ -3948,7 +4006,7 @@ mod tests {
         assert_eq!(result.exit_reason, AutoOptimizeExitReason::MaxSteps);
         assert_eq!(result.steps.len(), 2);
         assert_eq!(result.steps[1].improvement, Some(9.0));
-        assert_eq!(best_plan.reduce_unroll, 8);
+        assert_eq!(best_plan.reduce_unroll, 7);
         assert_eq!(best.score.and_then(|score| Some(score.value)), Some(1.0));
     }
 
@@ -4252,27 +4310,29 @@ mod tests {
             schedule_spaces.spaces[1],
             KernelActionSpace::StrideOrder { .. }
         ));
-        assert_eq!(schedule_actions.len(), 4);
-        assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 4)));
+        assert_eq!(schedule_actions.len(), 16);
+        assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 7)));
+        assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 16)));
+        assert!(!schedule_actions.contains(&KernelScheduleAction::unroll(2, 1)));
         assert!(schedule_actions.contains(&KernelScheduleAction::stride_order(vec![2, 1])));
 
         let unrolled = problem
-            .apply_schedule_action(&tile_candidate, &KernelScheduleAction::unroll(2, 4))
+            .apply_schedule_action(&tile_candidate, &KernelScheduleAction::unroll(2, 7))
             .expect("unroll action should produce candidate metadata");
         let unrolled_plan =
             schedule_gemm_plan(&unrolled.schedule).expect("unrolled candidate should have plan");
-        assert_eq!(unrolled_plan.reduce_unroll, 4);
-        assert_eq!(unrolled.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u4");
+        assert_eq!(unrolled_plan.reduce_unroll, 7);
+        assert_eq!(unrolled.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u7");
 
         let traced_tile = problem
             .apply_schedule_action(&seed, &tile_action)
             .expect("tile action should produce candidate metadata");
         let traced_unrolled = problem
-            .apply_schedule_action(&traced_tile, &KernelScheduleAction::unroll(2, 4))
+            .apply_schedule_action(&traced_tile, &KernelScheduleAction::unroll(2, 7))
             .expect("unroll action should extend candidate action trace");
         assert_eq!(
             traced_unrolled.action_trace,
-            vec![tile_action, KernelScheduleAction::unroll(2, 4)]
+            vec![tile_action, KernelScheduleAction::unroll(2, 7)]
         );
         assert_eq!(traced_unrolled.artifact_key(), unrolled.artifact_key());
 
@@ -4317,21 +4377,21 @@ mod tests {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
         let candidates = problem.expand(&tile_candidate);
-        assert_eq!(candidates.len(), 4);
+        assert_eq!(candidates.len(), 16);
 
-        let unroll4 = candidates
+        let unroll7 = candidates
             .iter()
-            .find(|candidate| schedule_gemm_reduce_unroll(&candidate.schedule) == Some(4))
-            .expect("GEMM search should expose a reduce unroll factor 4 descriptor");
+            .find(|candidate| schedule_gemm_reduce_unroll(&candidate.schedule) == Some(7))
+            .expect("GEMM search should expose a reduce unroll factor 7 descriptor");
         assert_eq!(
-            schedule_gemm_tile(&unroll4.schedule),
+            schedule_gemm_tile(&unroll7.schedule),
             Some(GemmTileShape::new(16, 32, 16))
         );
-        assert_ne!(tile_candidate.artifact_key(), unroll4.artifact_key());
-        assert_eq!(unroll4.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u4");
-        assert!(!unroll4.is_launchable());
+        assert_ne!(tile_candidate.artifact_key(), unroll7.artifact_key());
+        assert_eq!(unroll7.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u7");
+        assert!(!unroll7.is_launchable());
         assert!(matches!(
-            unroll4.generated.materialization,
+            unroll7.generated.materialization,
             KernelMaterialization::DeferredGenerated { .. }
         ));
     }
@@ -4364,21 +4424,22 @@ mod tests {
     fn gemm_generator_renders_reduce_unroll_source_on_demand() {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let candidate = problem.candidate_for_plan(
-            GemmSchedulePlan::new(GemmTileShape::new(16, 32, 16)).with_reduce_unroll(4),
+            GemmSchedulePlan::new(GemmTileShape::new(16, 32, 16)).with_reduce_unroll(7),
         );
         let generated = GemmRustCudaGenerator
             .source_for(&candidate)
             .expect("GEMM generator should render reduce-unrolled source");
 
-        assert_eq!(generated.symbol, "gemm_f32_bf16_tile_16x32x16_u4");
-        assert!(generated.source.contains("const REDUCE_UNROLL: usize = 4;"));
+        assert_eq!(generated.symbol, "gemm_f32_bf16_tile_16x32x16_u7");
+        assert!(generated.source.contains("const REDUCE_UNROLL: usize = 7;"));
         assert!(
             generated
                 .source
                 .contains("while kk + REDUCE_UNROLL <= TILE_K")
         );
-        assert!(generated.source.contains("TILE_A[ty * TILE_K + kk + 3]"));
-        assert!(generated.source.contains("TILE_B[(kk + 3) * TILE_N + tx]"));
+        assert!(generated.source.contains("TILE_A[ty * TILE_K + kk + 6]"));
+        assert!(generated.source.contains("TILE_B[(kk + 6) * TILE_N + tx]"));
+        assert!(generated.source.contains("while kk < TILE_K"));
     }
 
     #[test]
@@ -5030,8 +5091,8 @@ mod tests {
         };
         let result = beam_search_metadata_with_scorer(&problem, config, |candidate| {
             let plan = schedule_matvec_plan(&candidate.schedule)?;
-            let score = f64::from(8 - plan.rows.rows_per_block()) * 10.0
-                + f64::from(8 - plan.reduce_unroll);
+            let score = (8.0 - f64::from(plan.rows.rows_per_block())) * 10.0
+                + (64.0 - f64::from(plan.reduce_unroll));
             SearchScore::measured(score)
         });
         let report = result.optimization_report("matvec-bf16-row-major", config);
@@ -5072,7 +5133,7 @@ mod tests {
         assert_eq!(report_json["best"]["launchable"].as_bool(), Some(false));
         assert_eq!(
             report_json["best"]["launch"]["kernel"].as_str(),
-            Some("matvec_bf16_rows8_u8")
+            Some("matvec_bf16_rows8_u32")
         );
         assert_eq!(
             report_json["best"]["action_trace"].as_array().map(Vec::len),
@@ -5298,7 +5359,7 @@ mod tests {
             |candidate| {
                 let plan = schedule_gemm_plan(&candidate.schedule)?;
                 let score =
-                    if plan.tile == GemmTileShape::new(16, 32, 16) && plan.reduce_unroll == 4 {
+                    if plan.tile == GemmTileShape::new(16, 32, 16) && plan.reduce_unroll == 7 {
                         0.0
                     } else {
                         1000.0
@@ -5314,7 +5375,7 @@ mod tests {
         let plan = schedule_gemm_plan(&best.schedule).expect("best candidate should have a plan");
 
         assert_eq!(plan.tile, GemmTileShape::new(16, 32, 16));
-        assert_eq!(plan.reduce_unroll, 4);
+        assert_eq!(plan.reduce_unroll, 7);
         assert_eq!(
             best.score.map(|score| score.source),
             Some(SearchScoreSource::Measured)
@@ -5334,12 +5395,12 @@ mod tests {
             |candidate| {
                 let plan = schedule_gemm_plan(&candidate.schedule)?;
                 let score = if plan.tile == GemmTileShape::new(16, 32, 16)
-                    && plan.reduce_unroll == 4
+                    && plan.reduce_unroll == 7
                     && plan.b_load_order == GemmBTileLoadOrder::KContiguous
                 {
                     0.0
                 } else if plan.tile == GemmTileShape::new(16, 32, 16)
-                    && (plan.reduce_unroll == 4
+                    && (plan.reduce_unroll == 7
                         || plan.b_load_order == GemmBTileLoadOrder::KContiguous)
                 {
                     10.0
@@ -5357,9 +5418,9 @@ mod tests {
         let plan = schedule_gemm_plan(&best.schedule).expect("best candidate should have a plan");
 
         assert_eq!(plan.tile, GemmTileShape::new(16, 32, 16));
-        assert_eq!(plan.reduce_unroll, 4);
+        assert_eq!(plan.reduce_unroll, 7);
         assert_eq!(plan.b_load_order, GemmBTileLoadOrder::KContiguous);
-        assert_eq!(best.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u4_bk");
+        assert_eq!(best.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u7_bk");
     }
 
     #[test]
@@ -5398,8 +5459,8 @@ mod tests {
         let best = result
             .best
             .expect("GEMM search should keep the existing tile");
-        assert_eq!(result.explored, 8);
-        assert_eq!(result.rejected, 7);
+        assert_eq!(result.explored, 20);
+        assert_eq!(result.rejected, 19);
         assert_eq!(
             schedule_gemm_tile(&best.schedule),
             Some(GemmTileShape::new(16, 16, 16))
