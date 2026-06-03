@@ -524,6 +524,13 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
                 emitted.paths.manifest_path.display(),
                 emitted.manifest_bytes
             );
+            let emitted_selection = store.emit_selection_for_candidate(best)?;
+            println!(
+                "emitted_selection rank=0 artifact_key={} selection_path={} selection_bytes={}",
+                emitted_selection.artifact_key,
+                emitted_selection.selection_path.display(),
+                emitted_selection.selection_bytes
+            );
             let report = result.optimization_report("gemm-f32-bf16-row-col-row", config);
             let emitted_report = store.emit_search_report(&report)?;
             println!(
@@ -746,6 +753,13 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
                 emitted.artifact_key.hex(),
                 emitted.paths.manifest_path.display(),
                 emitted.manifest_bytes
+            );
+            let emitted_selection = store.emit_selection_for_candidate(best)?;
+            println!(
+                "emitted_selection rank=0 artifact_key={} selection_path={} selection_bytes={}",
+                emitted_selection.artifact_key,
+                emitted_selection.selection_path.display(),
+                emitted_selection.selection_bytes
             );
             let report = result.optimization_report("matvec-bf16-row-major", config);
             let emitted_report = store.emit_search_report(&report)?;

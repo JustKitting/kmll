@@ -7,7 +7,8 @@ use std::{
 };
 
 use nn_rust_profiling::{
-    CudaLaunchSpec, NumericKind, OperationKind, OperationRoute, TensorTypeSpec, TypedOperationSpec,
+    CudaLaunchSpec, NumericKind, OperationKind, OperationRoute, ProfileDuration, ProfileTimeSource,
+    SampleStats, TensorTypeSpec, TypedOperationSpec,
 };
 pub use nn_rust_profiling::{
     OptimizationActionArg as KernelScheduleActionArg,
@@ -217,6 +218,9 @@ pub enum KernelGenerationError {
         family: String,
         transform: &'static str,
     },
+    InvalidSelection {
+        reason: String,
+    },
     Io(io::Error),
     Json(serde_json::Error),
 }
@@ -234,6 +238,12 @@ impl fmt::Display for KernelGenerationError {
                 write!(
                     f,
                     "candidate family {family:?} is missing required {transform} transform"
+                )
+            }
+            Self::InvalidSelection { reason } => {
+                write!(
+                    f,
+                    "kernel optimization selection metadata is invalid: {reason}"
                 )
             }
             Self::Io(error) => write!(f, "kernel artifact I/O failed: {error}"),
@@ -326,6 +336,13 @@ impl KernelArtifactStore {
             .join(format!("{}.json", search_report_key(report).hex()))
     }
 
+    pub fn selection_path_for(&self, selection: &KernelOptimizationSelection) -> PathBuf {
+        self.root
+            .join("selections")
+            .join(sanitize_path_component(&selection.family))
+            .join(format!("{}.json", selection.artifact_key))
+    }
+
     pub fn emit_search_report(
         &self,
         report: &OptimizationSearchReport,
@@ -342,6 +359,40 @@ impl KernelArtifactStore {
             report_path: path,
             report_bytes: report_json.len(),
         })
+    }
+
+    pub fn emit_selection(
+        &self,
+        selection: &KernelOptimizationSelection,
+    ) -> Result<EmittedKernelOptimizationSelection, KernelGenerationError> {
+        let path = self.selection_path_for(selection);
+        fs::create_dir_all(
+            path.parent()
+                .expect("selection path should have a parent directory"),
+        )?;
+        let selection_json = serde_json::to_vec_pretty(&selection_json(selection))?;
+        fs::write(&path, &selection_json)?;
+        Ok(EmittedKernelOptimizationSelection {
+            artifact_key: selection.artifact_key.clone(),
+            selection_path: path,
+            selection_bytes: selection_json.len(),
+        })
+    }
+
+    pub fn emit_selection_for_candidate(
+        &self,
+        candidate: &KernelCandidateMetadata,
+    ) -> Result<EmittedKernelOptimizationSelection, KernelGenerationError> {
+        self.emit_selection(&KernelOptimizationSelection::from_candidate(candidate))
+    }
+
+    pub fn read_selection(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<KernelOptimizationSelection, KernelGenerationError> {
+        let selection_text = fs::read_to_string(path)?;
+        let selection_json: Value = serde_json::from_str(&selection_text)?;
+        parse_selection_json(&selection_json)
     }
 
     pub fn emit_metadata(
@@ -417,6 +468,70 @@ pub struct EmittedSearchReport {
     pub report_key: KernelMetadataKey,
     pub report_path: PathBuf,
     pub report_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct KernelOptimizationSelection {
+    pub family: String,
+    pub artifact_key: String,
+    pub generator: String,
+    pub launchable: bool,
+    pub action_trace: Vec<KernelScheduleAction>,
+    pub score: Option<SearchScore>,
+}
+
+impl KernelOptimizationSelection {
+    pub fn from_candidate(candidate: &KernelCandidateMetadata) -> Self {
+        Self {
+            family: candidate.family.clone(),
+            artifact_key: candidate.artifact_key().hex(),
+            generator: candidate.generated.generator.to_string(),
+            launchable: candidate.is_launchable(),
+            action_trace: candidate.action_trace.clone(),
+            score: candidate.score,
+        }
+    }
+
+    pub fn replay<P>(&self, problem: &P) -> Result<KernelCandidateMetadata, KernelActionReplayError>
+    where
+        P: KernelActionSearchProblem,
+    {
+        let candidate = replay_schedule_actions(problem, &self.action_trace)?;
+        if candidate.family != self.family {
+            return Err(KernelActionReplayError::FamilyMismatch {
+                expected: self.family.clone(),
+                actual: candidate.family,
+            });
+        }
+        let actual_key = candidate.artifact_key().hex();
+        if actual_key != self.artifact_key {
+            return Err(KernelActionReplayError::ArtifactKeyMismatch {
+                expected: self.artifact_key.clone(),
+                actual: actual_key,
+            });
+        }
+        if candidate.generated.generator != self.generator {
+            return Err(KernelActionReplayError::GeneratorMismatch {
+                expected: self.generator.clone(),
+                actual: candidate.generated.generator.to_string(),
+            });
+        }
+        let actual_launchable = candidate.is_launchable();
+        if actual_launchable != self.launchable {
+            return Err(KernelActionReplayError::LaunchabilityMismatch {
+                expected: self.launchable,
+                actual: actual_launchable,
+            });
+        }
+        Ok(candidate)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmittedKernelOptimizationSelection {
+    pub artifact_key: String,
+    pub selection_path: PathBuf,
+    pub selection_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -580,9 +695,17 @@ pub enum KernelActionReplayError {
         expected: String,
         actual: String,
     },
+    GeneratorMismatch {
+        expected: String,
+        actual: String,
+    },
     ArtifactKeyMismatch {
         expected: String,
         actual: String,
+    },
+    LaunchabilityMismatch {
+        expected: bool,
+        actual: bool,
     },
 }
 
@@ -598,10 +721,22 @@ impl fmt::Display for KernelActionReplayError {
                     "replayed candidate family {actual:?} did not match expected {expected:?}"
                 )
             }
+            Self::GeneratorMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "replayed candidate generator {actual:?} did not match expected {expected:?}"
+                )
+            }
             Self::ArtifactKeyMismatch { expected, actual } => {
                 write!(
                     f,
                     "replayed candidate artifact key {actual} did not match expected {expected}"
+                )
+            }
+            Self::LaunchabilityMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "replayed candidate launchable={actual} did not match expected launchable={expected}"
                 )
             }
         }
@@ -1624,6 +1759,251 @@ fn generated_kernel_manifest(candidate: &KernelCandidateMetadata) -> Value {
             .collect::<Vec<_>>(),
         "score": candidate.score.map(score_json),
     })
+}
+
+fn selection_json(selection: &KernelOptimizationSelection) -> Value {
+    json!({
+        "schema_version": 1,
+        "family": &selection.family,
+        "artifact_key": &selection.artifact_key,
+        "generator": &selection.generator,
+        "launchable": selection.launchable,
+        "action_trace": selection
+            .action_trace
+            .iter()
+            .map(action_json)
+            .collect::<Vec<_>>(),
+        "score": selection.score.map(score_json),
+    })
+}
+
+fn parse_selection_json(
+    value: &Value,
+) -> Result<KernelOptimizationSelection, KernelGenerationError> {
+    let schema_version = required_u64(value, "schema_version")?;
+    if schema_version != 1 {
+        return Err(invalid_selection(format!(
+            "unsupported schema_version {schema_version}"
+        )));
+    }
+    Ok(KernelOptimizationSelection {
+        family: required_str(value, "family")?.to_string(),
+        artifact_key: required_str(value, "artifact_key")?.to_string(),
+        generator: required_str(value, "generator")?.to_string(),
+        launchable: required_bool(value, "launchable")?,
+        action_trace: parse_action_trace(required_array(value, "action_trace")?)?,
+        score: parse_optional_score(value.get("score").unwrap_or(&Value::Null))?,
+    })
+}
+
+fn parse_action_trace(
+    actions: &[Value],
+) -> Result<Vec<KernelScheduleAction>, KernelGenerationError> {
+    actions
+        .iter()
+        .enumerate()
+        .map(|(index, action)| parse_action_json(action, index))
+        .collect()
+}
+
+fn parse_action_json(
+    value: &Value,
+    index: usize,
+) -> Result<KernelScheduleAction, KernelGenerationError> {
+    let op = match required_str(value, "op")? {
+        "split" => KernelScheduleActionOp::Split,
+        "unroll" => KernelScheduleActionOp::Unroll,
+        "tile-gemm" => KernelScheduleActionOp::TileGemm,
+        "stride-order" => KernelScheduleActionOp::StrideOrder,
+        op => {
+            return Err(invalid_selection(format!(
+                "action_trace[{index}] has unsupported op {op:?}"
+            )));
+        }
+    };
+    let materialization = match required_str(value, "materialization")? {
+        "existing" => KernelActionMaterialization::Existing,
+        "deferred-generated" => KernelActionMaterialization::DeferredGenerated,
+        materialization => {
+            return Err(invalid_selection(format!(
+                "action_trace[{index}] has unsupported materialization {materialization:?}"
+            )));
+        }
+    };
+    Ok(KernelScheduleAction {
+        op,
+        axis: optional_u8(value, "axis")?,
+        arg: parse_action_arg_json(required_field(value, "arg")?, index)?,
+        materialization,
+    })
+}
+
+fn parse_action_arg_json(
+    value: &Value,
+    index: usize,
+) -> Result<KernelScheduleActionArg, KernelGenerationError> {
+    match required_str(value, "kind")? {
+        "factor" => Ok(KernelScheduleActionArg::Factor(required_u32(
+            value, "value",
+        )?)),
+        "tile-3d" => Ok(KernelScheduleActionArg::Tile3d {
+            m: required_u32(value, "m")?,
+            n: required_u32(value, "n")?,
+            k: required_u32(value, "k")?,
+        }),
+        "axis-order" => Ok(KernelScheduleActionArg::AxisOrder(
+            required_array(value, "axes")?
+                .iter()
+                .enumerate()
+                .map(|(axis_index, axis)| {
+                    value_as_u8(axis).ok_or_else(|| {
+                        invalid_selection(format!(
+                            "action_trace[{index}].arg.axes[{axis_index}] must be a u8"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        kind => Err(invalid_selection(format!(
+            "action_trace[{index}] has unsupported arg kind {kind:?}"
+        ))),
+    }
+}
+
+fn parse_optional_score(value: &Value) -> Result<Option<SearchScore>, KernelGenerationError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let score_value = required_f64(value, "value")?;
+    if !score_value.is_finite() {
+        return Err(invalid_selection("score.value must be finite"));
+    }
+    let source = match required_str(value, "source")? {
+        "heuristic" => SearchScoreSource::Heuristic,
+        "measured" => SearchScoreSource::Measured,
+        source => {
+            return Err(invalid_selection(format!(
+                "score.source is unsupported: {source:?}"
+            )));
+        }
+    };
+    Ok(Some(SearchScore {
+        value: score_value,
+        source,
+        timing: parse_optional_timing(value.get("timing").unwrap_or(&Value::Null))?,
+    }))
+}
+
+fn parse_optional_timing(
+    value: &Value,
+) -> Result<Option<OptimizationTiming>, KernelGenerationError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let source = match required_str(value, "source")? {
+        "wall-clock" => ProfileTimeSource::WallClock,
+        "cuda-event" => ProfileTimeSource::CudaEvent,
+        "host-self-time" => ProfileTimeSource::SelfTimeAccounting,
+        source => {
+            return Err(invalid_selection(format!(
+                "score.timing.source is unsupported: {source:?}"
+            )));
+        }
+    };
+    let selected_seconds = required_f64(value, "selected_seconds")?;
+    let selected = ProfileDuration::from_seconds_f64(selected_seconds).ok_or_else(|| {
+        invalid_selection("score.timing.selected_seconds must be nonnegative and finite")
+    })?;
+    let samples = required_field(value, "samples")?;
+    let sample_stats = SampleStats {
+        count: required_usize(samples, "count")?,
+        mean: required_f64(samples, "mean_seconds")?,
+        median: required_f64(samples, "median_seconds")?,
+        min: required_f64(samples, "min_seconds")?,
+        max: required_f64(samples, "max_seconds")?,
+    };
+    if sample_stats.count == 0
+        || !sample_stats.mean.is_finite()
+        || !sample_stats.median.is_finite()
+        || !sample_stats.min.is_finite()
+        || !sample_stats.max.is_finite()
+    {
+        return Err(invalid_selection(
+            "score.timing.samples must contain nonzero finite statistics",
+        ));
+    }
+    Ok(Some(OptimizationTiming::new(
+        source,
+        required_usize(value, "warmup_count")?,
+        sample_stats,
+        selected,
+    )))
+}
+
+fn required_field<'a>(value: &'a Value, name: &str) -> Result<&'a Value, KernelGenerationError> {
+    value
+        .get(name)
+        .ok_or_else(|| invalid_selection(format!("missing field {name:?}")))
+}
+
+fn required_str<'a>(value: &'a Value, name: &str) -> Result<&'a str, KernelGenerationError> {
+    required_field(value, name)?
+        .as_str()
+        .ok_or_else(|| invalid_selection(format!("field {name:?} must be a string")))
+}
+
+fn required_bool(value: &Value, name: &str) -> Result<bool, KernelGenerationError> {
+    required_field(value, name)?
+        .as_bool()
+        .ok_or_else(|| invalid_selection(format!("field {name:?} must be a bool")))
+}
+
+fn required_array<'a>(value: &'a Value, name: &str) -> Result<&'a [Value], KernelGenerationError> {
+    required_field(value, name)?
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| invalid_selection(format!("field {name:?} must be an array")))
+}
+
+fn required_u64(value: &Value, name: &str) -> Result<u64, KernelGenerationError> {
+    required_field(value, name)?
+        .as_u64()
+        .ok_or_else(|| invalid_selection(format!("field {name:?} must be a u64")))
+}
+
+fn required_usize(value: &Value, name: &str) -> Result<usize, KernelGenerationError> {
+    usize::try_from(required_u64(value, name)?)
+        .map_err(|_| invalid_selection(format!("field {name:?} exceeds usize")))
+}
+
+fn required_u32(value: &Value, name: &str) -> Result<u32, KernelGenerationError> {
+    u32::try_from(required_u64(value, name)?)
+        .map_err(|_| invalid_selection(format!("field {name:?} exceeds u32")))
+}
+
+fn optional_u8(value: &Value, name: &str) -> Result<Option<u8>, KernelGenerationError> {
+    match value.get(name) {
+        Some(Value::Null) | None => Ok(None),
+        Some(value) => value_as_u8(value)
+            .ok_or_else(|| invalid_selection(format!("field {name:?} must be null or a u8")))
+            .map(Some),
+    }
+}
+
+fn value_as_u8(value: &Value) -> Option<u8> {
+    value.as_u64().and_then(|value| u8::try_from(value).ok())
+}
+
+fn required_f64(value: &Value, name: &str) -> Result<f64, KernelGenerationError> {
+    required_field(value, name)?
+        .as_f64()
+        .ok_or_else(|| invalid_selection(format!("field {name:?} must be an f64")))
+}
+
+fn invalid_selection(reason: impl Into<String>) -> KernelGenerationError {
+    KernelGenerationError::InvalidSelection {
+        reason: reason.into(),
+    }
 }
 
 fn materialization_json(materialization: &KernelMaterialization) -> Value {
@@ -3133,6 +3513,77 @@ mod tests {
             manifest["score"]["timing"]["samples"]["count"].as_u64(),
             Some(3)
         );
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn artifact_store_writes_selection_metadata_and_replays_action_trace() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+        let problem = MatvecSearchProblem::bf16_row_major(128, 256);
+        let mut candidate = replay_schedule_actions(
+            &problem,
+            &[
+                KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+                KernelScheduleAction::unroll(1, 8),
+            ],
+        )
+        .expect("valid matvec action trace should replay into candidate metadata");
+        let samples = SampleStats::from_finite_samples(&[0.000002, 0.000003, 0.000004])
+            .expect("sample stats should accept finite samples");
+        let timing = OptimizationTiming::new(
+            ProfileTimeSource::CudaEvent,
+            1,
+            samples,
+            ProfileDuration::from_seconds_f64(samples.median)
+                .expect("median should be a valid duration"),
+        );
+        candidate.score = SearchScore::measured_with_timing(samples.median, timing);
+
+        let emitted = store
+            .emit_selection_for_candidate(&candidate)
+            .expect("artifact store should write selected action metadata");
+
+        assert!(emitted.selection_path.starts_with(store.root()));
+        assert!(
+            emitted
+                .selection_path
+                .components()
+                .any(|component| component.as_os_str() == "selections")
+        );
+        assert!(emitted.selection_bytes > 0);
+
+        let selection_text =
+            fs::read_to_string(&emitted.selection_path).expect("selection should be readable");
+        assert!(selection_text.contains("\"action_trace\""));
+        assert!(selection_text.contains("\"op\": \"split\""));
+        assert!(selection_text.contains("\"op\": \"unroll\""));
+        assert!(selection_text.contains("\"source\": \"measured\""));
+        assert!(!selection_text.contains("#[kernel]"));
+        assert!(!selection_text.contains("pub fn matvec_bf16"));
+
+        let selection = store
+            .read_selection(&emitted.selection_path)
+            .expect("selection should parse back from JSON");
+        assert_eq!(selection.family, "matvec-bf16-row-major");
+        assert_eq!(selection.artifact_key, candidate.artifact_key().hex());
+        assert_eq!(selection.generator, "row-major-matvec-generator");
+        assert!(!selection.launchable);
+        assert_eq!(selection.action_trace, candidate.action_trace);
+        assert_eq!(
+            selection
+                .score
+                .and_then(|score| score.timing)
+                .map(|timing| timing.samples.count),
+            Some(3)
+        );
+
+        let replayed = selection
+            .replay(&problem)
+            .expect("selection should replay into selected candidate");
+        assert_eq!(replayed.artifact_key(), candidate.artifact_key());
+        assert_eq!(replayed.launch.kernel, "matvec_bf16_rows8_u8");
 
         remove_test_generated_root(&root);
     }
