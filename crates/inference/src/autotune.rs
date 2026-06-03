@@ -300,32 +300,66 @@ impl KernelArtifactStore {
             .join(candidate.artifact_key().hex());
         KernelArtifactPaths {
             directory: directory.clone(),
-            source_path: directory.join("kernel.rs"),
             manifest_path: directory.join("manifest.json"),
         }
     }
 
-    pub fn emit<G>(
+    pub fn standalone_crate_paths_for(
+        &self,
+        candidate: &KernelCandidateMetadata,
+    ) -> StandaloneKernelCratePaths {
+        let crate_dir = self.paths_for(candidate).directory.join("standalone-crate");
+        StandaloneKernelCratePaths {
+            cargo_toml_path: crate_dir.join("Cargo.toml"),
+            source_path: crate_dir.join("src").join("main.rs"),
+            crate_dir,
+        }
+    }
+
+    pub fn emit_metadata(
+        &self,
+        candidate: &KernelCandidateMetadata,
+    ) -> Result<EmittedKernelMetadata, KernelGenerationError> {
+        let paths = self.paths_for(candidate);
+        fs::create_dir_all(&paths.directory)?;
+        let manifest = generated_kernel_manifest(candidate);
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+        fs::write(&paths.manifest_path, &manifest_bytes)?;
+        Ok(EmittedKernelMetadata {
+            artifact_key: candidate.artifact_key(),
+            paths,
+            manifest_bytes: manifest_bytes.len(),
+        })
+    }
+
+    pub fn emit_standalone_crate<G>(
         &self,
         candidate: &KernelCandidateMetadata,
         generator: &G,
-    ) -> Result<EmittedKernelArtifact, KernelGenerationError>
+    ) -> Result<EmittedStandaloneKernelCrate, KernelGenerationError>
     where
         G: KernelSourceGenerator,
     {
         let generated = generator.source_for(candidate)?;
-        let paths = self.paths_for(candidate);
-        fs::create_dir_all(&paths.directory)?;
-        fs::write(&paths.source_path, generated.source.as_bytes())?;
-        let manifest = generated_kernel_manifest(candidate, generator.name(), &generated);
-        let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
-        fs::write(&paths.manifest_path, &manifest_bytes)?;
-        Ok(EmittedKernelArtifact {
+        let paths = self.standalone_crate_paths_for(candidate);
+        let package_name = standalone_package_name(candidate);
+        let cargo_toml = standalone_cargo_toml(&package_name);
+        let source = standalone_main_source(&generated.source);
+        fs::create_dir_all(
+            paths
+                .source_path
+                .parent()
+                .expect("standalone source path should have a parent directory"),
+        )?;
+        fs::write(&paths.cargo_toml_path, cargo_toml.as_bytes())?;
+        fs::write(&paths.source_path, source.as_bytes())?;
+        Ok(EmittedStandaloneKernelCrate {
             artifact_key: candidate.artifact_key(),
+            package_name,
             symbol: generated.symbol,
             paths,
-            source_bytes: generated.source.len(),
-            manifest_bytes: manifest_bytes.len(),
+            cargo_toml_bytes: cargo_toml.len(),
+            source_bytes: source.len(),
         })
     }
 }
@@ -333,17 +367,31 @@ impl KernelArtifactStore {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelArtifactPaths {
     pub directory: PathBuf,
-    pub source_path: PathBuf,
     pub manifest_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EmittedKernelArtifact {
+pub struct StandaloneKernelCratePaths {
+    pub crate_dir: PathBuf,
+    pub cargo_toml_path: PathBuf,
+    pub source_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmittedKernelMetadata {
     pub artifact_key: KernelMetadataKey,
-    pub symbol: String,
     pub paths: KernelArtifactPaths,
-    pub source_bytes: usize,
     pub manifest_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmittedStandaloneKernelCrate {
+    pub artifact_key: KernelMetadataKey,
+    pub package_name: String,
+    pub symbol: String,
+    pub paths: StandaloneKernelCratePaths,
+    pub cargo_toml_bytes: usize,
+    pub source_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -865,17 +913,12 @@ fn schedule_gemm_tile(schedule: &KernelSchedule) -> Option<GemmTileShape> {
         })
 }
 
-fn generated_kernel_manifest(
-    candidate: &KernelCandidateMetadata,
-    generator: &'static str,
-    source: &GeneratedKernelSource,
-) -> Value {
+fn generated_kernel_manifest(candidate: &KernelCandidateMetadata) -> Value {
     json!({
         "schema_version": 1,
         "artifact_key": candidate.artifact_key().hex(),
         "family": &candidate.family,
-        "generator": generator,
-        "source_symbol": &source.symbol,
+        "generator": candidate.generated.generator,
         "materialization": materialization_json(&candidate.generated.materialization),
         "launch": launch_json(&candidate.launch),
         "operation": operation_json(&candidate.operation),
@@ -990,7 +1033,16 @@ fn render_f32_bf16_gemm_source(symbol: &str, tile: GemmTileShape) -> String {
     )
     .expect("write to string");
     writeln!(source).expect("write to string");
-    writeln!(source, "use crate::dtypes::{{AccumulateToF32, Bf16}};").expect("write to string");
+    writeln!(source, "#[repr(transparent)]").expect("write to string");
+    writeln!(source, "#[derive(Clone, Copy, Default)]").expect("write to string");
+    writeln!(source, "pub struct Bf16(u16);").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "impl Bf16 {{").expect("write to string");
+    writeln!(source, "    #[inline(always)]").expect("write to string");
+    writeln!(source, "    pub fn to_f32(self) -> f32 {{").expect("write to string");
+    writeln!(source, "        f32::from_bits((self.0 as u32) << 16)").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source, "}}").expect("write to string");
     writeln!(source).expect("write to string");
     writeln!(source, "const TILE_M: usize = {};", tile.m).expect("write to string");
     writeln!(source, "const TILE_N: usize = {};", tile.n).expect("write to string");
@@ -1101,7 +1153,11 @@ fn render_f32_bf16_gemm_source(symbol: &str, tile: GemmTileShape) -> String {
         "                TILE_B[load] = if global_row < k && global_col < n {{"
     )
     .expect("write to string");
-    writeln!(source, "                    b[global_row * b_row_stride + global_col * b_col_stride].to_f32_accumulator()").expect("write to string");
+    writeln!(
+        source,
+        "                    b[global_row * b_row_stride + global_col * b_col_stride].to_f32()"
+    )
+    .expect("write to string");
     writeln!(source, "                }} else {{").expect("write to string");
     writeln!(source, "                    0.0").expect("write to string");
     writeln!(source, "                }};").expect("write to string");
@@ -1148,6 +1204,44 @@ fn render_f32_bf16_gemm_source(symbol: &str, tile: GemmTileShape) -> String {
     writeln!(source, "        }}").expect("write to string");
     writeln!(source, "    }}").expect("write to string");
     writeln!(source, "}}").expect("write to string");
+    source
+}
+
+fn standalone_package_name(candidate: &KernelCandidateMetadata) -> String {
+    format!("nn_rust_kernel_{}", candidate.artifact_key().hex())
+}
+
+fn standalone_cargo_toml(package_name: &str) -> String {
+    let mut manifest = String::new();
+    writeln!(manifest, "[package]").expect("write to string");
+    writeln!(manifest, "name = \"{package_name}\"").expect("write to string");
+    writeln!(manifest, "version = \"0.1.0\"").expect("write to string");
+    writeln!(manifest, "edition = \"2024\"").expect("write to string");
+    writeln!(manifest).expect("write to string");
+    writeln!(manifest, "[workspace]").expect("write to string");
+    writeln!(manifest).expect("write to string");
+    writeln!(manifest, "[dependencies]").expect("write to string");
+    writeln!(
+        manifest,
+        "cuda-device = {{ git = \"https://github.com/NVlabs/cuda-oxide.git\", tag = \"v0.1.0\" }}"
+    )
+    .expect("write to string");
+    writeln!(
+        manifest,
+        "cuda-host = {{ git = \"https://github.com/NVlabs/cuda-oxide.git\", tag = \"v0.1.0\" }}"
+    )
+    .expect("write to string");
+    manifest
+}
+
+fn standalone_main_source(kernel_source: &str) -> String {
+    let mut source = String::new();
+    source.push_str(kernel_source);
+    if !source.ends_with('\n') {
+        source.push('\n');
+    }
+    writeln!(source).expect("write to string");
+    writeln!(source, "fn main() {{}}").expect("write to string");
     source
 }
 
@@ -1373,6 +1467,8 @@ mod tests {
                 .source
                 .contains("pub fn gemm_f32_bf16_tile_16x32x16(")
         );
+        assert!(generated.source.contains("pub struct Bf16(u16);"));
+        assert!(generated.source.contains(".to_f32()"));
         assert!(generated.source.contains("const TILE_M: usize = 16;"));
         assert!(generated.source.contains("const TILE_N: usize = 32;"));
         assert!(generated.source.contains("const TILE_K: usize = 16;"));
@@ -1381,7 +1477,7 @@ mod tests {
     }
 
     #[test]
-    fn artifact_store_writes_source_and_manifest_under_managed_style_root() {
+    fn artifact_store_writes_metadata_manifest_without_kernel_source() {
         let root = runtime::default_artifact_dir()
             .join("test-generated")
             .join(format!(
@@ -1397,20 +1493,17 @@ mod tests {
         let candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
 
         let emitted = store
-            .emit(&candidate, &GemmRustCudaGenerator)
-            .expect("artifact store should write generated source and manifest");
+            .emit_metadata(&candidate)
+            .expect("artifact store should write generated metadata manifest");
 
         assert_eq!(emitted.artifact_key, candidate.artifact_key());
-        assert_eq!(emitted.symbol, "gemm_f32_bf16_tile_16x32x16");
         assert!(emitted.paths.directory.starts_with(store.root()));
-        assert!(emitted.paths.source_path.starts_with(store.root()));
         assert!(emitted.paths.manifest_path.starts_with(store.root()));
-        assert!(emitted.source_bytes > 0);
         assert!(emitted.manifest_bytes > 0);
-
-        let source = fs::read_to_string(&emitted.paths.source_path)
-            .expect("generated source should be readable");
-        assert!(source.contains("pub fn gemm_f32_bf16_tile_16x32x16("));
+        assert!(
+            !emitted.paths.directory.join("kernel.rs").exists(),
+            "metadata emission should not persist generated kernel source"
+        );
 
         let manifest_text = fs::read_to_string(&emitted.paths.manifest_path)
             .expect("generated manifest should be readable");
@@ -1425,19 +1518,62 @@ mod tests {
             manifest["family"].as_str(),
             Some("gemm-f32-bf16-row-col-row")
         );
-        assert_eq!(
-            manifest["source_symbol"].as_str(),
-            Some("gemm_f32_bf16_tile_16x32x16")
-        );
+        assert_eq!(manifest["generator"].as_str(), Some("tiled-gemm-generator"));
         assert_eq!(
             manifest["materialization"]["kind"].as_str(),
             Some("deferred-generated")
+        );
+        assert_eq!(
+            manifest["materialization"]["symbol_hint"].as_str(),
+            Some("gemm_f32_bf16_tile_16x32x16")
         );
         assert_eq!(manifest["schedule"][0]["op"].as_str(), Some("tile-gemm"));
         assert_eq!(manifest["schedule"][0]["n"].as_u64(), Some(32));
 
         fs::remove_dir_all(&root)
             .expect("test-generated kernel artifact directory should clean up");
+    }
+
+    #[test]
+    fn artifact_store_writes_standalone_crate_for_generated_kernel() {
+        let root = runtime::default_artifact_dir()
+            .join("test-generated")
+            .join(format!(
+                "{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("system clock should be after unix epoch")
+                    .as_nanos()
+            ));
+        let store = KernelArtifactStore::new(&root);
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
+
+        let emitted = store
+            .emit_standalone_crate(&candidate, &GemmRustCudaGenerator)
+            .expect("artifact store should write standalone generated kernel crate");
+
+        assert_eq!(emitted.artifact_key, candidate.artifact_key());
+        assert_eq!(emitted.package_name, "nn_rust_kernel_172b6682003af067");
+        assert_eq!(emitted.symbol, "gemm_f32_bf16_tile_16x32x16");
+        assert!(emitted.paths.crate_dir.starts_with(store.root()));
+        assert!(emitted.paths.cargo_toml_path.starts_with(store.root()));
+        assert!(emitted.paths.source_path.starts_with(store.root()));
+
+        let cargo_toml = fs::read_to_string(&emitted.paths.cargo_toml_path)
+            .expect("standalone Cargo.toml should be readable");
+        assert!(cargo_toml.contains("name = \"nn_rust_kernel_172b6682003af067\""));
+        assert!(cargo_toml.contains("cuda-device"));
+        assert!(cargo_toml.contains("cuda-host"));
+
+        let source = fs::read_to_string(&emitted.paths.source_path)
+            .expect("standalone main.rs should be readable");
+        assert!(source.contains("pub fn gemm_f32_bf16_tile_16x32x16("));
+        assert!(source.contains("pub struct Bf16(u16);"));
+        assert!(source.contains("fn main() {}"));
+
+        fs::remove_dir_all(&root).expect("test-generated kernel crate directory should clean up");
     }
 
     #[test]

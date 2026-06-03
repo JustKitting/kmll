@@ -355,6 +355,9 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
     let mut max_depth = 1;
     let mut allow_generated = false;
     let mut emit = false;
+    let mut emit_crate = false;
+    let mut compile = false;
+    let mut compile_arch = None;
     let mut artifact_root = None;
     while index < args.len() {
         match args[index].as_str() {
@@ -364,6 +367,15 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
             }
             "--emit" => {
                 emit = true;
+                index += 1;
+            }
+            "--emit-crate" => {
+                emit_crate = true;
+                index += 1;
+            }
+            "--compile" => {
+                compile = true;
+                emit_crate = true;
                 index += 1;
             }
             "--beam-width" => {
@@ -386,9 +398,13 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
                 let value = parse_required_flag_value(args, &mut index, "--artifact-root")?;
                 artifact_root = Some(PathBuf::from(value));
             }
+            "--compile-arch" => {
+                let value = parse_required_flag_value(args, &mut index, "--compile-arch")?;
+                compile_arch = Some(value.to_string());
+            }
             other => {
                 return Err(invalid_input(format!(
-                    "kernel-autotune-gemm unknown argument {other:?}; usage: kernel-autotune-gemm M N K [--allow-generated] [--emit] [--beam-width N] [--max-depth N] [--artifact-root PATH]"
+                    "kernel-autotune-gemm unknown argument {other:?}; usage: kernel-autotune-gemm M N K [--allow-generated] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--artifact-root PATH]"
                 )));
             }
         }
@@ -424,22 +440,85 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         print_kernel_candidate(rank, candidate);
     }
 
-    if emit {
+    if emit || emit_crate {
         let store = artifact_root
             .map(KernelArtifactStore::new)
             .unwrap_or_else(KernelArtifactStore::managed);
-        let emitted = store.emit(best, &GemmRustCudaGenerator)?;
-        println!(
-            "emitted rank=0 artifact_key={} symbol={} source_path={} manifest_path={} source_bytes={} manifest_bytes={}",
-            emitted.artifact_key.hex(),
-            emitted.symbol,
-            emitted.paths.source_path.display(),
-            emitted.paths.manifest_path.display(),
-            emitted.source_bytes,
-            emitted.manifest_bytes
-        );
+        if emit {
+            let emitted = store.emit_metadata(best)?;
+            println!(
+                "emitted_metadata rank=0 artifact_key={} manifest_path={} manifest_bytes={}",
+                emitted.artifact_key.hex(),
+                emitted.paths.manifest_path.display(),
+                emitted.manifest_bytes
+            );
+        }
+        if emit_crate {
+            let emitted_crate = store.emit_standalone_crate(best, &GemmRustCudaGenerator)?;
+            println!(
+                "emitted_crate rank=0 artifact_key={} package={} symbol={} crate_dir={} cargo_toml={} source_path={} cargo_toml_bytes={} source_bytes={}",
+                emitted_crate.artifact_key.hex(),
+                emitted_crate.package_name,
+                emitted_crate.symbol,
+                emitted_crate.paths.crate_dir.display(),
+                emitted_crate.paths.cargo_toml_path.display(),
+                emitted_crate.paths.source_path.display(),
+                emitted_crate.cargo_toml_bytes,
+                emitted_crate.source_bytes
+            );
+            if compile {
+                let output_dir = store.paths_for(best).directory;
+                compile_standalone_kernel_crate(
+                    &emitted_crate.paths.crate_dir,
+                    &output_dir,
+                    compile_arch.as_deref(),
+                )?;
+            }
+        }
     }
 
+    Ok(())
+}
+
+fn compile_standalone_kernel_crate(
+    crate_dir: &Path,
+    output_dir: &Path,
+    arch: Option<&str>,
+) -> AppResult<()> {
+    fs::create_dir_all(output_dir)?;
+    let crate_dir = crate_dir.canonicalize()?;
+    let output_dir = output_dir.canonicalize()?;
+    let mut command = process::Command::new("cargo");
+    command
+        .arg("oxide")
+        .arg("build")
+        .current_dir(&crate_dir)
+        .env("CUDA_OXIDE_PTX_DIR", &output_dir);
+    if let Some(arch) = arch {
+        command.arg("--arch").arg(arch);
+    }
+    let output = command.output().map_err(|error| {
+        invalid_input(format!(
+            "failed to run cargo oxide build in {}: {error}",
+            crate_dir.display()
+        ))
+    })?;
+    if !output.status.success() {
+        return Err(invalid_input(format!(
+            "cargo oxide build failed in {} with status {}\nstdout:\n{}\nstderr:\n{}",
+            crate_dir.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    println!(
+        "compiled_crate crate_dir={} output_dir={} stdout_bytes={} stderr_bytes={}",
+        crate_dir.display(),
+        output_dir.display(),
+        output.stdout.len(),
+        output.stderr.len()
+    );
     Ok(())
 }
 
