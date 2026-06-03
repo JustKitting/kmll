@@ -12,11 +12,16 @@ use crate::{
     runtime,
 };
 
+mod coverage;
 mod fixtures;
 mod ir;
 mod sass;
 
 pub use self::{
+    coverage::{
+        SassCoverageFileReport, SassCoverageOptions, SassCoverageReport, SassOpcodeCount,
+        SassUnsupportedInstruction, run_sass_coverage_scan,
+    },
     fixtures::{SimpleKernelFixture, SimpleKernelFixtureKind, simple_kernel_fixtures},
     ir::{
         KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, SassMappingConfidence,

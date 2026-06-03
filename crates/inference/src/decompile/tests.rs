@@ -1,4 +1,5 @@
 use super::*;
+use std::{env, fs, process, time::SystemTime};
 
 const SIMPLE_SASS: &str = r#"
         .target sm_120
@@ -43,6 +44,17 @@ matvec_bf16_rows17:
 $helper:
         /*00e0*/                   SHFL.DOWN PT, R5, R22, 0x10, 0x1f ;           /* 0x0 */
         /*00f0*/                   RET.REL.NODEC R4 `(matvec_bf16_rows17) ;       /* 0x0 */
+"#;
+
+const UNSUPPORTED_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.unsupported_fixture,"ax",@progbits
+        .global unsupported_fixture
+unsupported_fixture:
+.text.unsupported_fixture:
+        /*0000*/                   MYSTERY R0, R1 ;                             /* 0x0 */
+        /*0010*/                   EXIT ;                                        /* 0x0 */
 "#;
 
 #[test]
@@ -181,4 +193,64 @@ fn side_by_side_dump_contains_source_sass_and_ir_sections() {
     assert!(dump.contains("## sass"));
     assert!(dump.contains("## project-ir"));
     assert!(dump.contains("IntegerAdd"));
+}
+
+#[test]
+fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
+    let root = unique_test_dir("coverage");
+    let input = root.join("input");
+    let nested = input.join("nested");
+    let output = root.join("output");
+    fs::create_dir_all(&nested).expect("test input dir should be created");
+    fs::write(input.join("simple.nvdisasm.sass"), SIMPLE_SASS)
+        .expect("simple test SASS should be written");
+    fs::write(nested.join("unsupported.nvdisasm.sass"), UNSUPPORTED_SASS)
+        .expect("unsupported test SASS should be written");
+
+    let report = run_sass_coverage_scan(&SassCoverageOptions {
+        root: input,
+        output_dir: output,
+    })
+    .expect("coverage scan should complete");
+
+    assert_eq!(report.files.len(), 2);
+    assert_eq!(report.parsed_file_count, 2);
+    assert_eq!(report.parse_error_count, 0);
+    assert_eq!(report.unsupported_instruction_count, 1);
+    assert!(
+        report
+            .opcode_counts
+            .iter()
+            .any(|count| count.opcode == "MYSTERY" && count.count == 1)
+    );
+    assert!(
+        report
+            .unsupported_instructions
+            .iter()
+            .any(|instruction| instruction.opcode == "MYSTERY")
+    );
+    assert!(report.summary_path.exists());
+    assert!(report.files_path.exists());
+    assert!(report.opcode_frequency_path.exists());
+    assert!(report.opcode_signature_frequency_path.exists());
+    assert!(report.unsupported_instructions_path.exists());
+    assert!(
+        report
+            .files
+            .iter()
+            .filter_map(|file| file.ir_path.as_ref())
+            .all(|path| path.exists())
+    );
+}
+
+fn unique_test_dir(name: &str) -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("system time should be after unix epoch")
+        .as_nanos();
+    env::temp_dir().join(format!(
+        "nn_rust_decompile_{name}_{}_{}",
+        process::id(),
+        nanos
+    ))
 }

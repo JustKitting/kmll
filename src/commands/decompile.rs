@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use nn_rust_inference::{
     decompile::{
-        DecompileFixtureOptions, SassFileDecompileOptions, SimpleKernelFixtureKind,
-        run_decompile_fixtures, run_sass_file_decompile,
+        DecompileFixtureOptions, SassCoverageOptions, SassFileDecompileOptions,
+        SimpleKernelFixtureKind, run_decompile_fixtures, run_sass_coverage_scan,
+        run_sass_file_decompile,
     },
     runtime,
 };
@@ -14,6 +15,59 @@ const DECOMPILE_FIXTURES_USAGE: &str =
     "kernel-decompile-fixtures [--fixture NAME|all] [--artifact-root PATH] [--compile-arch sm_120]";
 const DECOMPILE_SASS_USAGE: &str =
     "kernel-decompile-sass SASS_PATH [--source PATH] [--out-dir PATH]";
+const DECOMPILE_COVERAGE_USAGE: &str =
+    "kernel-decompile-coverage [ROOT] [--root PATH] [--out-dir PATH]";
+
+pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let mut options = SassCoverageOptions::default_artifact_scan();
+    let mut saw_positional_root = false;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--root" => {
+                options.root =
+                    PathBuf::from(parse_required_flag_value(args, &mut index, "--root")?);
+            }
+            "--out-dir" => {
+                options.output_dir =
+                    PathBuf::from(parse_required_flag_value(args, &mut index, "--out-dir")?);
+            }
+            flag if flag.starts_with("--") => {
+                return Err(invalid_input(format!(
+                    "kernel-decompile-coverage unknown argument {flag:?}; usage: {DECOMPILE_COVERAGE_USAGE}"
+                )));
+            }
+            root if !saw_positional_root => {
+                options.root = PathBuf::from(root);
+                saw_positional_root = true;
+                index += 1;
+            }
+            extra => {
+                return Err(invalid_input(format!(
+                    "kernel-decompile-coverage unexpected argument {extra:?}; usage: {DECOMPILE_COVERAGE_USAGE}"
+                )));
+            }
+        }
+    }
+
+    let report = run_sass_coverage_scan(&options)?;
+    println!(
+        "kernel_decompile_coverage root={} files_seen={} files_parsed={} parse_errors={} parsed_instructions={} unsupported_instructions={} summary_path={} files_path={} opcode_frequency_path={} opcode_signature_frequency_path={} unsupported_instructions_path={}",
+        report.root.display(),
+        report.files.len(),
+        report.parsed_file_count,
+        report.parse_error_count,
+        report.parsed_instruction_count,
+        report.unsupported_instruction_count,
+        report.summary_path.display(),
+        report.files_path.display(),
+        report.opcode_frequency_path.display(),
+        report.opcode_signature_frequency_path.display(),
+        report.unsupported_instructions_path.display(),
+    );
+    Ok(())
+}
 
 pub(crate) fn run_kernel_decompile_sass(args: &[String]) -> AppResult<()> {
     let mut index = 0;

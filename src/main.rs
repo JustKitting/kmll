@@ -97,6 +97,9 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         "kernel-decompile-fixtures" | "decompile-fixtures" => {
             commands::decompile::run_kernel_decompile_fixtures(&args)
         }
+        "kernel-decompile-coverage" | "decompile-coverage" => {
+            commands::decompile::run_kernel_decompile_coverage(&args)
+        }
         "kernel-decompile-sass" | "decompile-sass" => {
             commands::decompile::run_kernel_decompile_sass(&args)
         }
@@ -246,7 +249,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         "ministral-chat-compare" => run_ministral_chat_compare(&args),
         other => Err(invalid_input(format!(
             "unknown command {other:?}; expected `smoke`, `smoke-workers`, `gemm-stress`, `kernel-autotune-gemm`, `kernel-autotune-matvec`, `ministral-gemm-stress`, `decode-matvec-bench`, `logit-stress`, `attention-stress`, \
-             `kernel-matvec-instructions`, `kernel-decompile-fixtures`, `kernel-decompile-sass`, \
+             `kernel-matvec-instructions`, `kernel-decompile-fixtures`, `kernel-decompile-coverage`, `kernel-decompile-sass`, \
              `ministral-bf16-prefill-bench`, `ministral-bf16-decode-bench`, \
              `ministral-exported-decode-bench`, `ministral-exported-prefill-compare`, \
              `ministral-bf16-prefill-compare`, \
