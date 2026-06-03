@@ -15,6 +15,7 @@ use crate::autotune::{
 
 mod analysis;
 mod coverage;
+mod coverage_compare;
 mod fixtures;
 mod ir;
 mod known_opcodes;
@@ -37,6 +38,10 @@ pub use self::{
         SassCoverageSemanticPattern, SassCoverageSsaValue, SassCoverageValueOp,
         SassOpcodeCatalogEntry, SassOpcodeCount, SassOpcodeProbeTarget, SassUnsupportedInstruction,
         run_sass_coverage_scan,
+    },
+    coverage_compare::{
+        SassCoverageComparisonOptions, SassCoverageComparisonReport, SassCoverageOpcodeDelta,
+        SassCoverageProbeTargetDelta, run_sass_coverage_comparison,
     },
     fixtures::{
         SimpleKernelFixture, SimpleKernelFixtureKind, all_simple_kernel_fixture_kinds,

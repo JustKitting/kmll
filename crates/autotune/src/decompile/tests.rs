@@ -1089,6 +1089,53 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     );
 }
 
+#[test]
+fn coverage_comparison_reports_resolved_probe_targets() {
+    let root = unique_test_dir("coverage_compare");
+    let baseline = root.join("baseline");
+    let candidate = root.join("candidate");
+    let output = root.join("output");
+    fs::create_dir_all(&baseline).expect("baseline dir should be created");
+    fs::create_dir_all(&candidate).expect("candidate dir should be created");
+    fs::write(baseline.join("unsupported.sass"), UNSUPPORTED_SASS)
+        .expect("baseline SASS should be written");
+    fs::write(candidate.join("simple.sass"), SIMPLE_SASS)
+        .expect("candidate SASS should be written");
+
+    let report = run_sass_coverage_comparison(&SassCoverageComparisonOptions {
+        baseline_root: baseline,
+        candidate_root: candidate,
+        output_dir: output,
+    })
+    .expect("coverage comparison should complete");
+
+    assert!(report.summary_path.exists());
+    assert!(report.opcode_delta_path.exists());
+    assert!(report.resolved_probe_targets_path.exists());
+    assert!(report.new_probe_targets_path.exists());
+    assert!(report.newly_observed_opcode_count > 0);
+    assert!(
+        report
+            .opcode_deltas
+            .iter()
+            .any(|delta| delta.opcode == "IADD" && delta.change == "newly-observed")
+    );
+    let resolved_iadd = report
+        .resolved_probe_targets
+        .iter()
+        .find(|target| target.opcode == "IADD")
+        .expect("candidate IADD should resolve a baseline probe target");
+    assert_eq!(resolved_iadd.baseline_coverage, "known-unobserved-mapped");
+    assert_eq!(resolved_iadd.candidate_coverage, "known-observed-mapped");
+    assert!(resolved_iadd.candidate_instruction_count > 0);
+    let resolved_tsv = fs::read_to_string(&report.resolved_probe_targets_path)
+        .expect("resolved probe target TSV should read");
+    assert!(resolved_tsv.starts_with(
+        "opcode\tbaseline_coverage\tcandidate_coverage\tcandidate_instruction_count\tclasses\tkinds\tarchitectures"
+    ));
+    assert!(resolved_tsv.contains("IADD"));
+}
+
 fn unique_test_dir(name: &str) -> std::path::PathBuf {
     let nanos = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)

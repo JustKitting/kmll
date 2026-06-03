@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use nn_rust_autotune::decompile::{
-    DecompileFixtureCoverageOptions, DecompileFixtureOptions, SassCoverageOptions,
-    SassFileDecompileOptions, SimpleKernelFixtureKind, all_simple_kernel_fixture_kinds,
-    run_decompile_fixture_coverage, run_decompile_fixtures, run_sass_coverage_scan,
-    run_sass_file_decompile,
+    DecompileFixtureCoverageOptions, DecompileFixtureOptions, SassCoverageComparisonOptions,
+    SassCoverageOptions, SassFileDecompileOptions, SimpleKernelFixtureKind,
+    all_simple_kernel_fixture_kinds, run_decompile_fixture_coverage, run_decompile_fixtures,
+    run_sass_coverage_comparison, run_sass_coverage_scan, run_sass_file_decompile,
 };
 use nn_rust_inference::runtime;
 
@@ -17,6 +17,8 @@ const DECOMPILE_SASS_USAGE: &str =
     "kernel-decompile-sass SASS_PATH [--source PATH] [--out-dir PATH]";
 const DECOMPILE_COVERAGE_USAGE: &str =
     "kernel-decompile-coverage [ROOT] [--root PATH] [--out-dir PATH]";
+const DECOMPILE_COVERAGE_COMPARE_USAGE: &str =
+    "kernel-decompile-coverage-compare BASELINE_ROOT CANDIDATE_ROOT [--out-dir PATH]";
 
 pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
     let mut index = 0;
@@ -101,6 +103,77 @@ pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
         report.semantic_patterns_path.display(),
         report.semantic_pattern_frequency_path.display(),
         report.unsupported_instructions_path.display(),
+    );
+    Ok(())
+}
+
+pub(crate) fn run_kernel_decompile_coverage_compare(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let mut baseline_root = None::<PathBuf>;
+    let mut candidate_root = None::<PathBuf>;
+    let mut output_dir = runtime::default_artifact_dir().join("decompile-coverage-compare");
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--out-dir" => {
+                output_dir =
+                    PathBuf::from(parse_required_flag_value(args, &mut index, "--out-dir")?);
+            }
+            flag if flag.starts_with("--") => {
+                return Err(invalid_input(format!(
+                    "kernel-decompile-coverage-compare unknown argument {flag:?}; usage: {DECOMPILE_COVERAGE_COMPARE_USAGE}"
+                )));
+            }
+            value if baseline_root.is_none() => {
+                baseline_root = Some(PathBuf::from(value));
+                index += 1;
+            }
+            value if candidate_root.is_none() => {
+                candidate_root = Some(PathBuf::from(value));
+                index += 1;
+            }
+            extra => {
+                return Err(invalid_input(format!(
+                    "kernel-decompile-coverage-compare unexpected argument {extra:?}; usage: {DECOMPILE_COVERAGE_COMPARE_USAGE}"
+                )));
+            }
+        }
+    }
+
+    let baseline_root = baseline_root.ok_or_else(|| {
+        invalid_input(format!(
+            "kernel-decompile-coverage-compare requires BASELINE_ROOT; usage: {DECOMPILE_COVERAGE_COMPARE_USAGE}"
+        ))
+    })?;
+    let candidate_root = candidate_root.ok_or_else(|| {
+        invalid_input(format!(
+            "kernel-decompile-coverage-compare requires CANDIDATE_ROOT; usage: {DECOMPILE_COVERAGE_COMPARE_USAGE}"
+        ))
+    })?;
+
+    let report = run_sass_coverage_comparison(&SassCoverageComparisonOptions {
+        baseline_root,
+        candidate_root,
+        output_dir,
+    })?;
+    println!(
+        "kernel_decompile_coverage_compare baseline_root={} candidate_root={} baseline_files_seen={} candidate_files_seen={} baseline_probe_targets={} candidate_probe_targets={} newly_observed_opcodes={} no_longer_observed_opcodes={} coverage_changed_opcodes={} count_changed_opcodes={} resolved_probe_targets={} new_probe_targets={} summary_path={} opcode_delta_path={} resolved_probe_targets_path={} new_probe_targets_path={}",
+        report.baseline_report.root.display(),
+        report.candidate_report.root.display(),
+        report.baseline_report.files.len(),
+        report.candidate_report.files.len(),
+        report.baseline_report.opcode_probe_target_count,
+        report.candidate_report.opcode_probe_target_count,
+        report.newly_observed_opcode_count,
+        report.no_longer_observed_opcode_count,
+        report.coverage_changed_opcode_count,
+        report.count_changed_opcode_count,
+        report.resolved_probe_targets.len(),
+        report.new_probe_targets.len(),
+        report.summary_path.display(),
+        report.opcode_delta_path.display(),
+        report.resolved_probe_targets_path.display(),
+        report.new_probe_targets_path.display(),
     );
     Ok(())
 }
