@@ -1,3 +1,5 @@
+use super::{codegen::*, hashing::*, metadata::*, *};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelArtifactStore {
     root: PathBuf,
@@ -210,7 +212,8 @@ impl KernelArtifactStore {
         score_namespace: &str,
         candidate: &KernelCandidateMetadata,
     ) -> Result<Option<EmittedKernelOptimizationScore>, KernelGenerationError> {
-        let Some(record) = KernelOptimizationScoreRecord::from_candidate(score_namespace, candidate)
+        let Some(record) =
+            KernelOptimizationScoreRecord::from_candidate(score_namespace, candidate)
         else {
             return Ok(None);
         };

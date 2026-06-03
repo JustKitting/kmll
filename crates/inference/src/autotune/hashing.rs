@@ -1,4 +1,6 @@
-fn sanitize_path_component(value: &str) -> String {
+use super::{core::*, *};
+
+pub(super) fn sanitize_path_component(value: &str) -> String {
     let sanitized = value
         .chars()
         .map(|ch| {
@@ -16,7 +18,7 @@ fn sanitize_path_component(value: &str) -> String {
     }
 }
 
-fn sanitize_identifier(value: &str) -> String {
+pub(super) fn sanitize_identifier(value: &str) -> String {
     let mut sanitized = value
         .chars()
         .map(|ch| {
@@ -40,7 +42,7 @@ fn sanitize_identifier(value: &str) -> String {
     sanitized
 }
 
-fn metadata_key(
+pub(super) fn metadata_key(
     family: &str,
     axes: &[KernelAxis],
     schedule: &KernelSchedule,
@@ -75,7 +77,7 @@ fn metadata_key(
     KernelMetadataKey(state)
 }
 
-fn search_report_key(report: &OptimizationSearchReport) -> KernelMetadataKey {
+pub(super) fn search_report_key(report: &OptimizationSearchReport) -> KernelMetadataKey {
     let mut state = FNV_OFFSET;
     state = hash_str(state, "optimization-search-report");
     state = hash_str(state, &report.family);
@@ -96,7 +98,7 @@ fn search_report_key(report: &OptimizationSearchReport) -> KernelMetadataKey {
     KernelMetadataKey(state)
 }
 
-fn auto_search_report_key(report: &AutoOptimizationSearchReport) -> KernelMetadataKey {
+pub(super) fn auto_search_report_key(report: &AutoOptimizationSearchReport) -> KernelMetadataKey {
     let mut state = FNV_OFFSET;
     state = hash_str(state, "auto-optimization-search-report");
     state = hash_str(state, &report.family);
@@ -142,7 +144,7 @@ fn auto_search_report_key(report: &AutoOptimizationSearchReport) -> KernelMetada
     KernelMetadataKey(state)
 }
 
-fn hash_optional_profiling_action_space_set(
+pub(super) fn hash_optional_profiling_action_space_set(
     state: u64,
     action_space: Option<&ProfilingActionSpaceSet>,
 ) -> u64 {
@@ -153,7 +155,10 @@ fn hash_optional_profiling_action_space_set(
     }
 }
 
-fn hash_profiling_action_space_set(mut state: u64, action_space: &ProfilingActionSpaceSet) -> u64 {
+pub(super) fn hash_profiling_action_space_set(
+    mut state: u64,
+    action_space: &ProfilingActionSpaceSet,
+) -> u64 {
     state = hash_str(state, "profiling-action-space-set");
     state = hash_u64(state, action_space.spaces.len() as u64);
     for space in &action_space.spaces {
@@ -162,7 +167,10 @@ fn hash_profiling_action_space_set(mut state: u64, action_space: &ProfilingActio
     state
 }
 
-fn hash_profiling_action_space(mut state: u64, action_space: &ProfilingActionSpace) -> u64 {
+pub(super) fn hash_profiling_action_space(
+    mut state: u64,
+    action_space: &ProfilingActionSpace,
+) -> u64 {
     match action_space {
         ProfilingActionSpace::Split { variants } => {
             state = hash_str(state, "split");
@@ -244,7 +252,7 @@ fn hash_profiling_action_space(mut state: u64, action_space: &ProfilingActionSpa
     }
 }
 
-fn hash_optional_score(mut state: u64, score: Option<SearchScore>) -> u64 {
+pub(super) fn hash_optional_score(mut state: u64, score: Option<SearchScore>) -> u64 {
     if let Some(score) = score {
         state = hash_str(state, "score");
         state = hash_str(state, score.source.label());
@@ -254,7 +262,7 @@ fn hash_optional_score(mut state: u64, score: Option<SearchScore>) -> u64 {
     }
 }
 
-fn hash_action_space_set(mut state: u64, action_space: &KernelActionSpaceSet) -> u64 {
+pub(super) fn hash_action_space_set(mut state: u64, action_space: &KernelActionSpaceSet) -> u64 {
     state = hash_str(state, "action-space-set");
     state = hash_u64(state, action_space.spaces.len() as u64);
     for space in &action_space.spaces {
@@ -263,7 +271,7 @@ fn hash_action_space_set(mut state: u64, action_space: &KernelActionSpaceSet) ->
     state
 }
 
-fn hash_action_space(mut state: u64, action_space: &KernelActionSpace) -> u64 {
+pub(super) fn hash_action_space(mut state: u64, action_space: &KernelActionSpace) -> u64 {
     match action_space {
         KernelActionSpace::Split { variants } => {
             state = hash_str(state, "split");
@@ -345,7 +353,10 @@ fn hash_action_space(mut state: u64, action_space: &KernelActionSpace) -> u64 {
     }
 }
 
-fn hash_optimization_candidate(mut state: u64, candidate: &OptimizationCandidateSpec) -> u64 {
+pub(super) fn hash_optimization_candidate(
+    mut state: u64,
+    candidate: &OptimizationCandidateSpec,
+) -> u64 {
     state = hash_str(state, &candidate.family);
     state = hash_str(state, &candidate.artifact_key);
     state = hash_str(state, &candidate.generator);
@@ -418,7 +429,7 @@ fn hash_optimization_candidate(mut state: u64, candidate: &OptimizationCandidate
     state
 }
 
-fn hash_operation_spec(mut state: u64, operation: &TypedOperationSpec) -> u64 {
+pub(super) fn hash_operation_spec(mut state: u64, operation: &TypedOperationSpec) -> u64 {
     state = hash_str(state, &operation.name);
     state = hash_str(state, operation.kind.label());
     state = hash_str(state, operation.route.label());
@@ -440,7 +451,7 @@ fn hash_operation_spec(mut state: u64, operation: &TypedOperationSpec) -> u64 {
     state
 }
 
-fn hash_tensor_specs(mut state: u64, label: &str, specs: &[TensorTypeSpec]) -> u64 {
+pub(super) fn hash_tensor_specs(mut state: u64, label: &str, specs: &[TensorTypeSpec]) -> u64 {
     state = hash_str(state, label);
     state = hash_u64(state, specs.len() as u64);
     for spec in specs {
@@ -449,7 +460,7 @@ fn hash_tensor_specs(mut state: u64, label: &str, specs: &[TensorTypeSpec]) -> u
     state
 }
 
-fn hash_tensor_spec(mut state: u64, spec: &TensorTypeSpec) -> u64 {
+pub(super) fn hash_tensor_spec(mut state: u64, spec: &TensorTypeSpec) -> u64 {
     state = hash_str(state, spec.dtype.label());
     state = hash_str(state, spec.accumulator.label());
     state = hash_u64(state, spec.shape.len() as u64);
@@ -464,7 +475,7 @@ fn hash_tensor_spec(mut state: u64, spec: &TensorTypeSpec) -> u64 {
     state
 }
 
-fn hash_transform(mut state: u64, transform: &ScheduleTransform) -> u64 {
+pub(super) fn hash_transform(mut state: u64, transform: &ScheduleTransform) -> u64 {
     match transform {
         ScheduleTransform::Split { axis, factor } => {
             state = hash_str(state, "split");
@@ -512,15 +523,15 @@ fn hash_transform(mut state: u64, transform: &ScheduleTransform) -> u64 {
     }
 }
 
-fn hash_str(state: u64, value: &str) -> u64 {
+pub(super) fn hash_str(state: u64, value: &str) -> u64 {
     hash_bytes(state, value.as_bytes())
 }
 
-fn hash_u64(state: u64, value: u64) -> u64 {
+pub(super) fn hash_u64(state: u64, value: u64) -> u64 {
     hash_bytes(state, &value.to_le_bytes())
 }
 
-fn hash_bytes(mut state: u64, value: &[u8]) -> u64 {
+pub(super) fn hash_bytes(mut state: u64, value: &[u8]) -> u64 {
     for byte in value {
         state ^= u64::from(*byte);
         state = state.wrapping_mul(FNV_PRIME);

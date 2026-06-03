@@ -1,4 +1,6 @@
-fn render_bf16_matvec_source(symbol: &str, plan: MatvecSchedulePlan) -> String {
+use super::*;
+
+pub(super) fn render_bf16_matvec_source(symbol: &str, plan: MatvecSchedulePlan) -> String {
     let plan = plan.normalized();
     let rows_per_block = plan.rows.rows_per_block().max(1);
     let rows_per_upcast = plan.row_upcast.factor().max(1);
@@ -91,7 +93,7 @@ fn render_bf16_matvec_source(symbol: &str, plan: MatvecSchedulePlan) -> String {
     source
 }
 
-fn render_matvec_upcast_row_body(
+pub(super) fn render_matvec_upcast_row_body(
     source: &mut String,
     row_offset: u32,
     reduce_unroll: u32,
@@ -165,7 +167,7 @@ fn render_matvec_upcast_row_body(
     writeln!(source).expect("write to string");
 }
 
-fn warp_subgroup_reduce_offsets(lanes_per_row: u32) -> Vec<u32> {
+pub(super) fn warp_subgroup_reduce_offsets(lanes_per_row: u32) -> Vec<u32> {
     let mut offset = lanes_per_row / 2;
     let mut offsets = Vec::new();
     while offset > 0 {
@@ -175,7 +177,7 @@ fn warp_subgroup_reduce_offsets(lanes_per_row: u32) -> Vec<u32> {
     offsets
 }
 
-fn render_gemm_a_load_body(
+pub(super) fn render_gemm_a_load_body(
     source: &mut String,
     load_name: &str,
     suffix: u32,
@@ -237,7 +239,7 @@ fn render_gemm_a_load_body(
     writeln!(source, "{indent}}}").expect("write to string");
 }
 
-fn render_gemm_b_load_body(
+pub(super) fn render_gemm_b_load_body(
     source: &mut String,
     load_name: &str,
     suffix: u32,
@@ -299,7 +301,7 @@ fn render_gemm_b_load_body(
     writeln!(source, "{indent}}}").expect("write to string");
 }
 
-fn render_gemm_a_load_unrolled(
+pub(super) fn render_gemm_a_load_unrolled(
     source: &mut String,
     a_load_unroll: u32,
     m_contiguous_a_load: bool,
@@ -343,7 +345,7 @@ fn render_gemm_a_load_unrolled(
     .expect("write to string");
 }
 
-fn render_gemm_b_load_unrolled(
+pub(super) fn render_gemm_b_load_unrolled(
     source: &mut String,
     b_load_unroll: u32,
     k_contiguous_b_load: bool,
@@ -387,7 +389,7 @@ fn render_gemm_b_load_unrolled(
     .expect("write to string");
 }
 
-fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
+pub(super) fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
     let plan = plan.normalized();
     let tile = plan.tile;
     let reduce_unroll = plan.reduce_unroll.max(1);
@@ -745,11 +747,11 @@ fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
     source
 }
 
-fn standalone_package_name(candidate: &KernelCandidateMetadata) -> String {
+pub(super) fn standalone_package_name(candidate: &KernelCandidateMetadata) -> String {
     format!("nn_rust_kernel_{}", candidate.artifact_key().hex())
 }
 
-fn standalone_cargo_toml(package_name: &str) -> String {
+pub(super) fn standalone_cargo_toml(package_name: &str) -> String {
     let mut manifest = String::new();
     let cuda_oxide_root = standalone_cuda_oxide_checkout_root();
     writeln!(manifest, "[package]").expect("write to string");
@@ -765,7 +767,11 @@ fn standalone_cargo_toml(package_name: &str) -> String {
     manifest
 }
 
-fn write_cuda_oxide_dependency(manifest: &mut String, crate_name: &str, root: Option<&Path>) {
+pub(super) fn write_cuda_oxide_dependency(
+    manifest: &mut String,
+    crate_name: &str,
+    root: Option<&Path>,
+) {
     if let Some(root) = root {
         let path = root.join("crates").join(crate_name);
         writeln!(
@@ -783,7 +789,7 @@ fn write_cuda_oxide_dependency(manifest: &mut String, crate_name: &str, root: Op
     }
 }
 
-fn standalone_cuda_oxide_checkout_root() -> Option<PathBuf> {
+pub(super) fn standalone_cuda_oxide_checkout_root() -> Option<PathBuf> {
     let configured = env::var_os("NN_RUST_CUDA_OXIDE_ROOT")
         .map(PathBuf::from)
         .filter(|path| cuda_oxide_checkout_has_kernel_crates(path));
@@ -822,7 +828,7 @@ fn standalone_cuda_oxide_checkout_root() -> Option<PathBuf> {
     candidates.pop()
 }
 
-fn cuda_oxide_checkout_has_kernel_crates(path: &Path) -> bool {
+pub(super) fn cuda_oxide_checkout_has_kernel_crates(path: &Path) -> bool {
     path.join("crates")
         .join("cuda-device")
         .join("Cargo.toml")
@@ -834,11 +840,11 @@ fn cuda_oxide_checkout_has_kernel_crates(path: &Path) -> bool {
             .is_file()
 }
 
-fn toml_string(value: &str) -> String {
+pub(super) fn toml_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn standalone_main_source(kernel_source: &str) -> String {
+pub(super) fn standalone_main_source(kernel_source: &str) -> String {
     let mut source = String::new();
     source.push_str(kernel_source);
     if !source.ends_with('\n') {

@@ -1,3 +1,5 @@
+use super::*;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct InferenceKernelAutoOptimize {
     pub operation: TypedOperationSpec,
@@ -22,12 +24,12 @@ impl InferenceKernelAutoOptimize {
     }
 
     pub fn render_best_source(&self) -> Result<GeneratedKernelSource, KernelGenerationError> {
-        let candidate =
-            self.best_candidate()
-                .ok_or_else(|| KernelGenerationError::NoOptimizationCandidate {
-                    name: self.operation.name.clone(),
-                    kind: self.operation.kind,
-                })?;
+        let candidate = self.best_candidate().ok_or_else(|| {
+            KernelGenerationError::NoOptimizationCandidate {
+                name: self.operation.name.clone(),
+                kind: self.operation.kind,
+            }
+        })?;
         InferenceKernelRustCudaGenerator.source_for(candidate)
     }
 }
@@ -177,8 +179,12 @@ pub fn generate_inference_kernel_source_with_selection_cache(
     config: AutoOptimizeConfig,
     score_namespace: &str,
 ) -> Result<CachedGeneratedInferenceKernelSource, KernelGenerationError> {
-    let optimization =
-        auto_optimize_inference_kernel_with_selection_cache(store, operation, config, score_namespace)?;
+    let optimization = auto_optimize_inference_kernel_with_selection_cache(
+        store,
+        operation,
+        config,
+        score_namespace,
+    )?;
     let candidate = optimization.best_candidate().cloned().ok_or_else(|| {
         KernelGenerationError::NoOptimizationCandidate {
             name: operation.name.clone(),
@@ -216,7 +222,10 @@ impl InferenceKernelOptimizationProblem {
             OperationKind::Gemm => Self::gemm_from_operation(operation),
             kind => Err(unsupported_operation(
                 operation,
-                format!("operation kind {} has no inference autotune problem", kind.label()),
+                format!(
+                    "operation kind {} has no inference autotune problem",
+                    kind.label()
+                ),
             )),
         }
     }
@@ -286,12 +295,10 @@ impl InferenceKernelOptimizationProblem {
         let c = single_tensor(operation.outputs.as_slice()).ok_or_else(|| {
             unsupported_operation(operation, "GEMM requires exactly one output tensor")
         })?;
-        let [m, k] = tensor_shape_2(a).ok_or_else(|| {
-            unsupported_operation(operation, "GEMM lhs must have shape [m, k]")
-        })?;
-        let [b_k, n] = tensor_shape_2(b).ok_or_else(|| {
-            unsupported_operation(operation, "GEMM rhs must have shape [k, n]")
-        })?;
+        let [m, k] = tensor_shape_2(a)
+            .ok_or_else(|| unsupported_operation(operation, "GEMM lhs must have shape [m, k]"))?;
+        let [b_k, n] = tensor_shape_2(b)
+            .ok_or_else(|| unsupported_operation(operation, "GEMM rhs must have shape [k, n]"))?;
         let [c_m, c_n] = tensor_shape_2(c).ok_or_else(|| {
             unsupported_operation(operation, "GEMM output must have shape [m, n]")
         })?;
@@ -371,12 +378,8 @@ impl KernelActionSearchProblem for InferenceKernelOptimizationProblem {
         action: &KernelScheduleAction,
     ) -> Option<KernelCandidateMetadata> {
         match self {
-            Self::MatvecBf16RowMajor(problem) => {
-                problem.apply_schedule_action(candidate, action)
-            }
-            Self::GemmF32Bf16RowColRow(problem) => {
-                problem.apply_schedule_action(candidate, action)
-            }
+            Self::MatvecBf16RowMajor(problem) => problem.apply_schedule_action(candidate, action),
+            Self::GemmF32Bf16RowColRow(problem) => problem.apply_schedule_action(candidate, action),
         }
     }
 }

@@ -1,4 +1,9 @@
-fn compare_candidates(a: &KernelCandidateMetadata, b: &KernelCandidateMetadata) -> Ordering {
+use super::*;
+
+pub(super) fn compare_candidates(
+    a: &KernelCandidateMetadata,
+    b: &KernelCandidateMetadata,
+) -> Ordering {
     let a_score = a.score.map(|score| score.value).unwrap_or(f64::INFINITY);
     let b_score = b.score.map(|score| score.value).unwrap_or(f64::INFINITY);
     a_score
@@ -7,7 +12,7 @@ fn compare_candidates(a: &KernelCandidateMetadata, b: &KernelCandidateMetadata) 
         .then_with(|| a.artifact_key().cmp(&b.artifact_key()))
 }
 
-fn schedule_rows_per_block(schedule: &KernelSchedule) -> Option<u32> {
+pub(super) fn schedule_rows_per_block(schedule: &KernelSchedule) -> Option<u32> {
     schedule
         .transforms
         .iter()
@@ -17,7 +22,7 @@ fn schedule_rows_per_block(schedule: &KernelSchedule) -> Option<u32> {
         })
 }
 
-fn schedule_matvec_reduce_unroll(schedule: &KernelSchedule) -> Option<u32> {
+pub(super) fn schedule_matvec_reduce_unroll(schedule: &KernelSchedule) -> Option<u32> {
     schedule
         .transforms
         .iter()
@@ -27,7 +32,7 @@ fn schedule_matvec_reduce_unroll(schedule: &KernelSchedule) -> Option<u32> {
         })
 }
 
-fn schedule_matvec_row_upcast(schedule: &KernelSchedule) -> Option<MatvecRowUpcast> {
+pub(super) fn schedule_matvec_row_upcast(schedule: &KernelSchedule) -> Option<MatvecRowUpcast> {
     schedule
         .transforms
         .iter()
@@ -38,7 +43,7 @@ fn schedule_matvec_row_upcast(schedule: &KernelSchedule) -> Option<MatvecRowUpca
         .or_else(|| Some(MatvecRowUpcast::default_upcast()))
 }
 
-fn schedule_matvec_thread_group(schedule: &KernelSchedule) -> Option<MatvecThreadGroup> {
+pub(super) fn schedule_matvec_thread_group(schedule: &KernelSchedule) -> Option<MatvecThreadGroup> {
     schedule
         .transforms
         .iter()
@@ -49,7 +54,7 @@ fn schedule_matvec_thread_group(schedule: &KernelSchedule) -> Option<MatvecThrea
         .or_else(|| Some(MatvecThreadGroup::default_group()))
 }
 
-fn schedule_matvec_plan(schedule: &KernelSchedule) -> Option<MatvecSchedulePlan> {
+pub(super) fn schedule_matvec_plan(schedule: &KernelSchedule) -> Option<MatvecSchedulePlan> {
     let rows_per_block = schedule_rows_per_block(schedule)?;
     let rows = MatvecRowSplit::new(rows_per_block)?;
     Some(MatvecSchedulePlan {
@@ -61,7 +66,7 @@ fn schedule_matvec_plan(schedule: &KernelSchedule) -> Option<MatvecSchedulePlan>
     })
 }
 
-fn matvec_symbol_hint(plan: MatvecSchedulePlan) -> String {
+pub(super) fn matvec_symbol_hint(plan: MatvecSchedulePlan) -> String {
     let plan = plan.normalized();
     let mut base = format!("matvec_bf16_rows{}", plan.rows.rows_per_block());
     base.push_str(&plan.row_upcast.symbol_suffix());
@@ -80,7 +85,7 @@ fn matvec_symbol_hint(plan: MatvecSchedulePlan) -> String {
     }
 }
 
-fn matvec_operation_name(plan: MatvecSchedulePlan) -> String {
+pub(super) fn matvec_operation_name(plan: MatvecSchedulePlan) -> String {
     let plan = plan.normalized();
     let plan_name = plan.rows.plan_name();
     let row_upcast_suffix = plan.row_upcast.operation_suffix();
@@ -100,7 +105,7 @@ fn matvec_operation_name(plan: MatvecSchedulePlan) -> String {
     }
 }
 
-fn schedule_gemm_tile(schedule: &KernelSchedule) -> Option<GemmTileShape> {
+pub(super) fn schedule_gemm_tile(schedule: &KernelSchedule) -> Option<GemmTileShape> {
     schedule
         .transforms
         .iter()
@@ -110,7 +115,7 @@ fn schedule_gemm_tile(schedule: &KernelSchedule) -> Option<GemmTileShape> {
         })
 }
 
-fn schedule_gemm_reduce_unroll(schedule: &KernelSchedule) -> Option<u32> {
+pub(super) fn schedule_gemm_reduce_unroll(schedule: &KernelSchedule) -> Option<u32> {
     schedule
         .transforms
         .iter()
@@ -120,7 +125,7 @@ fn schedule_gemm_reduce_unroll(schedule: &KernelSchedule) -> Option<u32> {
         })
 }
 
-fn schedule_gemm_m_per_thread(schedule: &KernelSchedule) -> Option<u32> {
+pub(super) fn schedule_gemm_m_per_thread(schedule: &KernelSchedule) -> Option<u32> {
     schedule
         .transforms
         .iter()
@@ -130,7 +135,7 @@ fn schedule_gemm_m_per_thread(schedule: &KernelSchedule) -> Option<u32> {
         })
 }
 
-fn schedule_gemm_n_per_thread(schedule: &KernelSchedule) -> Option<u32> {
+pub(super) fn schedule_gemm_n_per_thread(schedule: &KernelSchedule) -> Option<u32> {
     schedule
         .transforms
         .iter()
@@ -140,7 +145,7 @@ fn schedule_gemm_n_per_thread(schedule: &KernelSchedule) -> Option<u32> {
         })
 }
 
-fn schedule_gemm_a_load_unroll(schedule: &KernelSchedule) -> Option<u32> {
+pub(super) fn schedule_gemm_a_load_unroll(schedule: &KernelSchedule) -> Option<u32> {
     schedule
         .transforms
         .iter()
@@ -150,7 +155,7 @@ fn schedule_gemm_a_load_unroll(schedule: &KernelSchedule) -> Option<u32> {
         })
 }
 
-fn schedule_gemm_b_load_unroll(schedule: &KernelSchedule) -> Option<u32> {
+pub(super) fn schedule_gemm_b_load_unroll(schedule: &KernelSchedule) -> Option<u32> {
     schedule
         .transforms
         .iter()
@@ -160,7 +165,7 @@ fn schedule_gemm_b_load_unroll(schedule: &KernelSchedule) -> Option<u32> {
         })
 }
 
-fn schedule_gemm_a_load_thread_group(schedule: &KernelSchedule) -> u32 {
+pub(super) fn schedule_gemm_a_load_thread_group(schedule: &KernelSchedule) -> u32 {
     schedule
         .transforms
         .iter()
@@ -171,7 +176,7 @@ fn schedule_gemm_a_load_thread_group(schedule: &KernelSchedule) -> u32 {
         .unwrap_or(0)
 }
 
-fn schedule_gemm_b_load_thread_group(schedule: &KernelSchedule) -> u32 {
+pub(super) fn schedule_gemm_b_load_thread_group(schedule: &KernelSchedule) -> u32 {
     schedule
         .transforms
         .iter()
@@ -182,7 +187,7 @@ fn schedule_gemm_b_load_thread_group(schedule: &KernelSchedule) -> u32 {
         .unwrap_or(0)
 }
 
-fn schedule_gemm_b_load_order(schedule: &KernelSchedule) -> GemmBTileLoadOrder {
+pub(super) fn schedule_gemm_b_load_order(schedule: &KernelSchedule) -> GemmBTileLoadOrder {
     schedule
         .transforms
         .iter()
@@ -195,7 +200,7 @@ fn schedule_gemm_b_load_order(schedule: &KernelSchedule) -> GemmBTileLoadOrder {
         .unwrap_or(GemmBTileLoadOrder::TileLinear)
 }
 
-fn schedule_gemm_a_load_order(schedule: &KernelSchedule) -> GemmATileLoadOrder {
+pub(super) fn schedule_gemm_a_load_order(schedule: &KernelSchedule) -> GemmATileLoadOrder {
     schedule
         .transforms
         .iter()
@@ -208,7 +213,7 @@ fn schedule_gemm_a_load_order(schedule: &KernelSchedule) -> GemmATileLoadOrder {
         .unwrap_or(GemmATileLoadOrder::KContiguous)
 }
 
-fn schedule_gemm_thread_order(schedule: &KernelSchedule) -> GemmThreadOrder {
+pub(super) fn schedule_gemm_thread_order(schedule: &KernelSchedule) -> GemmThreadOrder {
     schedule
         .transforms
         .iter()
@@ -222,7 +227,7 @@ fn schedule_gemm_thread_order(schedule: &KernelSchedule) -> GemmThreadOrder {
         .unwrap_or(GemmThreadOrder::NThenM)
 }
 
-fn schedule_gemm_plan(schedule: &KernelSchedule) -> Option<GemmSchedulePlan> {
+pub(super) fn schedule_gemm_plan(schedule: &KernelSchedule) -> Option<GemmSchedulePlan> {
     let tile = schedule_gemm_tile(schedule)?;
     Some(GemmSchedulePlan {
         tile,
@@ -239,7 +244,7 @@ fn schedule_gemm_plan(schedule: &KernelSchedule) -> Option<GemmSchedulePlan> {
     })
 }
 
-fn generated_kernel_manifest(candidate: &KernelCandidateMetadata) -> Value {
+pub(super) fn generated_kernel_manifest(candidate: &KernelCandidateMetadata) -> Value {
     json!({
         "schema_version": 1,
         "artifact_key": candidate.artifact_key().hex(),
@@ -265,7 +270,7 @@ fn generated_kernel_manifest(candidate: &KernelCandidateMetadata) -> Value {
     })
 }
 
-fn selection_json(selection: &KernelOptimizationSelection) -> Value {
+pub(super) fn selection_json(selection: &KernelOptimizationSelection) -> Value {
     json!({
         "schema_version": 1,
         "family": &selection.family,
@@ -281,7 +286,7 @@ fn selection_json(selection: &KernelOptimizationSelection) -> Value {
     })
 }
 
-fn score_record_json(record: &KernelOptimizationScoreRecord) -> Value {
+pub(super) fn score_record_json(record: &KernelOptimizationScoreRecord) -> Value {
     json!({
         "schema_version": 1,
         "score_namespace": &record.score_namespace,
@@ -298,7 +303,7 @@ fn score_record_json(record: &KernelOptimizationScoreRecord) -> Value {
     })
 }
 
-fn parse_selection_json(
+pub(super) fn parse_selection_json(
     value: &Value,
 ) -> Result<KernelOptimizationSelection, KernelGenerationError> {
     let schema_version = required_u64(value, "schema_version")?;
@@ -317,7 +322,7 @@ fn parse_selection_json(
     })
 }
 
-fn parse_score_record_json(
+pub(super) fn parse_score_record_json(
     value: &Value,
 ) -> Result<KernelOptimizationScoreRecord, KernelGenerationError> {
     let schema_version = required_u64(value, "schema_version")?;
@@ -339,7 +344,7 @@ fn parse_score_record_json(
     })
 }
 
-fn parse_action_trace(
+pub(super) fn parse_action_trace(
     actions: &[Value],
 ) -> Result<Vec<KernelScheduleAction>, KernelGenerationError> {
     actions
@@ -349,7 +354,7 @@ fn parse_action_trace(
         .collect()
 }
 
-fn parse_action_json(
+pub(super) fn parse_action_json(
     value: &Value,
     index: usize,
 ) -> Result<KernelScheduleAction, KernelGenerationError> {
@@ -385,7 +390,7 @@ fn parse_action_json(
     })
 }
 
-fn parse_action_arg_json(
+pub(super) fn parse_action_arg_json(
     value: &Value,
     index: usize,
 ) -> Result<KernelScheduleActionArg, KernelGenerationError> {
@@ -421,7 +426,9 @@ fn parse_action_arg_json(
     }
 }
 
-fn parse_optional_score(value: &Value) -> Result<Option<SearchScore>, KernelGenerationError> {
+pub(super) fn parse_optional_score(
+    value: &Value,
+) -> Result<Option<SearchScore>, KernelGenerationError> {
     if value.is_null() {
         return Ok(None);
     }
@@ -445,7 +452,7 @@ fn parse_optional_score(value: &Value) -> Result<Option<SearchScore>, KernelGene
     }))
 }
 
-fn parse_optional_timing(
+pub(super) fn parse_optional_timing(
     value: &Value,
 ) -> Result<Option<OptimizationTiming>, KernelGenerationError> {
     if value.is_null() {
@@ -487,7 +494,7 @@ fn parse_optional_timing(
     ))
 }
 
-fn parse_timing_segments(
+pub(super) fn parse_timing_segments(
     value: &Value,
 ) -> Result<Vec<OptimizationTimingSegment>, KernelGenerationError> {
     if value.is_null() {
@@ -524,7 +531,7 @@ fn parse_timing_segments(
         .collect()
 }
 
-fn parse_profile_time_source(
+pub(super) fn parse_profile_time_source(
     source: &str,
     field_name: &str,
 ) -> Result<ProfileTimeSource, KernelGenerationError> {
@@ -538,7 +545,7 @@ fn parse_profile_time_source(
     }
 }
 
-fn parse_timing_segment_name(
+pub(super) fn parse_timing_segment_name(
     name: &str,
     index: usize,
 ) -> Result<&'static str, KernelGenerationError> {
@@ -554,53 +561,62 @@ fn parse_timing_segment_name(
     }
 }
 
-fn required_field<'a>(value: &'a Value, name: &str) -> Result<&'a Value, KernelGenerationError> {
+pub(super) fn required_field<'a>(
+    value: &'a Value,
+    name: &str,
+) -> Result<&'a Value, KernelGenerationError> {
     value
         .get(name)
         .ok_or_else(|| invalid_selection(format!("missing field {name:?}")))
 }
 
-fn required_str<'a>(value: &'a Value, name: &str) -> Result<&'a str, KernelGenerationError> {
+pub(super) fn required_str<'a>(
+    value: &'a Value,
+    name: &str,
+) -> Result<&'a str, KernelGenerationError> {
     required_field(value, name)?
         .as_str()
         .ok_or_else(|| invalid_selection(format!("field {name:?} must be a string")))
 }
 
-fn required_bool(value: &Value, name: &str) -> Result<bool, KernelGenerationError> {
+pub(super) fn required_bool(value: &Value, name: &str) -> Result<bool, KernelGenerationError> {
     required_field(value, name)?
         .as_bool()
         .ok_or_else(|| invalid_selection(format!("field {name:?} must be a bool")))
 }
 
-fn required_array<'a>(value: &'a Value, name: &str) -> Result<&'a [Value], KernelGenerationError> {
+pub(super) fn required_array<'a>(
+    value: &'a Value,
+    name: &str,
+) -> Result<&'a [Value], KernelGenerationError> {
     required_field(value, name)?
         .as_array()
         .map(Vec::as_slice)
         .ok_or_else(|| invalid_selection(format!("field {name:?} must be an array")))
 }
 
-fn required_u64(value: &Value, name: &str) -> Result<u64, KernelGenerationError> {
+pub(super) fn required_u64(value: &Value, name: &str) -> Result<u64, KernelGenerationError> {
     required_field(value, name)?
         .as_u64()
         .ok_or_else(|| invalid_selection(format!("field {name:?} must be a u64")))
 }
 
-fn required_usize(value: &Value, name: &str) -> Result<usize, KernelGenerationError> {
+pub(super) fn required_usize(value: &Value, name: &str) -> Result<usize, KernelGenerationError> {
     usize::try_from(required_u64(value, name)?)
         .map_err(|_| invalid_selection(format!("field {name:?} exceeds usize")))
 }
 
-fn required_u32(value: &Value, name: &str) -> Result<u32, KernelGenerationError> {
+pub(super) fn required_u32(value: &Value, name: &str) -> Result<u32, KernelGenerationError> {
     u32::try_from(required_u64(value, name)?)
         .map_err(|_| invalid_selection(format!("field {name:?} exceeds u32")))
 }
 
-fn required_u8(value: &Value, name: &str) -> Result<u8, KernelGenerationError> {
+pub(super) fn required_u8(value: &Value, name: &str) -> Result<u8, KernelGenerationError> {
     value_as_u8(required_field(value, name)?)
         .ok_or_else(|| invalid_selection(format!("field {name:?} must fit in u8")))
 }
 
-fn optional_u8(value: &Value, name: &str) -> Result<Option<u8>, KernelGenerationError> {
+pub(super) fn optional_u8(value: &Value, name: &str) -> Result<Option<u8>, KernelGenerationError> {
     match value.get(name) {
         Some(Value::Null) | None => Ok(None),
         Some(value) => value_as_u8(value)
@@ -609,23 +625,23 @@ fn optional_u8(value: &Value, name: &str) -> Result<Option<u8>, KernelGeneration
     }
 }
 
-fn value_as_u8(value: &Value) -> Option<u8> {
+pub(super) fn value_as_u8(value: &Value) -> Option<u8> {
     value.as_u64().and_then(|value| u8::try_from(value).ok())
 }
 
-fn required_f64(value: &Value, name: &str) -> Result<f64, KernelGenerationError> {
+pub(super) fn required_f64(value: &Value, name: &str) -> Result<f64, KernelGenerationError> {
     required_field(value, name)?
         .as_f64()
         .ok_or_else(|| invalid_selection(format!("field {name:?} must be an f64")))
 }
 
-fn invalid_selection(reason: impl Into<String>) -> KernelGenerationError {
+pub(super) fn invalid_selection(reason: impl Into<String>) -> KernelGenerationError {
     KernelGenerationError::InvalidSelection {
         reason: reason.into(),
     }
 }
 
-fn materialization_json(materialization: &KernelMaterialization) -> Value {
+pub(super) fn materialization_json(materialization: &KernelMaterialization) -> Value {
     match materialization {
         KernelMaterialization::Existing { symbol } => {
             json!({"kind": "existing", "symbol": symbol})
@@ -641,7 +657,7 @@ fn materialization_json(materialization: &KernelMaterialization) -> Value {
     }
 }
 
-fn launch_json(launch: &CudaLaunchSpec) -> Value {
+pub(super) fn launch_json(launch: &CudaLaunchSpec) -> Value {
     json!({
         "kernel": &launch.kernel,
         "grid_dim": [launch.grid_dim.x, launch.grid_dim.y, launch.grid_dim.z],
@@ -650,7 +666,7 @@ fn launch_json(launch: &CudaLaunchSpec) -> Value {
     })
 }
 
-fn operation_json(operation: &TypedOperationSpec) -> Value {
+pub(super) fn operation_json(operation: &TypedOperationSpec) -> Value {
     json!({
         "name": &operation.name,
         "kind": operation.kind.label(),
@@ -660,7 +676,7 @@ fn operation_json(operation: &TypedOperationSpec) -> Value {
     })
 }
 
-fn tensor_json(tensor: &TensorTypeSpec) -> Value {
+pub(super) fn tensor_json(tensor: &TensorTypeSpec) -> Value {
     json!({
         "dtype": tensor.dtype.label(),
         "dtype_bits": tensor.dtype.bits(),
@@ -671,7 +687,7 @@ fn tensor_json(tensor: &TensorTypeSpec) -> Value {
     })
 }
 
-fn axis_json(axis: &KernelAxis) -> Value {
+pub(super) fn axis_json(axis: &KernelAxis) -> Value {
     json!({
         "id": axis.id,
         "name": axis.name,
@@ -684,7 +700,7 @@ fn axis_json(axis: &KernelAxis) -> Value {
     })
 }
 
-fn transform_json(transform: &ScheduleTransform) -> Value {
+pub(super) fn transform_json(transform: &ScheduleTransform) -> Value {
     match transform {
         ScheduleTransform::Split { axis, factor } => {
             json!({"op": "split", "axis": axis, "factor": factor})
@@ -713,7 +729,7 @@ fn transform_json(transform: &ScheduleTransform) -> Value {
     }
 }
 
-fn action_json(action: &KernelScheduleAction) -> Value {
+pub(super) fn action_json(action: &KernelScheduleAction) -> Value {
     json!({
         "op": action.op.label(),
         "axis": action.axis,
@@ -722,7 +738,7 @@ fn action_json(action: &KernelScheduleAction) -> Value {
     })
 }
 
-fn action_arg_json(arg: &KernelScheduleActionArg) -> Value {
+pub(super) fn action_arg_json(arg: &KernelScheduleActionArg) -> Value {
     match arg {
         KernelScheduleActionArg::Factor(factor) => json!({"kind": "factor", "value": factor}),
         KernelScheduleActionArg::Tile3d { m, n, k } => {
@@ -737,7 +753,7 @@ fn action_arg_json(arg: &KernelScheduleActionArg) -> Value {
     }
 }
 
-fn resource_usage_json(resources: KernelResourceUsage) -> Value {
+pub(super) fn resource_usage_json(resources: KernelResourceUsage) -> Value {
     json!({
         "threads_per_block": resources.threads_per_block,
         "shared_memory_bytes": resources.shared_memory_bytes,
@@ -747,7 +763,7 @@ fn resource_usage_json(resources: KernelResourceUsage) -> Value {
     })
 }
 
-fn score_json(score: SearchScore) -> Value {
+pub(super) fn score_json(score: SearchScore) -> Value {
     json!({
         "value": score.value,
         "source": match score.source {
@@ -758,7 +774,7 @@ fn score_json(score: SearchScore) -> Value {
     })
 }
 
-fn timing_json(timing: OptimizationTiming) -> Value {
+pub(super) fn timing_json(timing: OptimizationTiming) -> Value {
     let setup_segments = timing
         .setup_segments
         .iter()

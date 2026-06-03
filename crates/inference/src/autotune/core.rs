@@ -1,7 +1,9 @@
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+use super::{hashing::metadata_key, *};
 
-fn bounded_unroll_factors(
+pub(super) const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+pub(super) const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+pub(super) fn bounded_unroll_factors(
     extent: usize,
     max_factor: u32,
     excluded_factor: Option<u32>,
@@ -12,7 +14,11 @@ fn bounded_unroll_factors(
         .collect()
 }
 
-fn bounded_tile_factors(extent: usize, max_factor: u32, required_factor: Option<u32>) -> Vec<u32> {
+pub(super) fn bounded_tile_factors(
+    extent: usize,
+    max_factor: u32,
+    required_factor: Option<u32>,
+) -> Vec<u32> {
     const FACTORS: [u32; 5] = [8, 13, 16, 24, 32];
 
     let upper = extent.min(max_factor as usize) as u32;
@@ -106,7 +112,7 @@ impl KernelSchedule {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct KernelMetadataKey(u64);
+pub struct KernelMetadataKey(pub(super) u64);
 
 impl KernelMetadataKey {
     pub const fn raw(self) -> u64 {
@@ -202,7 +208,7 @@ impl KernelCandidateMetadata {
     }
 }
 
-fn candidate_with_action_trace(
+pub(super) fn candidate_with_action_trace(
     parent: &KernelCandidateMetadata,
     action: &KernelScheduleAction,
     mut candidate: KernelCandidateMetadata,

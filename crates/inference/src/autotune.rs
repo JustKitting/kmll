@@ -38,17 +38,17 @@ use crate::{
     runtime,
 };
 
-// The autotune implementation is intentionally split by ownership while staying in
-// one Rust module. That preserves the existing public API and private helper
-// boundaries without leaving a 9k-line source file.
-include!("autotune/core.rs");
-include!("autotune/artifacts.rs");
-include!("autotune/search.rs");
-include!("autotune/matvec.rs");
-include!("autotune/gemm.rs");
-include!("autotune/problem.rs");
-include!("autotune/metadata.rs");
-include!("autotune/codegen.rs");
-include!("autotune/hashing.rs");
+mod artifacts;
+mod codegen;
+mod core;
+mod gemm;
+mod hashing;
+mod matvec;
+mod metadata;
+mod problem;
+mod search;
+
+pub use self::{artifacts::*, core::*, gemm::*, matvec::*, problem::*, search::*};
+
 #[cfg(test)]
-include!("autotune/tests.rs");
+mod tests;

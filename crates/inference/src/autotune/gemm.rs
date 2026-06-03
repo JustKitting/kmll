@@ -1,3 +1,5 @@
+use super::{metadata::*, *};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GemmTileShape {
     pub m: u32,
@@ -220,7 +222,7 @@ impl GemmSchedulePlan {
             .saturating_add(plan.tile.k.saturating_mul(plan.tile.n))
     }
 
-    fn resource_usage(self) -> KernelResourceUsage {
+    pub(super) fn resource_usage(self) -> KernelResourceUsage {
         let accumulators = self.accumulator_elements_per_thread();
         KernelResourceUsage::new(
             self.thread_count(),
@@ -247,7 +249,7 @@ impl GemmSchedulePlan {
             .div_ceil(plan.b_load_thread_count())
     }
 
-    fn a_load_thread_count(self) -> u32 {
+    pub(super) fn a_load_thread_count(self) -> u32 {
         let thread_count = self.thread_count();
         if self.a_load_thread_group == 0 {
             thread_count
@@ -256,7 +258,7 @@ impl GemmSchedulePlan {
         }
     }
 
-    fn b_load_thread_count(self) -> u32 {
+    pub(super) fn b_load_thread_count(self) -> u32 {
         let thread_count = self.thread_count();
         if self.b_load_thread_group == 0 {
             thread_count
@@ -426,7 +428,7 @@ pub struct GemmSearchProblem {
 }
 
 impl GemmSearchProblem {
-    const EXISTING_TILE: GemmTileShape = GemmTileShape::new(16, 16, 16);
+    pub(super) const EXISTING_TILE: GemmTileShape = GemmTileShape::new(16, 16, 16);
     const MAX_TILE_DIM: u32 = 32;
     const MAX_THREADS_PER_BLOCK: u32 = 1024;
     const MAX_SHARED_MEMORY_BYTES: u32 = 48 * 1024;
@@ -663,7 +665,7 @@ impl GemmSearchProblem {
         }
     }
 
-    fn plan_within_resource_limits(plan: GemmSchedulePlan) -> bool {
+    pub(super) fn plan_within_resource_limits(plan: GemmSchedulePlan) -> bool {
         let plan = plan.normalized();
         let resources = plan.resource_usage();
         plan.tile.is_launchable_shape()
@@ -673,7 +675,7 @@ impl GemmSearchProblem {
                 <= Self::MAX_ACCUMULATOR_ELEMENTS_PER_THREAD
     }
 
-    fn candidate_for_checked_plan(
+    pub(super) fn candidate_for_checked_plan(
         &self,
         parent: &KernelCandidateMetadata,
         action: &KernelScheduleAction,

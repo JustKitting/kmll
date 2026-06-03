@@ -1,3 +1,5 @@
+use super::{metadata::*, *};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RowMajorWarpRows {
     Rows1,
@@ -637,9 +639,10 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
             / unroll;
         let thread_overhead = blocks as f64 * f64::from(plan.block_threads()) * 8.0;
         let subgroup_pressure =
-            blocks as f64 * (32.0 / lanes_per_row as f64 - 1.0).max(0.0) * 256.0;
-        let row_upcast_pressure = blocks as f64 * (row_upcast as f64 - 1.0).max(0.0) * 384.0;
-        let register_pressure = blocks as f64 * (unroll - 1.0).max(0.0) * 32.0;
+            blocks as f64 * (32.0_f64 / lanes_per_row as f64 - 1.0_f64).max(0.0_f64) * 256.0;
+        let row_upcast_pressure =
+            blocks as f64 * (row_upcast as f64 - 1.0_f64).max(0.0_f64) * 384.0;
+        let register_pressure = blocks as f64 * (unroll - 1.0_f64).max(0.0_f64) * 32.0;
         let generic_runtime_penalty = if candidate.is_launchable() {
             blocks as f64 * 64.0
         } else {
