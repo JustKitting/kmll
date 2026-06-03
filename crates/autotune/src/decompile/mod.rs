@@ -60,7 +60,8 @@ pub use self::{
         SassTensorScope, SassWarpShuffleMode, ScalarOperand, ScalarOperandKind, lift_sass_module,
     },
     known_opcodes::{
-        KnownSassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind, known_sass_opcodes,
+        KnownSassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind, SassOpcodeCatalogSource,
+        known_sass_opcodes,
     },
     lifted::{
         SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedOpClass, SassLiftedOpDetail,

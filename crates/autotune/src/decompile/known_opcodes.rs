@@ -8,8 +8,25 @@ pub struct KnownSassOpcode {
     pub architectures: &'static [&'static str],
     pub class: SassOpcodeCatalogClass,
     pub kind: SassOpcodeCatalogKind,
-    pub source: &'static str,
+    pub source: SassOpcodeCatalogSource,
     pub locally_mapped: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassOpcodeCatalogSource {
+    LocalSassLifter,
+    NvidiaCudaBinaryUtilitiesInstructionReference,
+}
+
+impl fmt::Display for SassOpcodeCatalogSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LocalSassLifter => f.write_str("local-sass-lifter"),
+            Self::NvidiaCudaBinaryUtilitiesInstructionReference => {
+                f.write_str("nvidia-cuda-binary-utilities-instruction-reference")
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -227,9 +244,6 @@ pub fn known_sass_opcodes() -> &'static [KnownSassOpcode] {
     KNOWN_SASS_OPCODES
 }
 
-const LOCAL_LIFTER: &str = "local-sass-lifter";
-const NVIDIA_BINARY_UTILITIES: &str = "nvidia-cuda-binary-utilities-instruction-reference";
-
 macro_rules! local {
     ($opcode:ident, $class:ident, $kind:ident) => {
         KnownSassOpcode {
@@ -237,7 +251,7 @@ macro_rules! local {
             architectures: &[],
             class: SassOpcodeCatalogClass::$class,
             kind: SassOpcodeCatalogKind::$kind,
-            source: LOCAL_LIFTER,
+            source: SassOpcodeCatalogSource::LocalSassLifter,
             locally_mapped: true,
         }
     };
@@ -250,7 +264,7 @@ macro_rules! nvidia_mapped {
             architectures: &[$($arch),*],
             class: SassOpcodeCatalogClass::$class,
             kind: SassOpcodeCatalogKind::$kind,
-            source: NVIDIA_BINARY_UTILITIES,
+            source: SassOpcodeCatalogSource::NvidiaCudaBinaryUtilitiesInstructionReference,
             locally_mapped: true,
         }
     };

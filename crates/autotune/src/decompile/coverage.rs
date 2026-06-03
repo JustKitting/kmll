@@ -10,9 +10,10 @@ use nn_rust_inference::runtime;
 
 use super::{
     KernelIrModule, KernelIrOpKind, KnownSassOpcode, SassAnalysisModule, SassLiftedModule,
-    SassModifier, SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind, SassPatternModule,
-    SassRegionPath, analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass,
-    recover_sass_patterns, render_sass_file_side_by_side,
+    SassModifier, SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind,
+    SassOpcodeCatalogSource, SassPatternModule, SassRegionPath, analyze_sass_ir,
+    known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
+    render_sass_file_side_by_side,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,9 +176,9 @@ struct OpcodeCatalogBuilder {
     locally_mapped: bool,
     instruction_count: usize,
     signatures: BTreeSet<SassOpcodeSignature>,
-    source_formats: BTreeSet<String>,
+    source_formats: BTreeSet<SassCoverageSourceFormat>,
     architectures: BTreeSet<String>,
-    known_sources: BTreeSet<String>,
+    known_sources: BTreeSet<SassOpcodeCatalogSource>,
     classes: BTreeSet<SassOpcodeCatalogClass>,
     kinds: BTreeSet<SassOpcodeCatalogKind>,
     unsupported_count: usize,
@@ -221,9 +222,17 @@ impl OpcodeCatalogBuilder {
             instruction_count: self.instruction_count,
             signature_count: signatures.len(),
             signatures,
-            source_formats: self.source_formats.into_iter().collect(),
+            source_formats: self
+                .source_formats
+                .into_iter()
+                .map(|format| format.to_string())
+                .collect(),
             architectures: self.architectures.into_iter().collect(),
-            known_sources: self.known_sources.into_iter().collect(),
+            known_sources: self
+                .known_sources
+                .into_iter()
+                .map(|source| source.to_string())
+                .collect(),
             classes: self
                 .classes
                 .into_iter()
@@ -267,6 +276,23 @@ impl fmt::Display for SassOpcodeSignature {
             write!(f, ".{modifier}")?;
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum SassCoverageSourceFormat {
+    Cuobjdump,
+    Nvdisasm,
+    Sass,
+}
+
+impl fmt::Display for SassCoverageSourceFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cuobjdump => f.write_str("cuobjdump"),
+            Self::Nvdisasm => f.write_str("nvdisasm"),
+            Self::Sass => f.write_str("sass"),
+        }
     }
 }
 
@@ -511,9 +537,7 @@ pub fn run_sass_coverage_scan(
                         let catalog_entry = opcode_catalog.entry(opcode).or_default();
                         catalog_entry.instruction_count += 1;
                         catalog_entry.signatures.insert(signature);
-                        catalog_entry
-                            .source_formats
-                            .insert(source_format.to_string());
+                        catalog_entry.source_formats.insert(source_format);
                     }
                 }
 
@@ -829,17 +853,17 @@ fn relative_sass_path(root: &Path, sass_path: &Path) -> PathBuf {
         })
 }
 
-fn sass_source_format(path: &Path) -> &'static str {
+fn sass_source_format(path: &Path) -> SassCoverageSourceFormat {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("");
     if name.ends_with(".cuobjdump.sass") {
-        "cuobjdump"
+        SassCoverageSourceFormat::Cuobjdump
     } else if name.ends_with(".nvdisasm.sass") {
-        "nvdisasm"
+        SassCoverageSourceFormat::Nvdisasm
     } else {
-        "sass"
+        SassCoverageSourceFormat::Sass
     }
 }
 
@@ -860,7 +884,7 @@ fn append_known_opcode(
     entry.locally_mapped |= known.locally_mapped;
     entry.classes.insert(known.class);
     entry.kinds.insert(known.kind);
-    entry.known_sources.insert(known.source.to_string());
+    entry.known_sources.insert(known.source);
     for architecture in known.architectures {
         entry.architectures.insert((*architecture).to_string());
     }
@@ -920,7 +944,11 @@ fn opcode_probe_targets(
             architectures: entry.architectures.iter().cloned().collect(),
             classes: entry.classes.iter().map(ToString::to_string).collect(),
             kinds: entry.kinds.iter().map(ToString::to_string).collect(),
-            known_sources: entry.known_sources.iter().cloned().collect(),
+            known_sources: entry
+                .known_sources
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             locally_mapped: entry.locally_mapped,
             recommended_action: if entry.locally_mapped {
                 "generate-sass-artifact"
