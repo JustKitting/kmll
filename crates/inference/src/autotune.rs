@@ -741,6 +741,7 @@ impl GemmTileShape {
 pub struct GemmSchedulePlan {
     pub tile: GemmTileShape,
     pub reduce_unroll: u32,
+    pub b_load_order: GemmBTileLoadOrder,
 }
 
 impl GemmSchedulePlan {
@@ -748,6 +749,7 @@ impl GemmSchedulePlan {
         Self {
             tile,
             reduce_unroll: 1,
+            b_load_order: GemmBTileLoadOrder::TileLinear,
         }
     }
 
@@ -756,8 +758,28 @@ impl GemmSchedulePlan {
         self
     }
 
+    pub const fn with_b_load_order(mut self, order: GemmBTileLoadOrder) -> Self {
+        self.b_load_order = order;
+        self
+    }
+
     pub const fn normalized(self) -> Self {
         self.with_reduce_unroll(self.reduce_unroll)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GemmBTileLoadOrder {
+    TileLinear,
+    KContiguous,
+}
+
+impl GemmBTileLoadOrder {
+    pub const fn symbol_suffix(self) -> &'static str {
+        match self {
+            Self::TileLinear => "",
+            Self::KContiguous => "_bk",
+        }
     }
 }
 
@@ -780,6 +802,7 @@ impl GemmSearchProblem {
         GemmTileShape::new(32, 16, 16),
     ];
     const REDUCE_UNROLL_FACTORS: [u32; 3] = [2, 4, 8];
+    const B_LOAD_ORDERS: [GemmBTileLoadOrder; 1] = [GemmBTileLoadOrder::KContiguous];
 
     pub const fn f32_bf16_row_col_row(m: usize, n: usize, k: usize) -> Self {
         Self {
@@ -800,13 +823,19 @@ impl GemmSearchProblem {
     pub fn candidate_for_plan(&self, plan: GemmSchedulePlan) -> KernelCandidateMetadata {
         let plan = plan.normalized();
         let tile = plan.tile;
-        let existing_tile = tile == GemmTileShape::new(16, 16, 16) && plan.reduce_unroll == 1;
+        let existing_tile = tile == GemmTileShape::new(16, 16, 16)
+            && plan.reduce_unroll == 1
+            && plan.b_load_order == GemmBTileLoadOrder::TileLinear;
+        let b_order_suffix = plan.b_load_order.symbol_suffix();
         let symbol_hint = if plan.reduce_unroll == 1 {
-            format!("gemm_f32_bf16_tile_{}x{}x{}", tile.m, tile.n, tile.k)
+            format!(
+                "gemm_f32_bf16_tile_{}x{}x{}{}",
+                tile.m, tile.n, tile.k, b_order_suffix
+            )
         } else {
             format!(
-                "gemm_f32_bf16_tile_{}x{}x{}_u{}",
-                tile.m, tile.n, tile.k, plan.reduce_unroll
+                "gemm_f32_bf16_tile_{}x{}x{}_u{}{}",
+                tile.m, tile.n, tile.k, plan.reduce_unroll, b_order_suffix
             )
         };
         let launch_kernel = if existing_tile {
@@ -822,11 +851,14 @@ impl GemmSearchProblem {
         );
         let operation = TypedOperationSpec::new(
             if plan.reduce_unroll == 1 {
-                format!("gemm-f32-bf16-{}x{}x{}", tile.m, tile.n, tile.k)
+                format!(
+                    "gemm-f32-bf16-{}x{}x{}{}",
+                    tile.m, tile.n, tile.k, b_order_suffix
+                )
             } else {
                 format!(
-                    "gemm-f32-bf16-{}x{}x{}-u{}",
-                    tile.m, tile.n, tile.k, plan.reduce_unroll
+                    "gemm-f32-bf16-{}x{}x{}-u{}{}",
+                    tile.m, tile.n, tile.k, plan.reduce_unroll, b_order_suffix
                 )
             },
             OperationKind::Gemm,
@@ -865,6 +897,9 @@ impl GemmSearchProblem {
                 axis: 2,
                 factor: plan.reduce_unroll,
             });
+        }
+        if plan.b_load_order == GemmBTileLoadOrder::KContiguous {
+            schedule = schedule.with_transform(ScheduleTransform::StrideOrder { axes: vec![2, 1] });
         }
 
         KernelCandidateMetadata::new(
@@ -935,10 +970,24 @@ impl KernelMetadataSearchProblem for GemmSearchProblem {
                 .collect();
         };
         if plan.reduce_unroll == 1 {
-            return Self::REDUCE_UNROLL_FACTORS
+            let mut candidates = Self::REDUCE_UNROLL_FACTORS
                 .into_iter()
                 .filter(|factor| *factor <= plan.tile.k && plan.tile.k % *factor == 0)
                 .map(|factor| self.candidate_for_plan(plan.with_reduce_unroll(factor)))
+                .collect::<Vec<_>>();
+            if plan.b_load_order == GemmBTileLoadOrder::TileLinear {
+                candidates.extend(
+                    Self::B_LOAD_ORDERS
+                        .into_iter()
+                        .map(|order| self.candidate_for_plan(plan.with_b_load_order(order))),
+                );
+            }
+            return candidates;
+        }
+        if plan.b_load_order == GemmBTileLoadOrder::TileLinear {
+            return Self::B_LOAD_ORDERS
+                .into_iter()
+                .map(|order| self.candidate_for_plan(plan.with_b_load_order(order)))
                 .collect();
         }
         Vec::new()
@@ -964,7 +1013,11 @@ impl KernelMetadataSearchProblem for GemmSearchProblem {
         let unroll = f64::from(plan.reduce_unroll.max(1));
         let loop_overhead = block_count * 4096.0 / unroll;
         let register_pressure = block_count * (unroll - 1.0) * 256.0;
-        SearchScore::heuristic(padded_fma_ops + loop_overhead + register_pressure)
+        let b_load_penalty = match plan.b_load_order {
+            GemmBTileLoadOrder::TileLinear => block_count * 512.0,
+            GemmBTileLoadOrder::KContiguous => block_count * 64.0,
+        };
+        SearchScore::heuristic(padded_fma_ops + loop_overhead + register_pressure + b_load_penalty)
     }
 }
 
@@ -1007,11 +1060,25 @@ fn schedule_gemm_reduce_unroll(schedule: &KernelSchedule) -> Option<u32> {
         })
 }
 
+fn schedule_gemm_b_load_order(schedule: &KernelSchedule) -> GemmBTileLoadOrder {
+    schedule
+        .transforms
+        .iter()
+        .find_map(|transform| match transform {
+            ScheduleTransform::StrideOrder { axes } if axes.as_slice() == [2, 1] => {
+                Some(GemmBTileLoadOrder::KContiguous)
+            }
+            _ => None,
+        })
+        .unwrap_or(GemmBTileLoadOrder::TileLinear)
+}
+
 fn schedule_gemm_plan(schedule: &KernelSchedule) -> Option<GemmSchedulePlan> {
     let tile = schedule_gemm_tile(schedule)?;
     Some(GemmSchedulePlan {
         tile,
         reduce_unroll: schedule_gemm_reduce_unroll(schedule).unwrap_or(1),
+        b_load_order: schedule_gemm_b_load_order(schedule),
     })
 }
 
@@ -1130,6 +1197,7 @@ fn score_json(score: SearchScore) -> Value {
 fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
     let tile = plan.tile;
     let reduce_unroll = plan.reduce_unroll.max(1);
+    let k_contiguous_b_load = plan.b_load_order == GemmBTileLoadOrder::KContiguous;
     let mut source = String::new();
     writeln!(
         source,
@@ -1244,8 +1312,18 @@ fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
     writeln!(source).expect("write to string");
     writeln!(source, "        load = tid;").expect("write to string");
     writeln!(source, "        while load < TILE_B_ELEMS {{").expect("write to string");
-    writeln!(source, "            let tile_row = load / TILE_N;").expect("write to string");
-    writeln!(source, "            let tile_col = load % TILE_N;").expect("write to string");
+    if k_contiguous_b_load {
+        writeln!(source, "            let tile_row = load % TILE_K;").expect("write to string");
+        writeln!(source, "            let tile_col = load / TILE_K;").expect("write to string");
+    } else {
+        writeln!(source, "            let tile_row = load / TILE_N;").expect("write to string");
+        writeln!(source, "            let tile_col = load % TILE_N;").expect("write to string");
+    }
+    writeln!(
+        source,
+        "            let b_smem_index = tile_row * TILE_N + tile_col;"
+    )
+    .expect("write to string");
     writeln!(source, "            let global_row = k_base + tile_row;").expect("write to string");
     writeln!(
         source,
@@ -1255,7 +1333,7 @@ fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
     writeln!(source, "            unsafe {{").expect("write to string");
     writeln!(
         source,
-        "                TILE_B[load] = if global_row < k && global_col < n {{"
+        "                TILE_B[b_smem_index] = if global_row < k && global_col < n {{"
     )
     .expect("write to string");
     writeln!(
@@ -1621,7 +1699,7 @@ mod tests {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
         let candidates = problem.expand(&tile_candidate);
-        assert_eq!(candidates.len(), 3);
+        assert_eq!(candidates.len(), 4);
 
         let unroll4 = candidates
             .iter()
@@ -1638,6 +1716,30 @@ mod tests {
             unroll4.generated.materialization,
             KernelMaterialization::DeferredGenerated { .. }
         ));
+    }
+
+    #[test]
+    fn gemm_search_expands_tile_metadata_into_b_load_stride_order() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
+        let candidates = problem.expand(&tile_candidate);
+
+        let k_contiguous = candidates
+            .iter()
+            .find(|candidate| {
+                schedule_gemm_b_load_order(&candidate.schedule) == GemmBTileLoadOrder::KContiguous
+            })
+            .expect("GEMM search should expose K-contiguous B load order metadata");
+        let plan =
+            schedule_gemm_plan(&k_contiguous.schedule).expect("candidate should have GEMM plan");
+        assert_eq!(plan.tile, GemmTileShape::new(16, 32, 16));
+        assert_eq!(plan.reduce_unroll, 1);
+        assert_eq!(plan.b_load_order, GemmBTileLoadOrder::KContiguous);
+        assert_ne!(tile_candidate.artifact_key(), k_contiguous.artifact_key());
+        assert_eq!(k_contiguous.launch.kernel, "gemm_f32_bf16_tile_16x32x16_bk");
+        assert!(k_contiguous.schedule.transforms.iter().any(|transform| {
+            matches!(transform, ScheduleTransform::StrideOrder { axes } if axes == &[2, 1])
+        }));
     }
 
     #[test]
@@ -1659,6 +1761,28 @@ mod tests {
         );
         assert!(generated.source.contains("TILE_A[ty * TILE_K + kk + 3]"));
         assert!(generated.source.contains("TILE_B[(kk + 3) * TILE_N + tx]"));
+    }
+
+    #[test]
+    fn gemm_generator_renders_b_load_stride_order_source_on_demand() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let candidate = problem.candidate_for_plan(
+            GemmSchedulePlan::new(GemmTileShape::new(16, 32, 16))
+                .with_b_load_order(GemmBTileLoadOrder::KContiguous),
+        );
+        let generated = GemmRustCudaGenerator
+            .source_for(&candidate)
+            .expect("GEMM generator should render stride-order source");
+
+        assert_eq!(generated.symbol, "gemm_f32_bf16_tile_16x32x16_bk");
+        assert!(generated.source.contains("let tile_row = load % TILE_K;"));
+        assert!(generated.source.contains("let tile_col = load / TILE_K;"));
+        assert!(
+            generated
+                .source
+                .contains("let b_smem_index = tile_row * TILE_N + tile_col;")
+        );
+        assert!(generated.source.contains("TILE_B[b_smem_index] = if"));
     }
 
     #[test]
@@ -1705,6 +1829,35 @@ mod tests {
         );
         assert_eq!(manifest["schedule"][0]["op"].as_str(), Some("tile-gemm"));
         assert_eq!(manifest["schedule"][0]["n"].as_u64(), Some(32));
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn artifact_store_records_b_load_stride_order_metadata() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let candidate = problem.candidate_for_plan(
+            GemmSchedulePlan::new(GemmTileShape::new(16, 32, 16))
+                .with_b_load_order(GemmBTileLoadOrder::KContiguous),
+        );
+
+        let emitted = store
+            .emit_metadata(&candidate)
+            .expect("artifact store should write stride-order metadata manifest");
+        let manifest_text = fs::read_to_string(&emitted.paths.manifest_path)
+            .expect("generated manifest should be readable");
+        let manifest: Value =
+            serde_json::from_str(&manifest_text).expect("manifest should be valid JSON");
+
+        assert_eq!(
+            manifest["materialization"]["symbol_hint"].as_str(),
+            Some("gemm_f32_bf16_tile_16x32x16_bk")
+        );
+        assert_eq!(manifest["schedule"][1]["op"].as_str(), Some("stride-order"));
+        assert_eq!(manifest["schedule"][1]["axes"][0].as_u64(), Some(2));
+        assert_eq!(manifest["schedule"][1]["axes"][1].as_u64(), Some(1));
 
         remove_test_generated_root(&root);
     }
@@ -1805,6 +1958,47 @@ mod tests {
     }
 
     #[test]
+    fn gemm_search_accepts_external_measured_scores_across_stride_order_depth() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let result = beam_search_metadata_with_scorer(
+            &problem,
+            BeamSearchConfig {
+                beam_width: 4,
+                max_depth: 3,
+                require_launchable: false,
+            },
+            |candidate| {
+                let plan = schedule_gemm_plan(&candidate.schedule)?;
+                let score = if plan.tile == GemmTileShape::new(16, 32, 16)
+                    && plan.reduce_unroll == 4
+                    && plan.b_load_order == GemmBTileLoadOrder::KContiguous
+                {
+                    0.0
+                } else if plan.tile == GemmTileShape::new(16, 32, 16)
+                    && (plan.reduce_unroll == 4
+                        || plan.b_load_order == GemmBTileLoadOrder::KContiguous)
+                {
+                    10.0
+                } else {
+                    1000.0
+                        + f64::from(plan.tile.m + plan.tile.n + plan.tile.k)
+                        + f64::from(plan.reduce_unroll)
+                };
+                SearchScore::measured(score)
+            },
+        );
+        let best = result
+            .best
+            .expect("GEMM search should keep the externally best stride-order descriptor");
+        let plan = schedule_gemm_plan(&best.schedule).expect("best candidate should have a plan");
+
+        assert_eq!(plan.tile, GemmTileShape::new(16, 32, 16));
+        assert_eq!(plan.reduce_unroll, 4);
+        assert_eq!(plan.b_load_order, GemmBTileLoadOrder::KContiguous);
+        assert_eq!(best.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u4_bk");
+    }
+
+    #[test]
     fn gemm_search_accepts_external_measured_scores() {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let result = beam_search_metadata_with_scorer(
@@ -1840,8 +2034,8 @@ mod tests {
         let best = result
             .best
             .expect("GEMM search should keep the existing tile");
-        assert_eq!(result.explored, 7);
-        assert_eq!(result.rejected, 6);
+        assert_eq!(result.explored, 8);
+        assert_eq!(result.rejected, 7);
         assert_eq!(
             schedule_gemm_tile(&best.schedule),
             Some(GemmTileShape::new(16, 16, 16))
