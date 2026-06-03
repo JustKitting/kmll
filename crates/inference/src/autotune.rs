@@ -14,7 +14,8 @@ pub use nn_rust_profiling::{
     OptimizationActionMaterialization as KernelActionMaterialization,
     OptimizationActionOp as KernelScheduleActionOp, OptimizationActionSpec as KernelScheduleAction,
     OptimizationCandidateSpec, OptimizationScore as SearchScore,
-    OptimizationScoreSource as SearchScoreSource, OptimizationTiming,
+    OptimizationScoreSource as SearchScoreSource, OptimizationSearchConfig,
+    OptimizationSearchReport, OptimizationTiming,
 };
 use serde_json::{Value, json};
 
@@ -163,6 +164,7 @@ impl KernelCandidateMetadata {
             self.launch.clone(),
             self.operation.clone(),
         )
+        .with_launchable(self.is_launchable())
         .with_action_trace(self.action_trace.clone())
         .with_score(self.score)
     }
@@ -317,6 +319,31 @@ impl KernelArtifactStore {
         }
     }
 
+    pub fn search_report_path_for(&self, report: &OptimizationSearchReport) -> PathBuf {
+        self.root
+            .join("search-reports")
+            .join(sanitize_path_component(&report.family))
+            .join(format!("{}.json", search_report_key(report).hex()))
+    }
+
+    pub fn emit_search_report(
+        &self,
+        report: &OptimizationSearchReport,
+    ) -> Result<EmittedSearchReport, KernelGenerationError> {
+        let path = self.search_report_path_for(report);
+        fs::create_dir_all(
+            path.parent()
+                .expect("search report path should have a parent directory"),
+        )?;
+        let report_json = report.to_json_string();
+        fs::write(&path, report_json.as_bytes())?;
+        Ok(EmittedSearchReport {
+            report_key: search_report_key(report),
+            report_path: path,
+            report_bytes: report_json.len(),
+        })
+    }
+
     pub fn emit_metadata(
         &self,
         candidate: &KernelCandidateMetadata,
@@ -383,6 +410,13 @@ pub struct EmittedKernelMetadata {
     pub artifact_key: KernelMetadataKey,
     pub paths: KernelArtifactPaths,
     pub manifest_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmittedSearchReport {
+    pub report_key: KernelMetadataKey,
+    pub report_path: PathBuf,
+    pub report_bytes: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -492,6 +526,32 @@ pub struct BeamSearchResult {
     pub beam: Vec<KernelCandidateMetadata>,
     pub explored: usize,
     pub rejected: usize,
+}
+
+impl BeamSearchResult {
+    pub fn optimization_report(
+        &self,
+        family: impl Into<String>,
+        config: BeamSearchConfig,
+    ) -> OptimizationSearchReport {
+        OptimizationSearchReport::new(
+            family,
+            OptimizationSearchConfig::new(
+                config.beam_width,
+                config.max_depth,
+                config.require_launchable,
+            ),
+            self.explored,
+            self.rejected,
+            self.best
+                .as_ref()
+                .map(KernelCandidateMetadata::optimization_spec),
+            self.beam
+                .iter()
+                .map(KernelCandidateMetadata::optimization_spec)
+                .collect(),
+        )
+    }
 }
 
 pub trait KernelMetadataSearchProblem {
@@ -2050,6 +2110,132 @@ fn metadata_key(
     KernelMetadataKey(state)
 }
 
+fn search_report_key(report: &OptimizationSearchReport) -> KernelMetadataKey {
+    let mut state = FNV_OFFSET;
+    state = hash_str(state, "optimization-search-report");
+    state = hash_str(state, &report.family);
+    state = hash_u64(state, report.config.beam_width as u64);
+    state = hash_u64(state, report.config.max_depth as u64);
+    state = hash_u64(state, u64::from(report.config.require_launchable));
+    state = hash_u64(state, report.explored as u64);
+    state = hash_u64(state, report.rejected as u64);
+    if let Some(best) = &report.best {
+        state = hash_optimization_candidate(state, best);
+    } else {
+        state = hash_str(state, "no-best");
+    }
+    for candidate in &report.beam {
+        state = hash_optimization_candidate(state, candidate);
+    }
+    KernelMetadataKey(state)
+}
+
+fn hash_optimization_candidate(mut state: u64, candidate: &OptimizationCandidateSpec) -> u64 {
+    state = hash_str(state, &candidate.family);
+    state = hash_str(state, &candidate.artifact_key);
+    state = hash_str(state, &candidate.generator);
+    state = hash_u64(state, u64::from(candidate.launchable));
+    state = hash_str(state, &candidate.launch.kernel);
+    state = hash_u64(state, candidate.launch.grid_dim.x as u64);
+    state = hash_u64(state, candidate.launch.grid_dim.y as u64);
+    state = hash_u64(state, candidate.launch.grid_dim.z as u64);
+    state = hash_u64(state, candidate.launch.block_dim.x as u64);
+    state = hash_u64(state, candidate.launch.block_dim.y as u64);
+    state = hash_u64(state, candidate.launch.block_dim.z as u64);
+    state = hash_u64(state, candidate.launch.shared_mem_bytes as u64);
+    state = hash_operation_spec(state, &candidate.operation);
+    for action in &candidate.action_trace {
+        state = hash_str(state, action.op.label());
+        state = hash_u64(state, action.axis.unwrap_or(u8::MAX) as u64);
+        state = match &action.arg {
+            KernelScheduleActionArg::Factor(factor) => {
+                let state = hash_str(state, "factor");
+                hash_u64(state, *factor as u64)
+            }
+            KernelScheduleActionArg::Tile3d { m, n, k } => {
+                let mut state = hash_str(state, "tile-3d");
+                state = hash_u64(state, *m as u64);
+                state = hash_u64(state, *n as u64);
+                hash_u64(state, *k as u64)
+            }
+            KernelScheduleActionArg::AxisOrder(axes) => {
+                let mut state = hash_str(state, "axis-order");
+                for axis in axes {
+                    state = hash_u64(state, *axis as u64);
+                }
+                state
+            }
+        };
+        state = hash_str(state, action.materialization.label());
+    }
+    if let Some(score) = candidate.score {
+        state = hash_str(state, score.source.label());
+        state = hash_u64(state, score.value.to_bits());
+        if let Some(timing) = score.timing {
+            state = hash_str(state, timing.source.label());
+            state = hash_u64(state, timing.warmup_count as u64);
+            state = hash_u64(
+                state,
+                timing.selected.as_nanos_u128().min(u64::MAX as u128) as u64,
+            );
+            state = hash_u64(state, timing.samples.count as u64);
+            state = hash_u64(state, timing.samples.mean.to_bits());
+            state = hash_u64(state, timing.samples.median.to_bits());
+            state = hash_u64(state, timing.samples.min.to_bits());
+            state = hash_u64(state, timing.samples.max.to_bits());
+        }
+    } else {
+        state = hash_str(state, "no-score");
+    }
+    state
+}
+
+fn hash_operation_spec(mut state: u64, operation: &TypedOperationSpec) -> u64 {
+    state = hash_str(state, &operation.name);
+    state = hash_str(state, operation.kind.label());
+    state = hash_str(state, operation.route.label());
+    state = hash_tensor_specs(state, "inputs", &operation.inputs);
+    state = hash_tensor_specs(state, "outputs", &operation.outputs);
+    if let Some(launch) = &operation.launch {
+        state = hash_str(state, "operation-launch");
+        state = hash_str(state, &launch.kernel);
+        state = hash_u64(state, launch.grid_dim.x as u64);
+        state = hash_u64(state, launch.grid_dim.y as u64);
+        state = hash_u64(state, launch.grid_dim.z as u64);
+        state = hash_u64(state, launch.block_dim.x as u64);
+        state = hash_u64(state, launch.block_dim.y as u64);
+        state = hash_u64(state, launch.block_dim.z as u64);
+        state = hash_u64(state, launch.shared_mem_bytes as u64);
+    } else {
+        state = hash_str(state, "no-operation-launch");
+    }
+    state
+}
+
+fn hash_tensor_specs(mut state: u64, label: &str, specs: &[TensorTypeSpec]) -> u64 {
+    state = hash_str(state, label);
+    state = hash_u64(state, specs.len() as u64);
+    for spec in specs {
+        state = hash_tensor_spec(state, spec);
+    }
+    state
+}
+
+fn hash_tensor_spec(mut state: u64, spec: &TensorTypeSpec) -> u64 {
+    state = hash_str(state, spec.dtype.label());
+    state = hash_str(state, spec.accumulator.label());
+    state = hash_u64(state, spec.shape.len() as u64);
+    for dim in &spec.shape {
+        state = hash_u64(state, *dim as u64);
+    }
+    if let Some(layout) = &spec.layout {
+        state = hash_str(state, layout);
+    } else {
+        state = hash_str(state, "no-layout");
+    }
+    state
+}
+
 fn hash_transform(mut state: u64, transform: &ScheduleTransform) -> u64 {
     match transform {
         ScheduleTransform::Split { axis, factor } => {
@@ -2316,6 +2502,7 @@ mod tests {
         assert_eq!(spec.family, "matvec-bf16-row-major");
         assert_eq!(spec.artifact_key, candidate.artifact_key().hex());
         assert_eq!(spec.generator, "row-major-matvec-generator");
+        assert!(!spec.launchable);
         assert_eq!(spec.launch.kernel, "matvec_bf16_rows8");
         assert_eq!(spec.operation.kind, OperationKind::Matvec);
         assert_eq!(spec.action_trace, candidate.action_trace);
@@ -2762,6 +2949,86 @@ mod tests {
             manifest["score"]["timing"]["samples"]["count"].as_u64(),
             Some(3)
         );
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn artifact_store_writes_search_report_metadata_without_kernel_source() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+        let problem = MatvecSearchProblem::bf16_row_major(128, 256);
+        let config = BeamSearchConfig {
+            beam_width: 4,
+            max_depth: 2,
+            require_launchable: false,
+        };
+        let result = beam_search_metadata_with_scorer(&problem, config, |candidate| {
+            let plan = schedule_matvec_plan(&candidate.schedule)?;
+            let score = f64::from(8 - plan.rows.rows_per_block()) * 10.0
+                + f64::from(8 - plan.reduce_unroll);
+            SearchScore::measured(score)
+        });
+        let report = result.optimization_report("matvec-bf16-row-major", config);
+
+        let emitted = store
+            .emit_search_report(&report)
+            .expect("artifact store should write compact search report");
+
+        assert!(emitted.report_path.starts_with(store.root()));
+        assert!(
+            emitted
+                .report_path
+                .components()
+                .any(|component| component.as_os_str() == "search-reports")
+        );
+        assert!(emitted.report_bytes > 0);
+        assert!(
+            !emitted
+                .report_path
+                .with_file_name("standalone-crate")
+                .exists()
+        );
+
+        let report_text =
+            fs::read_to_string(&emitted.report_path).expect("search report should be readable");
+        let report_json: Value =
+            serde_json::from_str(&report_text).expect("search report should be valid JSON");
+
+        assert_eq!(
+            report_json["family"].as_str(),
+            Some("matvec-bf16-row-major")
+        );
+        assert_eq!(report_json["config"]["beam_width"].as_u64(), Some(4));
+        assert_eq!(
+            report_json["config"]["require_launchable"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(report_json["best"]["launchable"].as_bool(), Some(false));
+        assert_eq!(
+            report_json["best"]["launch"]["kernel"].as_str(),
+            Some("matvec_bf16_rows8_u8")
+        );
+        assert_eq!(
+            report_json["best"]["action_trace"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            report_json["best"]["action_trace"][1]["op"].as_str(),
+            Some("unroll")
+        );
+        assert_eq!(
+            report_json["best"]["score"]["source"].as_str(),
+            Some("measured")
+        );
+        assert!(
+            report_json["beam"]
+                .as_array()
+                .is_some_and(|beam| !beam.is_empty())
+        );
+        assert!(!report_text.contains("#[kernel]"));
+        assert!(!report_text.contains("pub fn matvec_bf16"));
+        assert!(!report_text.contains("pub struct Bf16"));
 
         remove_test_generated_root(&root);
     }

@@ -524,6 +524,14 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
                 emitted.paths.manifest_path.display(),
                 emitted.manifest_bytes
             );
+            let report = result.optimization_report("gemm-f32-bf16-row-col-row", config);
+            let emitted_report = store.emit_search_report(&report)?;
+            println!(
+                "emitted_search_report report_key={} report_path={} report_bytes={}",
+                emitted_report.report_key.hex(),
+                emitted_report.report_path.display(),
+                emitted_report.report_bytes
+            );
         }
         if emit_crate {
             let emitted_crate = store.emit_standalone_crate(best, &GemmRustCudaGenerator)?;
@@ -738,6 +746,14 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
                 emitted.artifact_key.hex(),
                 emitted.paths.manifest_path.display(),
                 emitted.manifest_bytes
+            );
+            let report = result.optimization_report("matvec-bf16-row-major", config);
+            let emitted_report = store.emit_search_report(&report)?;
+            println!(
+                "emitted_search_report report_key={} report_path={} report_bytes={}",
+                emitted_report.report_key.hex(),
+                emitted_report.report_path.display(),
+                emitted_report.report_bytes
             );
         }
         if emit_crate {

@@ -543,6 +543,7 @@ pub struct OptimizationCandidateSpec {
     pub family: String,
     pub artifact_key: String,
     pub generator: String,
+    pub launchable: bool,
     pub launch: CudaLaunchSpec,
     pub operation: TypedOperationSpec,
     pub action_trace: Vec<OptimizationActionSpec>,
@@ -561,11 +562,17 @@ impl OptimizationCandidateSpec {
             family: family.into(),
             artifact_key: artifact_key.into(),
             generator: generator.into(),
+            launchable: true,
             launch,
             operation,
             action_trace: Vec::new(),
             score: None,
         }
+    }
+
+    pub fn with_launchable(mut self, launchable: bool) -> Self {
+        self.launchable = launchable;
+        self
     }
 
     pub fn with_action_trace(mut self, action_trace: Vec<OptimizationActionSpec>) -> Self {
@@ -576,6 +583,84 @@ impl OptimizationCandidateSpec {
     pub fn with_score(mut self, score: Option<OptimizationScore>) -> Self {
         self.score = score;
         self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptimizationSearchConfig {
+    pub beam_width: usize,
+    pub max_depth: usize,
+    pub require_launchable: bool,
+}
+
+impl OptimizationSearchConfig {
+    pub const fn new(beam_width: usize, max_depth: usize, require_launchable: bool) -> Self {
+        Self {
+            beam_width,
+            max_depth,
+            require_launchable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OptimizationSearchReport {
+    pub family: String,
+    pub config: OptimizationSearchConfig,
+    pub explored: usize,
+    pub rejected: usize,
+    pub best: Option<OptimizationCandidateSpec>,
+    pub beam: Vec<OptimizationCandidateSpec>,
+}
+
+impl OptimizationSearchReport {
+    pub fn new(
+        family: impl Into<String>,
+        config: OptimizationSearchConfig,
+        explored: usize,
+        rejected: usize,
+        best: Option<OptimizationCandidateSpec>,
+        beam: Vec<OptimizationCandidateSpec>,
+    ) -> Self {
+        Self {
+            family: family.into(),
+            config,
+            explored,
+            rejected,
+            best,
+            beam,
+        }
+    }
+
+    pub fn push_json(&self, out: &mut String, indent: usize) {
+        push_indent(out, indent);
+        out.push_str("{\n");
+        push_json_field_u32(out, "schema_version", 1, indent + 2, true);
+        push_json_field_string(out, "family", &self.family, indent + 2, true);
+        push_optimization_search_config_json(out, "config", self.config, indent + 2, true);
+        push_json_field_usize(out, "explored", self.explored, indent + 2, true);
+        push_json_field_usize(out, "rejected", self.rejected, indent + 2, true);
+        push_optimization_candidate_field_json(out, "best", self.best.as_ref(), indent + 2, true);
+        push_indent(out, indent + 2);
+        out.push_str("\"beam\": [\n");
+        for (index, candidate) in self.beam.iter().enumerate() {
+            if index > 0 {
+                out.push_str(",\n");
+            }
+            push_optimization_candidate_json(out, candidate, indent + 4);
+        }
+        out.push('\n');
+        push_indent(out, indent + 2);
+        out.push_str("]\n");
+        push_indent(out, indent);
+        out.push('}');
+    }
+
+    pub fn to_json_string(&self) -> String {
+        let mut out = String::new();
+        self.push_json(&mut out, 0);
+        out.push('\n');
+        out
     }
 }
 
@@ -1438,6 +1523,218 @@ fn push_json_field_operation_spec(
     push_optional_comma(out, comma);
 }
 
+fn push_optimization_search_config_json(
+    out: &mut String,
+    name: &str,
+    config: OptimizationSearchConfig,
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": {\n");
+    push_json_field_usize(out, "beam_width", config.beam_width, indent + 2, true);
+    push_json_field_usize(out, "max_depth", config.max_depth, indent + 2, true);
+    push_json_field_bool(
+        out,
+        "require_launchable",
+        config.require_launchable,
+        indent + 2,
+        false,
+    );
+    push_indent(out, indent);
+    out.push('}');
+    push_optional_comma(out, comma);
+}
+
+fn push_optimization_candidate_field_json(
+    out: &mut String,
+    name: &str,
+    candidate: Option<&OptimizationCandidateSpec>,
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": ");
+    if let Some(candidate) = candidate {
+        out.push('\n');
+        push_optimization_candidate_json(out, candidate, indent);
+    } else {
+        out.push_str("null");
+    }
+    push_optional_comma(out, comma);
+}
+
+fn push_optimization_candidate_json(
+    out: &mut String,
+    candidate: &OptimizationCandidateSpec,
+    indent: usize,
+) {
+    push_indent(out, indent);
+    out.push_str("{\n");
+    push_json_field_string(out, "family", &candidate.family, indent + 2, true);
+    push_json_field_string(
+        out,
+        "artifact_key",
+        &candidate.artifact_key,
+        indent + 2,
+        true,
+    );
+    push_json_field_string(out, "generator", &candidate.generator, indent + 2, true);
+    push_json_field_bool(out, "launchable", candidate.launchable, indent + 2, true);
+    push_json_field_launch_spec(out, "launch", Some(&candidate.launch), indent + 2, true);
+    push_json_field_operation_spec(
+        out,
+        "operation",
+        Some(&candidate.operation),
+        indent + 2,
+        true,
+    );
+    push_indent(out, indent + 2);
+    out.push_str("\"action_trace\": [\n");
+    for (index, action) in candidate.action_trace.iter().enumerate() {
+        if index > 0 {
+            out.push_str(",\n");
+        }
+        push_optimization_action_json(out, action, indent + 4);
+    }
+    out.push('\n');
+    push_indent(out, indent + 2);
+    out.push_str("],\n");
+    push_optimization_score_json(out, "score", candidate.score, indent + 2, false);
+    push_indent(out, indent);
+    out.push('}');
+}
+
+fn push_optimization_action_json(out: &mut String, action: &OptimizationActionSpec, indent: usize) {
+    push_indent(out, indent);
+    out.push_str("{\n");
+    push_json_field_string(out, "op", action.op.label(), indent + 2, true);
+    push_json_field_optional_u8(out, "axis", action.axis, indent + 2, true);
+    push_optimization_action_arg_json(out, "arg", &action.arg, indent + 2, true);
+    push_json_field_string(
+        out,
+        "materialization",
+        action.materialization.label(),
+        indent + 2,
+        false,
+    );
+    push_indent(out, indent);
+    out.push('}');
+}
+
+fn push_optimization_action_arg_json(
+    out: &mut String,
+    name: &str,
+    arg: &OptimizationActionArg,
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": ");
+    match arg {
+        OptimizationActionArg::Factor(factor) => {
+            out.push_str("{\n");
+            push_json_field_string(out, "kind", "factor", indent + 2, true);
+            push_json_field_u32(out, "value", *factor, indent + 2, false);
+            push_indent(out, indent);
+            out.push('}');
+        }
+        OptimizationActionArg::Tile3d { m, n, k } => {
+            out.push_str("{\n");
+            push_json_field_string(out, "kind", "tile-3d", indent + 2, true);
+            push_json_field_u32(out, "m", *m, indent + 2, true);
+            push_json_field_u32(out, "n", *n, indent + 2, true);
+            push_json_field_u32(out, "k", *k, indent + 2, false);
+            push_indent(out, indent);
+            out.push('}');
+        }
+        OptimizationActionArg::AxisOrder(axes) => {
+            out.push_str("{\n");
+            push_json_field_string(out, "kind", "axis-order", indent + 2, true);
+            push_json_field_u8_array(out, "axes", axes, indent + 2, false);
+            push_indent(out, indent);
+            out.push('}');
+        }
+    }
+    push_optional_comma(out, comma);
+}
+
+fn push_optimization_score_json(
+    out: &mut String,
+    name: &str,
+    score: Option<OptimizationScore>,
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": ");
+    if let Some(score) = score {
+        out.push_str("{\n");
+        push_json_field_f64(out, "value", score.value, indent + 2, true);
+        push_json_field_string(out, "source", score.source.label(), indent + 2, true);
+        push_optimization_timing_json(out, "timing", score.timing, indent + 2, false);
+        push_indent(out, indent);
+        out.push('}');
+    } else {
+        out.push_str("null");
+    }
+    push_optional_comma(out, comma);
+}
+
+fn push_optimization_timing_json(
+    out: &mut String,
+    name: &str,
+    timing: Option<OptimizationTiming>,
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": ");
+    if let Some(timing) = timing {
+        out.push_str("{\n");
+        push_json_field_string(out, "source", timing.source.label(), indent + 2, true);
+        push_json_field_usize(out, "warmup_count", timing.warmup_count, indent + 2, true);
+        push_json_field_f64(
+            out,
+            "selected_seconds",
+            timing.selected.as_seconds_f64(),
+            indent + 2,
+            true,
+        );
+        push_sample_stats_json(out, "samples", timing.samples, indent + 2, false);
+        push_indent(out, indent);
+        out.push('}');
+    } else {
+        out.push_str("null");
+    }
+    push_optional_comma(out, comma);
+}
+
+fn push_sample_stats_json(
+    out: &mut String,
+    name: &str,
+    samples: SampleStats,
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": {\n");
+    push_json_field_usize(out, "count", samples.count, indent + 2, true);
+    push_json_field_f64(out, "mean", samples.mean, indent + 2, true);
+    push_json_field_f64(out, "median", samples.median, indent + 2, true);
+    push_json_field_f64(out, "min", samples.min, indent + 2, true);
+    push_json_field_f64(out, "max", samples.max, indent + 2, false);
+    push_indent(out, indent);
+    out.push('}');
+    push_optional_comma(out, comma);
+}
+
 fn push_json_field_tensor_specs(
     out: &mut String,
     name: &str,
@@ -1563,10 +1860,35 @@ fn push_json_field_usize(out: &mut String, name: &str, value: usize, indent: usi
     push_optional_comma(out, comma);
 }
 
+fn push_json_field_bool(out: &mut String, name: &str, value: bool, indent: usize, comma: bool) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(if value { ": true" } else { ": false" });
+    push_optional_comma(out, comma);
+}
+
 fn push_json_field_optional_usize(
     out: &mut String,
     name: &str,
     value: Option<usize>,
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": ");
+    if let Some(value) = value {
+        out.push_str(&value.to_string());
+    } else {
+        out.push_str("null");
+    }
+    push_optional_comma(out, comma);
+}
+
+fn push_json_field_optional_u8(
+    out: &mut String,
+    name: &str,
+    value: Option<u8>,
     indent: usize,
     comma: bool,
 ) {
@@ -1590,6 +1912,26 @@ fn push_usize_array(out: &mut String, values: &[usize]) {
         out.push_str(&value.to_string());
     }
     out.push(']');
+}
+
+fn push_json_field_u8_array(
+    out: &mut String,
+    name: &str,
+    values: &[u8],
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": [");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&value.to_string());
+    }
+    out.push(']');
+    push_optional_comma(out, comma);
 }
 
 fn push_json_string(out: &mut String, value: &str) {
@@ -1728,15 +2070,69 @@ mod tests {
             launch,
             operation,
         )
+        .with_launchable(false)
         .with_action_trace(vec![action])
         .with_score(score);
 
+        assert!(!candidate.launchable);
         assert_eq!(candidate.action_trace[0].op, OptimizationActionOp::Split);
         assert_eq!(
             candidate.score.unwrap().source,
             OptimizationScoreSource::Measured
         );
         assert_eq!(candidate.score.unwrap().timing.unwrap().samples.count, 3);
+    }
+
+    #[test]
+    fn optimization_search_report_serializes_compact_metadata() {
+        let launch = CudaLaunchSpec::new("matvec_bf16_rows8_u8", (16, 1, 1), (256, 1, 1), 0);
+        let operation = TypedOperationSpec::new(
+            "row-major-warp-rows8-u8::bf16",
+            OperationKind::Matvec,
+            OperationRoute::CudaKernel,
+        )
+        .with_launch(launch.clone());
+        let score = OptimizationScore::measured(0.000003);
+        let candidate = OptimizationCandidateSpec::new(
+            "matvec-bf16-row-major",
+            "def456",
+            "row-major-matvec-generator",
+            launch,
+            operation,
+        )
+        .with_launchable(false)
+        .with_action_trace(vec![
+            OptimizationActionSpec::split(
+                0,
+                8,
+                OptimizationActionMaterialization::DeferredGenerated,
+            ),
+            OptimizationActionSpec::unroll(1, 8),
+        ])
+        .with_score(score);
+        let report = OptimizationSearchReport::new(
+            "matvec-bf16-row-major",
+            OptimizationSearchConfig::new(8, 2, false),
+            12,
+            3,
+            Some(candidate.clone()),
+            vec![candidate],
+        );
+
+        let json = report.to_json_string();
+
+        assert!(json.contains("\"family\": \"matvec-bf16-row-major\""));
+        assert!(json.contains("\"beam_width\": 8"));
+        assert!(json.contains("\"require_launchable\": false"));
+        assert!(json.contains("\"launchable\": false"));
+        assert!(json.contains("\"action_trace\""));
+        assert!(json.contains("\"op\": \"split\""));
+        assert!(json.contains("\"op\": \"unroll\""));
+        assert!(json.contains("\"score\""));
+        assert!(json.contains("\"source\": \"measured\""));
+        assert!(!json.contains("#[kernel]"));
+        assert!(!json.contains("pub fn"));
+        assert!(!json.contains("pub struct Bf16"));
     }
 
     #[test]
