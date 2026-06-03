@@ -225,7 +225,7 @@ fn catalog_by_opcode(report: &SassCoverageReport) -> BTreeMap<SassOpcode, &SassO
     report
         .opcode_catalog
         .iter()
-        .map(|entry| (SassOpcode::new(entry.opcode.clone()), entry))
+        .map(|entry| (entry.opcode.clone(), entry))
         .collect()
 }
 

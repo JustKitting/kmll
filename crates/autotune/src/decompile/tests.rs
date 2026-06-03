@@ -1474,7 +1474,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     let mystery_catalog = report
         .opcode_catalog
         .iter()
-        .find(|entry| entry.opcode == "MYSTERY")
+        .find(|entry| entry.opcode == SassOpcode::new("MYSTERY"))
         .expect("unsupported opcode should be catalogued");
     assert_eq!(mystery_catalog.support, SassOpcodeSupport::Unsupported);
     assert_eq!(
@@ -1494,7 +1494,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     let iadd_catalog = report
         .opcode_catalog
         .iter()
-        .find(|entry| entry.opcode == "IADD")
+        .find(|entry| entry.opcode == SassOpcode::new("IADD"))
         .expect("IADD should be catalogued");
     assert_eq!(iadd_catalog.support, SassOpcodeSupport::Mapped);
     assert!(iadd_catalog.known);
@@ -1519,7 +1519,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     let hmma_catalog = report
         .opcode_catalog
         .iter()
-        .find(|entry| entry.opcode == "HMMA")
+        .find(|entry| entry.opcode == SassOpcode::new("HMMA"))
         .expect("known tensor-core opcode should be catalogued without local observation");
     assert!(hmma_catalog.known);
     assert!(!hmma_catalog.observed);
@@ -1544,7 +1544,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     let hmma_probe = report
         .opcode_probe_targets
         .iter()
-        .find(|target| target.opcode == "HMMA")
+        .find(|target| target.opcode == SassOpcode::new("HMMA"))
         .expect("known unobserved HMMA should be a probe target");
     assert_eq!(hmma_probe.priority, 90);
     assert!(hmma_probe.locally_mapped);
@@ -1563,7 +1563,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         !report
             .opcode_probe_targets
             .iter()
-            .any(|target| target.opcode == "IADD")
+            .any(|target| target.opcode == SassOpcode::new("IADD"))
     );
     assert!(
         report

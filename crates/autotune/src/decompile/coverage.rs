@@ -150,7 +150,7 @@ pub struct SassSemanticPatternCount {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassOpcodeProbeTarget {
-    pub opcode: String,
+    pub opcode: SassOpcode,
     pub priority: u8,
     pub architectures: Vec<String>,
     pub classes: Vec<String>,
@@ -163,7 +163,7 @@ pub struct SassOpcodeProbeTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassOpcodeCatalogEntry {
-    pub opcode: String,
+    pub opcode: SassOpcode,
     pub known: bool,
     pub observed: bool,
     pub locally_mapped: bool,
@@ -280,7 +280,7 @@ struct OpcodeCatalogBuilder {
 }
 
 impl OpcodeCatalogBuilder {
-    fn into_entry(self, opcode: String) -> SassOpcodeCatalogEntry {
+    fn into_entry(self, opcode: SassOpcode) -> SassOpcodeCatalogEntry {
         let observed = self.instruction_count > 0;
         let support = SassOpcodeSupport::from_counts(
             self.locally_mapped,
@@ -1007,7 +1007,7 @@ fn opcode_catalog_entries(
 ) -> Vec<SassOpcodeCatalogEntry> {
     opcode_catalog
         .into_iter()
-        .map(|(opcode, entry)| entry.into_entry(opcode.to_string()))
+        .map(|(opcode, entry)| entry.into_entry(opcode))
         .collect()
 }
 
@@ -1018,7 +1018,7 @@ fn opcode_probe_targets(
         .iter()
         .filter(|(_, entry)| entry.known && entry.instruction_count == 0)
         .map(|(opcode, entry)| SassOpcodeProbeTarget {
-            opcode: opcode.to_string(),
+            opcode: opcode.clone(),
             priority: opcode_probe_priority(entry),
             architectures: entry.architectures.iter().cloned().collect(),
             classes: entry.classes.iter().map(ToString::to_string).collect(),
@@ -1597,7 +1597,7 @@ fn render_opcode_catalog_tsv(report: &SassCoverageReport) -> String {
         writeln!(
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            tsv(&entry.opcode),
+            tsv(&entry.opcode.to_string()),
             entry.known,
             entry.observed,
             entry.locally_mapped,
@@ -1629,7 +1629,7 @@ fn render_opcode_probe_targets_tsv(report: &SassCoverageReport) -> String {
         writeln!(
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            tsv(&target.opcode),
+            tsv(&target.opcode.to_string()),
             target.priority,
             target.locally_mapped,
             tsv(&target.architectures.join(",")),
