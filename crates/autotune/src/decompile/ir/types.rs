@@ -67,16 +67,16 @@ pub enum KernelIrOpKind {
     },
     LoadConst {
         dst: String,
-        source: String,
+        source: MemoryAddress,
     },
     Load {
         dst: String,
-        address: String,
+        address: MemoryAddress,
         space: MemorySpace,
         access: MemoryAccessInfo,
     },
     Store {
-        address: String,
+        address: MemoryAddress,
         value: String,
         space: MemorySpace,
         access: MemoryAccessInfo,
@@ -222,6 +222,108 @@ impl fmt::Display for MemorySpace {
 pub struct MemoryAccessInfo {
     pub width_bits: Option<u32>,
     pub modifiers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MemoryAddress {
+    pub kind: MemoryAddressKind,
+    pub raw: String,
+}
+
+impl MemoryAddress {
+    pub fn constant(raw: String, bank: String, offset: String) -> Self {
+        Self {
+            kind: MemoryAddressKind::Constant { bank, offset },
+            raw,
+        }
+    }
+
+    pub fn descriptor(
+        raw: String,
+        descriptor: String,
+        address: String,
+        address_width: Option<u32>,
+        offset: Option<String>,
+    ) -> Self {
+        Self {
+            kind: MemoryAddressKind::Descriptor {
+                descriptor,
+                address,
+                address_width,
+                offset,
+            },
+            raw,
+        }
+    }
+
+    pub fn indexed(raw: String, base: String, offset: Option<String>) -> Self {
+        Self {
+            kind: MemoryAddressKind::Indexed { base, offset },
+            raw,
+        }
+    }
+
+    pub fn raw(raw: String) -> Self {
+        Self {
+            kind: MemoryAddressKind::Raw,
+            raw,
+        }
+    }
+
+    pub fn base(&self) -> Option<&str> {
+        match &self.kind {
+            MemoryAddressKind::Constant { bank, .. } => Some(bank),
+            MemoryAddressKind::Descriptor { descriptor, .. } => Some(descriptor),
+            MemoryAddressKind::Indexed { base, .. } => Some(base),
+            MemoryAddressKind::Raw => None,
+        }
+    }
+
+    pub fn offset(&self) -> Option<&str> {
+        match &self.kind {
+            MemoryAddressKind::Constant { offset, .. } => Some(offset),
+            MemoryAddressKind::Descriptor { offset, .. }
+            | MemoryAddressKind::Indexed { offset, .. } => offset.as_deref(),
+            MemoryAddressKind::Raw => None,
+        }
+    }
+
+    pub fn registers(&self) -> Vec<String> {
+        match &self.kind {
+            MemoryAddressKind::Descriptor {
+                descriptor,
+                address,
+                ..
+            } => vec![descriptor.clone(), address.clone()],
+            MemoryAddressKind::Indexed { base, .. } => vec![base.clone()],
+            MemoryAddressKind::Constant { .. } | MemoryAddressKind::Raw => Vec::new(),
+        }
+    }
+}
+
+impl fmt::Display for MemoryAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MemoryAddressKind {
+    Constant {
+        bank: String,
+        offset: String,
+    },
+    Descriptor {
+        descriptor: String,
+        address: String,
+        address_width: Option<u32>,
+        offset: Option<String>,
+    },
+    Indexed {
+        base: String,
+        offset: Option<String>,
+    },
+    Raw,
 }
 
 impl MemoryAccessInfo {

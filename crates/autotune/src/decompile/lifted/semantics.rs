@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::super::{KernelIrOpKind, MemorySpace};
+use super::super::{KernelIrOpKind, MemoryAddress, MemorySpace};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SassLiftedSemantics {
@@ -14,18 +14,18 @@ pub enum SassLiftedSemantics {
     },
     LoadConst {
         dst: String,
-        source: String,
+        source: MemoryAddress,
     },
     Load {
         space: MemorySpace,
         dst: String,
-        address: String,
+        address: MemoryAddress,
         width_bits: Option<u32>,
         modifiers: Vec<String>,
     },
     Store {
         space: MemorySpace,
-        address: String,
+        address: MemoryAddress,
         value: String,
         width_bits: Option<u32>,
         modifiers: Vec<String>,

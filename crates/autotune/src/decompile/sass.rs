@@ -59,6 +59,10 @@ pub enum SassOperandKind {
         address_width: Option<u32>,
         offset: Option<String>,
     },
+    IndexedMemory {
+        base: String,
+        offset: Option<String>,
+    },
     Label(String),
     Raw,
 }
@@ -356,6 +360,12 @@ fn parse_operand(raw: &str) -> SassOperand {
             },
         };
     }
+    if let Some((base, offset)) = parse_indexed_memory(raw) {
+        return SassOperand {
+            raw: raw.to_string(),
+            kind: SassOperandKind::IndexedMemory { base, offset },
+        };
+    }
     if let Some(label) = parse_label_operand(raw) {
         return SassOperand {
             raw: raw.to_string(),
@@ -407,6 +417,18 @@ fn parse_descriptor_memory(raw: &str) -> Option<(String, String, Option<u32>, Op
         None => (address_part.to_string(), None),
     };
     Some((descriptor.to_string(), address, address_width, offset))
+}
+
+fn parse_indexed_memory(raw: &str) -> Option<(String, Option<String>)> {
+    let (inside, tail) = parse_bracketed(raw)?;
+    if !tail.trim().is_empty() {
+        return None;
+    }
+    let (base, offset) = match inside.split_once('+') {
+        Some((base, offset)) => (base.trim(), Some(offset.trim().to_string())),
+        None => (inside.trim(), None),
+    };
+    (!base.is_empty()).then(|| (base.to_string(), offset))
 }
 
 fn parse_bracketed(text: &str) -> Option<(&str, &str)> {

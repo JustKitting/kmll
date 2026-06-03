@@ -50,7 +50,7 @@ pub use self::{
     },
     ir::{
         KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemoryAccessInfo,
-        MemorySpace, SassMappingConfidence, lift_sass_module,
+        MemoryAddress, MemoryAddressKind, MemorySpace, SassMappingConfidence, lift_sass_module,
     },
     known_opcodes::{KnownSassOpcode, known_sass_opcodes},
     lifted::{

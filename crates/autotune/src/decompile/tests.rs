@@ -1,5 +1,5 @@
 use super::*;
-use std::{env, fs, process, time::SystemTime};
+use std::{collections::BTreeSet, env, fs, process, time::SystemTime};
 
 const SIMPLE_SASS: &str = r#"
         .target sm_120
@@ -292,9 +292,20 @@ fn lift_simple_sass_maps_observed_core_ops() {
         kinds[1],
         KernelIrOpKind::Load {
             space: MemorySpace::Descriptor,
+            address,
             access,
             ..
-        } if access.width_bits.is_none() && access.modifiers.as_slice() == ["E"]
+        } if access.width_bits.is_none()
+            && access.modifiers.as_slice() == ["E"]
+            && matches!(
+                &address.kind,
+                MemoryAddressKind::Descriptor {
+                    descriptor,
+                    address,
+                    address_width: Some(64),
+                    offset: None,
+                } if descriptor == "UR4" && address == "R0"
+            )
     ));
     assert!(matches!(
         kinds[3],
@@ -308,9 +319,20 @@ fn lift_simple_sass_maps_observed_core_ops() {
         kinds[4],
         KernelIrOpKind::Store {
             space: MemorySpace::Descriptor,
+            address,
             access,
             ..
-        } if access.width_bits.is_none() && access.modifiers.as_slice() == ["E"]
+        } if access.width_bits.is_none()
+            && access.modifiers.as_slice() == ["E"]
+            && matches!(
+                &address.kind,
+                MemoryAddressKind::Descriptor {
+                    descriptor,
+                    address,
+                    address_width: Some(64),
+                    offset: None,
+                } if descriptor == "UR8" && address == "R0"
+            )
     ));
     assert!(matches!(
         kinds[5],
@@ -325,6 +347,64 @@ fn lift_simple_sass_maps_observed_core_ops() {
         }
     ));
     assert_eq!(ir.unsupported_instruction_count(), 0);
+}
+
+#[test]
+fn memory_address_ir_is_typed_and_orderable() {
+    const MEMORY_ADDRESS_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.memory_address_fixture,"ax",@progbits
+        .global memory_address_fixture
+memory_address_fixture:
+.text.memory_address_fixture:
+        /*0000*/                   LDC R1, c[0x0][0x37c] ;                      /* 0x0 */
+        /*0010*/                   LD.E.U16 R2, desc[UR4][R0.64+0x4] ;          /* 0x0 */
+        /*0020*/                   LDS R3, [R2+0x40] ;                          /* 0x0 */
+        /*0030*/                   EXIT ;                                       /* 0x0 */
+"#;
+
+    let module = parse_nvidia_sass(MEMORY_ADDRESS_SASS).expect("memory SASS should parse");
+    let ir = lift_sass_module(&module);
+    let mut ordered_addresses = BTreeSet::new();
+
+    for op in &ir.functions[0].ops {
+        match &op.kind {
+            KernelIrOpKind::LoadConst { source, .. }
+            | KernelIrOpKind::Load {
+                address: source, ..
+            }
+            | KernelIrOpKind::Store {
+                address: source, ..
+            } => {
+                ordered_addresses.insert(source.clone());
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(ordered_addresses.len(), 3);
+    assert!(ordered_addresses.iter().any(|address| matches!(
+        &address.kind,
+        MemoryAddressKind::Constant { bank, offset }
+            if bank == "0x0" && offset == "0x37c"
+    )));
+    assert!(ordered_addresses.iter().any(|address| matches!(
+        &address.kind,
+        MemoryAddressKind::Descriptor {
+            descriptor,
+            address: register,
+            address_width: Some(64),
+            offset: Some(offset),
+        } if descriptor == "UR4" && register == "R0" && offset == "0x4"
+    )));
+    assert!(ordered_addresses.iter().any(|address| matches!(
+        &address.kind,
+        MemoryAddressKind::Indexed {
+            base,
+            offset: Some(offset),
+        } if base == "R2" && offset == "0x40"
+    )));
 }
 
 #[test]
@@ -397,7 +477,7 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
             address,
             width_bits,
             modifiers
-        } if dst == "R2" && address == "desc[UR4][R0.64]"
+        } if dst == "R2" && address.raw == "desc[UR4][R0.64]"
             && width_bits.is_none()
             && modifiers.as_slice() == ["E"]
     ));
@@ -437,7 +517,7 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
             value,
             width_bits,
             modifiers
-        } if address == "desc[UR8][R0.64]" && value == "R4"
+        } if address.raw == "desc[UR8][R0.64]" && value == "R4"
             && width_bits.is_none()
             && modifiers.as_slice() == ["E"]
     ));

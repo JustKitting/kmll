@@ -1,6 +1,5 @@
 use super::{
-    super::{KernelIrFunction, KernelIrOp, KernelIrOpKind, MemorySpace},
-    registers::extract_registers,
+    super::{KernelIrFunction, KernelIrOp, KernelIrOpKind, MemoryAddress, MemorySpace},
     types::{SassMemoryAccess, SassMemoryAccessKind},
 };
 
@@ -56,9 +55,8 @@ fn memory_access(
     space: MemorySpace,
     width_bits: Option<u32>,
     value_register: &str,
-    address_expr: &str,
+    address: &MemoryAddress,
 ) -> SassMemoryAccess {
-    let (address_base, offset) = memory_base_and_offset(space, address_expr);
     SassMemoryAccess {
         address: op.address,
         predicate: op.predicate.clone(),
@@ -66,10 +64,10 @@ fn memory_access(
         space,
         width_bits,
         value_register: value_register.to_string(),
-        address_expr: address_expr.to_string(),
-        address_registers: extract_registers(address_expr),
-        address_base,
-        offset,
+        address_expr: address.raw.clone(),
+        address_registers: address.registers(),
+        address_base: address.base().map(str::to_string),
+        offset: address.offset().map(str::to_string),
         source: op.source.clone(),
     }
 }
@@ -82,52 +80,4 @@ fn memory_width_bits(modifiers: &[String]) -> Option<u32> {
             .and_then(|bits| bits.parse::<u32>().ok())
             .or_else(|| modifier.parse::<u32>().ok())
     })
-}
-
-fn memory_base_and_offset(
-    space: MemorySpace,
-    address_expr: &str,
-) -> (Option<String>, Option<String>) {
-    match space {
-        MemorySpace::Descriptor => descriptor_base_and_offset(address_expr),
-        MemorySpace::Constant => constant_base_and_offset(address_expr),
-        _ => (None, offset_after_plus(address_expr)),
-    }
-}
-
-fn descriptor_base_and_offset(address_expr: &str) -> (Option<String>, Option<String>) {
-    let Some(rest) = address_expr.strip_prefix("desc") else {
-        return (None, offset_after_plus(address_expr));
-    };
-    let Some((descriptor, rest)) = bracketed(rest) else {
-        return (None, offset_after_plus(address_expr));
-    };
-    let offset = bracketed(rest)
-        .and_then(|(address, tail)| tail.trim().is_empty().then_some(address))
-        .and_then(offset_after_plus);
-    (Some(descriptor.to_string()), offset)
-}
-
-fn constant_base_and_offset(address_expr: &str) -> (Option<String>, Option<String>) {
-    let Some(rest) = address_expr.strip_prefix('c') else {
-        return (None, offset_after_plus(address_expr));
-    };
-    let Some((bank, rest)) = bracketed(rest) else {
-        return (None, offset_after_plus(address_expr));
-    };
-    let offset = bracketed(rest)
-        .and_then(|(offset, tail)| tail.trim().is_empty().then_some(offset.to_string()));
-    (Some(bank.to_string()), offset)
-}
-
-fn bracketed(text: &str) -> Option<(&str, &str)> {
-    let text = text.strip_prefix('[')?;
-    let end = text.find(']')?;
-    Some((&text[..end], &text[end + 1..]))
-}
-
-fn offset_after_plus(text: &str) -> Option<String> {
-    text.split_once('+')
-        .map(|(_, offset)| offset.trim().to_string())
-        .filter(|offset| !offset.is_empty())
 }

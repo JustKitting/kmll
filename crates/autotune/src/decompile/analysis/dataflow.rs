@@ -360,14 +360,20 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
         }
         KernelIrOpKind::LoadConst { dst, source } => {
             push_registers(dst, &mut defines);
-            push_registers(source, &mut uses);
+            for register in source.registers() {
+                push_registers(&register, &mut uses);
+            }
         }
         KernelIrOpKind::Load { dst, address, .. } => {
             push_registers(dst, &mut defines);
-            push_registers(address, &mut uses);
+            for register in address.registers() {
+                push_registers(&register, &mut uses);
+            }
         }
         KernelIrOpKind::Store { address, value, .. } => {
-            push_registers(address, &mut uses);
+            for register in address.registers() {
+                push_registers(&register, &mut uses);
+            }
             push_registers(value, &mut uses);
         }
         KernelIrOpKind::IntegerAdd { dst, inputs, .. }
