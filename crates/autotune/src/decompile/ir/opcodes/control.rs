@@ -1,5 +1,5 @@
 use super::super::super::sass::SassInstruction;
-use super::super::types::{KernelIrOpKind, SassMappingConfidence};
+use super::super::types::{AggregateOperand, KernelIrOpKind, SassMappingConfidence};
 use super::{
     LiftResult,
     operands::{branch_condition_operand, predicate_condition, target_operand},
@@ -8,7 +8,7 @@ use super::{
 pub(super) fn lift(
     opcode: &str,
     instruction: &SassInstruction,
-    operands: &[String],
+    operands: &[AggregateOperand],
 ) -> Option<LiftResult> {
     Some(match opcode {
         "NOP" => (KernelIrOpKind::NoOp, SassMappingConfidence::LocallyParsed),

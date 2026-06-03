@@ -21,17 +21,18 @@ pub(super) fn predicate_condition(predicate: &SassPredicate) -> PredicateConditi
 
 pub(super) fn lift_kind(instruction: &SassInstruction) -> LiftResult {
     let operands = operands::raw_operands(instruction);
+    let aggregate_operands = operands::aggregate_operands(instruction);
     let opcode = instruction.opcode.as_str();
-    control::lift(opcode, instruction, &operands)
+    control::lift(opcode, instruction, &aggregate_operands)
         .or_else(|| warp::lift(opcode, instruction))
-        .or_else(|| tensor::lift(opcode, &operands))
+        .or_else(|| tensor::lift(opcode, &aggregate_operands))
         .or_else(|| movement::lift(opcode, instruction, &operands))
         .or_else(|| memory::lift(opcode, instruction))
         .or_else(|| math::lift(opcode, instruction, &operands))
         .or_else(|| predicate::lift(opcode, instruction, &operands))
         .or_else(|| bitwise::lift(opcode, &operands))
         .or_else(|| address::lift(opcode, &operands))
-        .or_else(|| sync::lift(opcode, &operands))
+        .or_else(|| sync::lift(opcode, &aggregate_operands))
         .unwrap_or_else(|| unsupported_opcode(instruction))
 }
 

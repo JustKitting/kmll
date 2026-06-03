@@ -1,7 +1,7 @@
-use super::super::types::{KernelIrOpKind, SassMappingConfidence};
+use super::super::types::{AggregateOperand, KernelIrOpKind, SassMappingConfidence};
 use super::LiftResult;
 
-pub(super) fn lift(opcode: &str, operands: &[String]) -> Option<LiftResult> {
+pub(super) fn lift(opcode: &str, operands: &[AggregateOperand]) -> Option<LiftResult> {
     Some(match opcode {
         "BSSY" | "BSYNC" | "BAR" => (
             KernelIrOpKind::Sync {

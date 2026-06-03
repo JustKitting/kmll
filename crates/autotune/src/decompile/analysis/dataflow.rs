@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::{
     super::{KernelIrFunction, KernelIrOp, KernelIrOpKind, RegisterRef},
     cfg::{block_id_for_op_index, predecessors_by_block},
-    registers::{push_register_refs, push_registers},
+    registers::push_register_refs,
     types::{
         SassBasicBlock, SassCfgEdge, SassDataflowOp, SassDefUseEdge, SassLiveRange,
         SassReachingUse, SassSsaValue, SassValueOp,
@@ -412,7 +412,7 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
         | KernelIrOpKind::WarpGroup { operands, .. }
         | KernelIrOpKind::Sync { operands, .. } => {
             for operand in operands {
-                push_registers(operand, &mut uses);
+                push_register_refs(operand.registers(), &mut uses);
             }
         }
         KernelIrOpKind::WarpShuffle {

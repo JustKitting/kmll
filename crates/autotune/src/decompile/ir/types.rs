@@ -4,7 +4,9 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use super::super::sass::{RegisterClass, SassRegister, SassSourcePosition};
+use super::super::sass::{
+    RegisterClass, SassOperand, SassOperandKind, SassRegister, SassSourcePosition,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelIrModule {
@@ -129,21 +131,21 @@ pub enum KernelIrOpKind {
     },
     TensorCoreMma {
         opcode: String,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
         element_type: Option<String>,
         scope: Option<String>,
     },
     TensorCoreMemory {
         opcode: String,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
     },
     TensorMemoryAccess {
         opcode: String,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
     },
     WarpGroup {
         opcode: String,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
     },
     CompareSet {
         dst: RegisterRef,
@@ -158,11 +160,11 @@ pub enum KernelIrOpKind {
     },
     Call {
         target: Option<ControlTarget>,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
     },
     Return {
         target: Option<ControlTarget>,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
     },
     Exit {
         condition: Option<PredicateCondition>,
@@ -193,7 +195,7 @@ pub enum KernelIrOpKind {
     },
     Sync {
         kind: String,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
     },
     NoOp,
     Unsupported {
@@ -275,6 +277,24 @@ impl RegisterRef {
                 | RegisterRefKind::PredicateTrue
                 | RegisterRefKind::UniformPredicateTrue
         )
+    }
+
+    pub fn extract_all(text: &str) -> Vec<Self> {
+        let bytes = text.as_bytes();
+        let mut index = 0usize;
+        let mut registers = Vec::new();
+        while index < bytes.len() {
+            let Some((raw_register, consumed)) = parse_register_at(text, index) else {
+                index += 1;
+                continue;
+            };
+            let register = Self::parse(raw_register);
+            if !registers.contains(&register) {
+                registers.push(register);
+            }
+            index += consumed;
+        }
+        registers
     }
 }
 
@@ -398,6 +418,56 @@ fn register_base_without_modifiers(raw: &str) -> &str {
     text.split('.').next().unwrap_or(text)
 }
 
+fn parse_register_at(text: &str, index: usize) -> Option<(String, usize)> {
+    if !is_token_boundary(text, index) {
+        return None;
+    }
+    let tail = &text[index..];
+    for literal in ["SR_", "URZ", "UPT", "UR", "UP", "RZ", "PT", "R", "P", "B"] {
+        if let Some(register) = parse_register_prefix(tail, literal) {
+            return Some(register);
+        }
+    }
+    None
+}
+
+fn parse_register_prefix(tail: &str, prefix: &str) -> Option<(String, usize)> {
+    let rest = tail.strip_prefix(prefix)?;
+    match prefix {
+        "SR_" => {
+            let len = rest
+                .char_indices()
+                .take_while(|(_, ch)| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '.')
+                .map(|(index, ch)| index + ch.len_utf8())
+                .last()
+                .unwrap_or(0);
+            (len > 0).then(|| (tail[..prefix.len() + len].to_string(), prefix.len() + len))
+        }
+        "URZ" | "UPT" | "RZ" | "PT" => Some((prefix.to_string(), prefix.len())),
+        "UR" | "UP" | "R" | "P" | "B" => {
+            let len = rest
+                .char_indices()
+                .take_while(|(_, ch)| ch.is_ascii_digit())
+                .map(|(index, ch)| index + ch.len_utf8())
+                .last()
+                .unwrap_or(0);
+            (len > 0).then(|| (tail[..prefix.len() + len].to_string(), prefix.len() + len))
+        }
+        _ => None,
+    }
+}
+
+fn is_token_boundary(text: &str, index: usize) -> bool {
+    if index == 0 {
+        return true;
+    }
+    let before = text[..index]
+        .chars()
+        .next_back()
+        .expect("index > 0 should have previous char");
+    !before.is_ascii_alphanumeric() && before != '_'
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ScalarOperand {
     pub kind: ScalarOperandKind,
@@ -450,6 +520,75 @@ pub enum ScalarOperandKind {
 pub enum ImmediateValue {
     Integer(i128),
     FloatBits(u64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AggregateOperand {
+    pub kind: AggregateOperandKind,
+    pub raw: String,
+}
+
+impl AggregateOperand {
+    pub fn from_sass_operand(operand: &SassOperand) -> Self {
+        let raw = operand.raw.clone();
+        let kind = match &operand.kind {
+            SassOperandKind::Register(register) => AggregateOperandKind::Register(
+                RegisterRef::from_sass_register(raw.clone(), register),
+            ),
+            SassOperandKind::Immediate(immediate) => parse_immediate_operand(immediate)
+                .map(AggregateOperandKind::Immediate)
+                .unwrap_or_else(|| AggregateOperandKind::Raw {
+                    registers: RegisterRef::extract_all(&raw),
+                }),
+            SassOperandKind::ConstantMemory { bank, offset } => AggregateOperandKind::Memory(
+                MemoryAddress::constant(raw.clone(), bank.clone(), offset.clone()),
+            ),
+            SassOperandKind::DescriptorMemory {
+                descriptor,
+                address,
+                address_width,
+                offset,
+            } => AggregateOperandKind::Memory(MemoryAddress::descriptor(
+                raw.clone(),
+                descriptor.clone(),
+                address.clone(),
+                *address_width,
+                offset.clone(),
+            )),
+            SassOperandKind::IndexedMemory { base, offset } => AggregateOperandKind::Memory(
+                MemoryAddress::indexed(raw.clone(), base.clone(), offset.clone()),
+            ),
+            SassOperandKind::Label(label) => AggregateOperandKind::Label(label.clone()),
+            SassOperandKind::Raw => AggregateOperandKind::Raw {
+                registers: RegisterRef::extract_all(&raw),
+            },
+        };
+        Self { kind, raw }
+    }
+
+    pub fn registers(&self) -> Vec<RegisterRef> {
+        match &self.kind {
+            AggregateOperandKind::Register(register) => vec![register.clone()],
+            AggregateOperandKind::Memory(address) => address.registers(),
+            AggregateOperandKind::Raw { registers } => registers.clone(),
+            AggregateOperandKind::Immediate(_) | AggregateOperandKind::Label(_) => Vec::new(),
+        }
+    }
+}
+
+impl fmt::Display for AggregateOperand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AggregateOperandKind {
+    Register(RegisterRef),
+    Immediate(ImmediateValue),
+    Memory(MemoryAddress),
+    Label(String),
+    Raw { registers: Vec<RegisterRef> },
 }
 
 fn parse_immediate_operand(raw: &str) -> Option<ImmediateValue> {

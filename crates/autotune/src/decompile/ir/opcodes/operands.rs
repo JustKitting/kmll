@@ -2,8 +2,8 @@ use super::super::super::sass::{
     RegisterClass, SassInstruction, SassOperandKind, SassPredicate, SassRegister, label_in_text,
 };
 use super::super::types::{
-    ControlTarget, KernelIrOpKind, PredicateCondition, RegisterRef, SassMappingConfidence,
-    ScalarOperand,
+    AggregateOperand, ControlTarget, KernelIrOpKind, PredicateCondition, RegisterRef,
+    SassMappingConfidence, ScalarOperand,
 };
 use super::LiftResult;
 
@@ -12,6 +12,14 @@ pub(super) fn raw_operands(instruction: &SassInstruction) -> Vec<String> {
         .operands
         .iter()
         .map(|operand| operand.raw.clone())
+        .collect()
+}
+
+pub(super) fn aggregate_operands(instruction: &SassInstruction) -> Vec<AggregateOperand> {
+    instruction
+        .operands
+        .iter()
+        .map(AggregateOperand::from_sass_operand)
         .collect()
 }
 

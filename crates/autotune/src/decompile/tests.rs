@@ -9,6 +9,10 @@ fn scalar(raw: &str) -> ScalarOperand {
     ScalarOperand::parse(raw.to_string())
 }
 
+fn aggregate_texts(operands: &[AggregateOperand]) -> Vec<String> {
+    operands.iter().map(ToString::to_string).collect()
+}
+
 #[test]
 fn register_refs_canonicalize_modifier_spelling_for_identity() {
     assert_eq!(reg("R13.reuse"), reg("R13"));
@@ -638,8 +642,17 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
         op.kind,
         KernelIrOpKind::Call {
             target: Some(ref target),
-            ..
+            ref operands,
         } if matches!(&target.kind, ControlTargetKind::Label(label) if label == "$helper")
+            && matches!(&operands[0].kind, AggregateOperandKind::Label(label) if label == "$helper")
+    )));
+    assert!(ops.iter().any(|op| matches!(
+        op.kind,
+        KernelIrOpKind::Sync {
+            ref kind,
+            ref operands,
+        } if kind == "BSSY"
+            && matches!(&operands[0].kind, AggregateOperandKind::Register(register) if register == &reg("B0"))
     )));
     assert!(ops.iter().any(|op| matches!(
         op.kind,
@@ -675,17 +688,39 @@ fn lift_tensor_core_sass_keeps_known_op_families_typed() {
         } if opcode == "HMMA"
             && element_type == "half"
             && scope == "warp"
-            && operands == &["R8", "R12", "R16", "R20"]
+            && aggregate_texts(operands).as_slice() == ["R8", "R12", "R16", "R20"]
+    ));
+    assert!(matches!(
+        &function.ops[0].kind,
+        KernelIrOpKind::TensorCoreMma { operands, .. }
+            if matches!(&operands[0].kind, AggregateOperandKind::Register(register) if register == &reg("R8"))
     ));
     assert!(matches!(
         &function.ops[1].kind,
         KernelIrOpKind::TensorCoreMemory { opcode, operands }
-            if opcode == "LDT" && operands == &["R2", "tmem[UR4]"]
+            if opcode == "LDT" && aggregate_texts(operands).as_slice() == ["R2", "tmem[UR4]"]
+    ));
+    assert!(matches!(
+        &function.ops[1].kind,
+        KernelIrOpKind::TensorCoreMemory { operands, .. }
+            if matches!(&operands[1].kind, AggregateOperandKind::Raw { registers }
+                if registers.as_slice() == [reg("UR4")])
     ));
     assert!(matches!(
         &function.ops[2].kind,
         KernelIrOpKind::TensorMemoryAccess { opcode, operands }
-            if opcode == "UTMALDG" && operands == &["desc[UR8][R0.64]", "R2"]
+            if opcode == "UTMALDG" && aggregate_texts(operands).as_slice() == ["desc[UR8][R0.64]", "R2"]
+    ));
+    assert!(matches!(
+        &function.ops[2].kind,
+        KernelIrOpKind::TensorMemoryAccess { operands, .. }
+            if matches!(&operands[0].kind, AggregateOperandKind::Memory(address)
+                if matches!(&address.kind, MemoryAddressKind::Descriptor {
+                    descriptor,
+                    address,
+                    address_width: Some(64),
+                    offset: None,
+                } if descriptor == &reg("UR8") && address == &reg("R0")))
     ));
     assert!(matches!(
         &function.ops[3].kind,

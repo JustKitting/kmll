@@ -1,8 +1,8 @@
 use std::fmt;
 
 use super::super::{
-    ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace, PredicateCondition, RegisterRef,
-    ScalarOperand,
+    AggregateOperand, ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace,
+    PredicateCondition, RegisterRef, ScalarOperand,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,21 +74,21 @@ pub enum SassLiftedSemantics {
     },
     TensorCoreMma {
         opcode: String,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
         element_type: Option<String>,
         scope: Option<String>,
     },
     TensorCoreMemory {
         opcode: String,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
     },
     TensorMemoryAccess {
         opcode: String,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
     },
     WarpGroup {
         opcode: String,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
     },
     CompareSet {
         dst: RegisterRef,
@@ -103,11 +103,11 @@ pub enum SassLiftedSemantics {
     },
     Call {
         target: Option<ControlTarget>,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
     },
     Return {
         target: Option<ControlTarget>,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
     },
     Exit {
         condition: Option<PredicateCondition>,
@@ -138,7 +138,7 @@ pub enum SassLiftedSemantics {
     },
     Sync {
         kind: String,
-        operands: Vec<String>,
+        operands: Vec<AggregateOperand>,
     },
     NoOp,
     Unsupported {
@@ -231,23 +231,23 @@ impl fmt::Display for SassLiftedSemantics {
                 "tensor-core-mma(opcode={opcode},element-type={},scope={},operands=[{}])",
                 option_str(element_type.as_deref()),
                 option_str(scope.as_deref()),
-                operands.join(",")
+                format_display_list(operands)
             ),
             Self::TensorCoreMemory { opcode, operands } => write!(
                 f,
                 "tensor-core-memory(opcode={opcode},operands=[{}])",
-                operands.join(",")
+                format_display_list(operands)
             ),
             Self::TensorMemoryAccess { opcode, operands } => write!(
                 f,
                 "tensor-memory-access(opcode={opcode},operands=[{}])",
-                operands.join(",")
+                format_display_list(operands)
             ),
             Self::WarpGroup { opcode, operands } => {
                 write!(
                     f,
                     "warpgroup(opcode={opcode},operands=[{}])",
-                    operands.join(",")
+                    format_display_list(operands)
                 )
             }
             Self::CompareSet {
@@ -272,13 +272,13 @@ impl fmt::Display for SassLiftedSemantics {
                 f,
                 "call(target={},operands=[{}])",
                 option_display(target.as_ref()),
-                operands.join(",")
+                format_display_list(operands)
             ),
             Self::Return { target, operands } => write!(
                 f,
                 "return(target={},operands=[{}])",
                 option_display(target.as_ref()),
-                operands.join(",")
+                format_display_list(operands)
             ),
             Self::Exit { condition } => {
                 write!(f, "exit(condition={})", option_display(condition.as_ref()))
@@ -324,7 +324,11 @@ impl fmt::Display for SassLiftedSemantics {
                 )
             }
             Self::Sync { kind, operands } => {
-                write!(f, "sync(kind={kind},operands=[{}])", operands.join(","))
+                write!(
+                    f,
+                    "sync(kind={kind},operands=[{}])",
+                    format_display_list(operands)
+                )
             }
             Self::NoOp => f.write_str("no-op"),
             Self::Unsupported { opcode, reason } => {
