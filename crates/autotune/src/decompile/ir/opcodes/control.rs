@@ -1,24 +1,26 @@
 use super::super::super::sass::SassInstruction;
-use super::super::types::{AggregateOperand, KernelIrOpKind, SassMappingConfidence};
+use super::super::types::{
+    AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassOpcode, SassOpcodeKind,
+};
 use super::{
     LiftResult,
     operands::{branch_condition_operand, predicate_condition, target_operand},
 };
 
 pub(super) fn lift(
-    opcode: &str,
+    opcode: &SassOpcode,
     instruction: &SassInstruction,
     operands: &[AggregateOperand],
 ) -> Option<LiftResult> {
-    Some(match opcode {
-        "NOP" => (KernelIrOpKind::NoOp, SassMappingConfidence::LocallyParsed),
-        "EXIT" => (
+    Some(match opcode.kind() {
+        SassOpcodeKind::Nop => (KernelIrOpKind::NoOp, SassMappingConfidence::LocallyParsed),
+        SassOpcodeKind::Exit => (
             KernelIrOpKind::Exit {
                 condition: instruction.predicate.as_ref().map(predicate_condition),
             },
             SassMappingConfidence::LocallyParsed,
         ),
-        "BRA" => (
+        SassOpcodeKind::Bra => (
             KernelIrOpKind::Branch {
                 target: target_operand(instruction),
                 condition: instruction
@@ -29,14 +31,14 @@ pub(super) fn lift(
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
-        "CALL" => (
+        SassOpcodeKind::Call => (
             KernelIrOpKind::Call {
                 target: target_operand(instruction),
                 operands: operands.to_vec(),
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
-        "RET" => (
+        SassOpcodeKind::Ret => (
             KernelIrOpKind::Return {
                 target: target_operand(instruction),
                 operands: operands.to_vec(),

@@ -1,7 +1,7 @@
 use super::{
     super::{
         KernelIrFunction, KernelIrOp, KernelIrOpKind, MemoryAddress, MemorySpace, RegisterRef,
-        SassMemoryModifier,
+        SassModifier,
     },
     types::{SassMemoryAccess, SassMemoryAccessKind},
 };
@@ -79,9 +79,8 @@ fn memory_access(
     }
 }
 
-fn memory_width_bits(modifiers: &[String]) -> Option<u32> {
+fn memory_width_bits(modifiers: &[SassModifier]) -> Option<u32> {
     modifiers
         .iter()
-        .map(|modifier| SassMemoryModifier::parse(modifier.as_str()))
-        .find_map(|modifier| modifier.width_bits())
+        .find_map(|modifier| modifier.kind().width_bits())
 }

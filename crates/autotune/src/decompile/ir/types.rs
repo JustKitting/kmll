@@ -59,7 +59,7 @@ pub struct KernelIrOp {
     pub kind: KernelIrOpKind,
     pub confidence: SassMappingConfidence,
     pub source_opcode: SassOpcode,
-    pub source_modifiers: Vec<String>,
+    pub source_modifiers: Vec<SassModifier>,
     pub source_operands: Vec<String>,
     pub source: String,
 }
@@ -98,6 +98,99 @@ impl SassOpcode {
 impl fmt::Display for SassOpcode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.raw)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SassModifier {
+    kind: SassModifierKind,
+    raw: String,
+}
+
+impl SassModifier {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        Self {
+            kind: SassModifierKind::parse(raw.as_str()),
+            raw,
+        }
+    }
+
+    pub fn kind(&self) -> &SassModifierKind {
+        &self.kind
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+}
+
+impl fmt::Display for SassModifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassModifierKind {
+    E,
+    UnsignedWidth(u32),
+    SignedWidth(u32),
+    Width(u32),
+    High,
+    Low,
+    Carry,
+    And,
+    Wide,
+    Up,
+    Down,
+    Bfly,
+    Index,
+    Raw(String),
+}
+
+impl SassModifierKind {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        match raw.as_str() {
+            "E" => return Self::E,
+            "HI" => return Self::High,
+            "LO" | "LOW" => return Self::Low,
+            "X" => return Self::Carry,
+            "AND" => return Self::And,
+            "WIDE" => return Self::Wide,
+            "UP" => return Self::Up,
+            "DOWN" => return Self::Down,
+            "BFLY" => return Self::Bfly,
+            "IDX" => return Self::Index,
+            _ => {}
+        }
+        if let Some(bits) = raw.strip_prefix('U').and_then(|bits| bits.parse().ok()) {
+            return Self::UnsignedWidth(bits);
+        }
+        if let Some(bits) = raw.strip_prefix('S').and_then(|bits| bits.parse().ok()) {
+            return Self::SignedWidth(bits);
+        }
+        raw.parse::<u32>()
+            .map(Self::Width)
+            .unwrap_or(Self::Raw(raw))
+    }
+
+    pub fn width_bits(&self) -> Option<u32> {
+        match self {
+            Self::UnsignedWidth(bits) | Self::SignedWidth(bits) | Self::Width(bits) => Some(*bits),
+            Self::E
+            | Self::High
+            | Self::Low
+            | Self::Carry
+            | Self::And
+            | Self::Wide
+            | Self::Up
+            | Self::Down
+            | Self::Bfly
+            | Self::Index
+            | Self::Raw(_) => None,
+        }
     }
 }
 
@@ -633,6 +726,11 @@ pub enum SassCompareDType {
 }
 
 impl SassCompareDType {
+    pub fn parse_known(raw: impl Into<String>) -> Option<Self> {
+        let parsed = Self::parse(raw);
+        (!matches!(parsed, Self::Raw(_))).then_some(parsed)
+    }
+
     pub fn parse(raw: impl Into<String>) -> Self {
         let raw = raw.into();
         match raw.as_str() {

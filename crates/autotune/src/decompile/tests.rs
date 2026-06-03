@@ -380,6 +380,10 @@ fn lift_simple_sass_maps_observed_core_ops() {
         ir.functions[0].ops[3].source_opcode.kind(),
         &SassOpcodeKind::Iadd
     );
+    assert_eq!(
+        ir.functions[0].ops[1].source_modifiers[0].kind(),
+        &SassModifierKind::E
+    );
     assert!(matches!(
         kinds[4],
         KernelIrOpKind::Store {

@@ -5,7 +5,8 @@ use std::{
 
 use super::{
     ImmediateValue, KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, RegisterRef,
-    RegisterRefKind, SassOpcodeKind, SassWarpShuffleMode, ScalarOperand, ScalarOperandKind,
+    RegisterRefKind, SassModifierKind, SassOpcodeKind, SassWarpShuffleMode, ScalarOperand,
+    ScalarOperandKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,7 +213,7 @@ fn recover_bf16_widen_bits(function: &KernelIrFunction, patterns: &mut Vec<SassS
         };
         if *wide
             || op.source_opcode.kind() != &SassOpcodeKind::Imad
-            || !op.source_modifiers.iter().any(|modifier| modifier == "U32")
+            || !has_source_modifier(op, &SassModifierKind::UnsignedWidth(32))
             || !scalar_integer_eq(b, 0x10000)
             || !scalar_is_zero_register(c)
         {
@@ -228,10 +229,7 @@ fn recover_bf16_widen_bits(function: &KernelIrFunction, patterns: &mut Vec<SassS
             .find(|candidate| candidate.defines(src_register))
             .filter(|candidate| {
                 candidate.source_opcode.kind() == &SassOpcodeKind::Ld
-                    && candidate
-                        .source_modifiers
-                        .iter()
-                        .any(|modifier| modifier == "U16")
+                    && has_source_modifier(candidate, &SassModifierKind::UnsignedWidth(16))
             })
             .map(|candidate| candidate.source.clone());
         let consumer = function.ops[index + 1..]
@@ -346,8 +344,14 @@ fn recover_address_pairs(function: &KernelIrFunction, patterns: &mut Vec<SassSem
 
 fn is_lea_high_x(op: &KernelIrOp) -> bool {
     op.source_opcode.kind() == &SassOpcodeKind::Lea
-        && op.source_modifiers.iter().any(|modifier| modifier == "HI")
-        && op.source_modifiers.iter().any(|modifier| modifier == "X")
+        && has_source_modifier(op, &SassModifierKind::High)
+        && has_source_modifier(op, &SassModifierKind::Carry)
+}
+
+fn has_source_modifier(op: &KernelIrOp, kind: &SassModifierKind) -> bool {
+    op.source_modifiers
+        .iter()
+        .any(|modifier| modifier.kind() == kind)
 }
 
 fn scalar_integer_eq(operand: &ScalarOperand, expected: i128) -> bool {

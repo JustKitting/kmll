@@ -234,17 +234,3 @@ fn register_text(raw: &str) -> String {
         .trim_matches('|')
         .to_string()
 }
-
-pub(super) fn has_modifier(modifiers: &[String], expected: &str) -> bool {
-    modifiers.iter().any(|modifier| modifier == expected)
-}
-
-pub(super) fn width_modifier(modifiers: &[String]) -> Option<u32> {
-    modifiers.iter().find_map(|modifier| {
-        modifier
-            .strip_prefix('U')
-            .or_else(|| modifier.strip_prefix('S'))
-            .and_then(|bits| bits.parse::<u32>().ok())
-            .or_else(|| modifier.parse::<u32>().ok())
-    })
-}

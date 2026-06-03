@@ -1,39 +1,59 @@
 use super::super::types::{
-    AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassOpcode, SassTensorElementType,
-    SassTensorScope,
+    AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassOpcode, SassOpcodeKind,
+    SassTensorElementType, SassTensorScope,
 };
 use super::LiftResult;
 
-pub(super) fn lift(opcode: &str, operands: &[AggregateOperand]) -> Option<LiftResult> {
+pub(super) fn lift(opcode: &SassOpcode, operands: &[AggregateOperand]) -> Option<LiftResult> {
     let operands = operands.to_vec();
-    Some(match opcode {
-        "BGMMA" | "BMMA" | "DMMA" | "HGMMA" | "HMMA" | "IGMMA" | "IMMA" | "OMMA" | "QGMMA"
-        | "QMMA" | "UTCHMMA" | "UTCIMMA" | "UTCOMMA" | "UTCQMMA" => (
+    Some(match opcode.kind() {
+        SassOpcodeKind::Bgmma
+        | SassOpcodeKind::Bmma
+        | SassOpcodeKind::Dmma
+        | SassOpcodeKind::Hgmma
+        | SassOpcodeKind::Hmma
+        | SassOpcodeKind::Igmma
+        | SassOpcodeKind::Imma
+        | SassOpcodeKind::Omma
+        | SassOpcodeKind::Qgmma
+        | SassOpcodeKind::Qmma
+        | SassOpcodeKind::Utchmma
+        | SassOpcodeKind::Utcimma
+        | SassOpcodeKind::Utcomma
+        | SassOpcodeKind::Utcqmma => (
             KernelIrOpKind::TensorCoreMma {
-                opcode: SassOpcode::new(opcode),
+                opcode: opcode.clone(),
                 operands,
-                element_type: tensor_core_element_type(opcode),
-                scope: tensor_core_scope(opcode),
+                element_type: tensor_core_element_type(opcode.kind()),
+                scope: tensor_core_scope(opcode.kind()),
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
-        "LDT" | "LDTM" | "STT" | "STTM" => (
-            KernelIrOpKind::TensorCoreMemory {
-                opcode: SassOpcode::new(opcode),
-                operands,
-            },
-            SassMappingConfidence::OpcodeHeuristic,
-        ),
-        "UBLKCP" | "UBLKPF" | "UBLKRED" | "UTMALDG" | "UTMAPF" | "UTMAREDG" | "UTMASTG" => (
+        SassOpcodeKind::Ldt | SassOpcodeKind::Ldtm | SassOpcodeKind::Stt | SassOpcodeKind::Sttm => {
+            (
+                KernelIrOpKind::TensorCoreMemory {
+                    opcode: opcode.clone(),
+                    operands,
+                },
+                SassMappingConfidence::OpcodeHeuristic,
+            )
+        }
+        SassOpcodeKind::Ublkcp
+        | SassOpcodeKind::Ublkpf
+        | SassOpcodeKind::Ublkred
+        | SassOpcodeKind::Utmaldg
+        | SassOpcodeKind::Utmapf
+        | SassOpcodeKind::Utmaredg
+        | SassOpcodeKind::Utmastg => (
             KernelIrOpKind::TensorMemoryAccess {
-                opcode: SassOpcode::new(opcode),
+                opcode: opcode.clone(),
                 operands,
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
-        "WARPGROUP" | "WARPGROUPSET" => (
+        SassOpcodeKind::Warpgroup | SassOpcodeKind::Warpgroupset => (
             KernelIrOpKind::WarpGroup {
-                opcode: SassOpcode::new(opcode),
+                opcode: opcode.clone(),
                 operands,
             },
             SassMappingConfidence::OpcodeHeuristic,
@@ -42,23 +62,40 @@ pub(super) fn lift(opcode: &str, operands: &[AggregateOperand]) -> Option<LiftRe
     })
 }
 
-fn tensor_core_element_type(opcode: &str) -> Option<SassTensorElementType> {
+fn tensor_core_element_type(opcode: &SassOpcodeKind) -> Option<SassTensorElementType> {
     match opcode {
-        "BMMA" | "BGMMA" => Some(SassTensorElementType::Bit),
-        "DMMA" => Some(SassTensorElementType::Fp64),
-        "HGMMA" | "HMMA" | "UTCHMMA" => Some(SassTensorElementType::Half),
-        "IGMMA" | "IMMA" | "UTCIMMA" => Some(SassTensorElementType::Integer),
-        "OMMA" | "UTCOMMA" => Some(SassTensorElementType::Fp4),
-        "QGMMA" | "QMMA" | "UTCQMMA" => Some(SassTensorElementType::Fp8),
+        SassOpcodeKind::Bmma | SassOpcodeKind::Bgmma => Some(SassTensorElementType::Bit),
+        SassOpcodeKind::Dmma => Some(SassTensorElementType::Fp64),
+        SassOpcodeKind::Hgmma | SassOpcodeKind::Hmma | SassOpcodeKind::Utchmma => {
+            Some(SassTensorElementType::Half)
+        }
+        SassOpcodeKind::Igmma | SassOpcodeKind::Imma | SassOpcodeKind::Utcimma => {
+            Some(SassTensorElementType::Integer)
+        }
+        SassOpcodeKind::Omma | SassOpcodeKind::Utcomma => Some(SassTensorElementType::Fp4),
+        SassOpcodeKind::Qgmma | SassOpcodeKind::Qmma | SassOpcodeKind::Utcqmma => {
+            Some(SassTensorElementType::Fp8)
+        }
         _ => None,
     }
 }
 
-fn tensor_core_scope(opcode: &str) -> Option<SassTensorScope> {
+fn tensor_core_scope(opcode: &SassOpcodeKind) -> Option<SassTensorScope> {
     match opcode {
-        "BGMMA" | "HGMMA" | "IGMMA" | "QGMMA" => Some(SassTensorScope::WarpGroup),
-        "UTCHMMA" | "UTCIMMA" | "UTCOMMA" | "UTCQMMA" => Some(SassTensorScope::Uniform),
-        "BMMA" | "DMMA" | "HMMA" | "IMMA" | "OMMA" | "QMMA" => Some(SassTensorScope::Warp),
+        SassOpcodeKind::Bgmma
+        | SassOpcodeKind::Hgmma
+        | SassOpcodeKind::Igmma
+        | SassOpcodeKind::Qgmma => Some(SassTensorScope::WarpGroup),
+        SassOpcodeKind::Utchmma
+        | SassOpcodeKind::Utcimma
+        | SassOpcodeKind::Utcomma
+        | SassOpcodeKind::Utcqmma => Some(SassTensorScope::Uniform),
+        SassOpcodeKind::Bmma
+        | SassOpcodeKind::Dmma
+        | SassOpcodeKind::Hmma
+        | SassOpcodeKind::Imma
+        | SassOpcodeKind::Omma
+        | SassOpcodeKind::Qmma => Some(SassTensorScope::Warp),
         _ => None,
     }
 }
