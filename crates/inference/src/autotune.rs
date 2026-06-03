@@ -757,6 +757,130 @@ pub struct CachedBeamSearchResult {
     pub cache_write: Option<EmittedKernelOptimizationSelection>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct KernelActionSpaceSet {
+    pub spaces: Vec<KernelActionSpace>,
+}
+
+impl KernelActionSpaceSet {
+    pub fn new(spaces: impl Into<Vec<KernelActionSpace>>) -> Self {
+        Self {
+            spaces: spaces.into(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.spaces.is_empty()
+    }
+
+    pub fn actions(&self) -> Vec<KernelScheduleAction> {
+        self.spaces
+            .iter()
+            .flat_map(KernelActionSpace::actions)
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KernelActionSpace {
+    Split {
+        variants: Vec<KernelAxisFactorAction>,
+    },
+    Unroll {
+        axis: u8,
+        factors: Vec<u32>,
+    },
+    TileGemm {
+        variants: Vec<KernelTile3dAction>,
+    },
+    StrideOrder {
+        orders: Vec<Vec<u8>>,
+    },
+}
+
+impl KernelActionSpace {
+    pub fn actions(&self) -> Vec<KernelScheduleAction> {
+        match self {
+            Self::Split { variants } => variants
+                .iter()
+                .map(|variant| {
+                    KernelScheduleAction::split(
+                        variant.axis,
+                        variant.factor,
+                        variant.materialization,
+                    )
+                })
+                .collect(),
+            Self::Unroll { axis, factors } => factors
+                .iter()
+                .copied()
+                .map(|factor| KernelScheduleAction::unroll(*axis, factor))
+                .collect(),
+            Self::TileGemm { variants } => variants
+                .iter()
+                .map(|variant| {
+                    KernelScheduleAction::tile_gemm(
+                        variant.tile.m,
+                        variant.tile.n,
+                        variant.tile.k,
+                        variant.materialization,
+                    )
+                })
+                .collect(),
+            Self::StrideOrder { orders } => orders
+                .iter()
+                .cloned()
+                .map(KernelScheduleAction::stride_order)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KernelAxisFactorAction {
+    pub axis: u8,
+    pub factor: u32,
+    pub materialization: KernelActionMaterialization,
+}
+
+impl KernelAxisFactorAction {
+    pub const fn new(axis: u8, factor: u32, materialization: KernelActionMaterialization) -> Self {
+        Self {
+            axis,
+            factor,
+            materialization,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KernelTile3d {
+    pub m: u32,
+    pub n: u32,
+    pub k: u32,
+}
+
+impl KernelTile3d {
+    pub const fn new(m: u32, n: u32, k: u32) -> Self {
+        Self { m, n, k }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KernelTile3dAction {
+    pub tile: KernelTile3d,
+    pub materialization: KernelActionMaterialization,
+}
+
+impl KernelTile3dAction {
+    pub const fn new(tile: KernelTile3d, materialization: KernelActionMaterialization) -> Self {
+        Self {
+            tile,
+            materialization,
+        }
+    }
+}
+
 pub trait KernelMetadataSearchProblem {
     fn seed(&self) -> KernelCandidateMetadata;
     fn expand(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelCandidateMetadata>;
@@ -764,7 +888,13 @@ pub trait KernelMetadataSearchProblem {
 }
 
 pub trait KernelActionSearchProblem: KernelMetadataSearchProblem {
-    fn schedule_actions(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelScheduleAction>;
+    fn search_space(&self) -> KernelActionSpaceSet;
+
+    fn action_spaces(&self, candidate: &KernelCandidateMetadata) -> KernelActionSpaceSet;
+
+    fn schedule_actions(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelScheduleAction> {
+        self.action_spaces(candidate).actions()
+    }
 
     fn apply_schedule_action(
         &self,
@@ -1010,7 +1140,7 @@ pub fn optimization_selection_cache_key<P>(
     score_namespace: &str,
 ) -> KernelOptimizationCacheKey
 where
-    P: KernelMetadataSearchProblem,
+    P: KernelActionSearchProblem,
 {
     let seed = problem.seed();
     let mut state = FNV_OFFSET;
@@ -1020,6 +1150,7 @@ where
     state = hash_u64(state, config.max_depth as u64);
     state = hash_u64(state, u64::from(config.require_launchable));
     state = hash_optimization_candidate(state, &seed.optimization_spec());
+    state = hash_action_space_set(state, &problem.search_space());
     KernelOptimizationCacheKey {
         family: seed.family,
         key: KernelMetadataKey(state),
@@ -1227,22 +1358,56 @@ impl MatvecSearchProblem {
 }
 
 impl KernelActionSearchProblem for MatvecSearchProblem {
-    fn schedule_actions(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelScheduleAction> {
+    fn search_space(&self) -> KernelActionSpaceSet {
+        let split_variants = RowMajorWarpRows::ALL
+            .into_iter()
+            .flat_map(|plan| {
+                let rows_per_block = plan.rows_per_block();
+                [
+                    KernelAxisFactorAction::new(
+                        0,
+                        rows_per_block,
+                        KernelActionMaterialization::Existing,
+                    ),
+                    KernelAxisFactorAction::new(
+                        0,
+                        rows_per_block,
+                        KernelActionMaterialization::DeferredGenerated,
+                    ),
+                ]
+            })
+            .collect();
+        let unroll_factors = Self::REDUCE_UNROLL_FACTORS
+            .into_iter()
+            .filter(|factor| *factor <= self.cols as u32)
+            .collect();
+        KernelActionSpaceSet::new(vec![
+            KernelActionSpace::Split {
+                variants: split_variants,
+            },
+            KernelActionSpace::Unroll {
+                axis: 1,
+                factors: unroll_factors,
+            },
+        ])
+    }
+
+    fn action_spaces(&self, candidate: &KernelCandidateMetadata) -> KernelActionSpaceSet {
         if candidate.family != "matvec-bf16-row-major" {
-            return Vec::new();
+            return KernelActionSpaceSet::default();
         }
         if candidate.schedule.depth() == 0 {
-            return RowMajorWarpRows::ALL
+            let variants = RowMajorWarpRows::ALL
                 .into_iter()
                 .flat_map(|plan| {
                     let rows_per_block = plan.rows_per_block();
                     [
-                        KernelScheduleAction::split(
+                        KernelAxisFactorAction::new(
                             0,
                             rows_per_block,
                             KernelActionMaterialization::Existing,
                         ),
-                        KernelScheduleAction::split(
+                        KernelAxisFactorAction::new(
                             0,
                             rows_per_block,
                             KernelActionMaterialization::DeferredGenerated,
@@ -1250,20 +1415,21 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                     ]
                 })
                 .collect();
+            return KernelActionSpaceSet::new(vec![KernelActionSpace::Split { variants }]);
         }
         let Some(plan) = schedule_matvec_plan(&candidate.schedule) else {
-            return Vec::new();
+            return KernelActionSpaceSet::default();
         };
         if candidate.is_launchable()
             || plan.reduce_unroll != MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL
         {
-            return Vec::new();
+            return KernelActionSpaceSet::default();
         }
-        Self::REDUCE_UNROLL_FACTORS
+        let factors = Self::REDUCE_UNROLL_FACTORS
             .into_iter()
             .filter(|factor| *factor <= self.cols as u32)
-            .map(|factor| KernelScheduleAction::unroll(1, factor))
-            .collect()
+            .collect();
+        KernelActionSpaceSet::new(vec![KernelActionSpace::Unroll { axis: 1, factors }])
     }
 
     fn apply_schedule_action(
@@ -1399,6 +1565,12 @@ impl GemmTileShape {
 
     pub fn grid_dim(self, m: usize, n: usize) -> (u32, u32, u32) {
         ((n as u32).div_ceil(self.n), (m as u32).div_ceil(self.m), 1)
+    }
+}
+
+impl From<GemmTileShape> for KernelTile3d {
+    fn from(value: GemmTileShape) -> Self {
+        Self::new(value.m, value.n, value.k)
     }
 }
 
@@ -1616,45 +1788,75 @@ impl GemmSearchProblem {
 }
 
 impl KernelActionSearchProblem for GemmSearchProblem {
-    fn schedule_actions(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelScheduleAction> {
+    fn search_space(&self) -> KernelActionSpaceSet {
+        let tile_variants = Self::TILE_SHAPES
+            .into_iter()
+            .map(|tile| {
+                KernelTile3dAction::new(
+                    tile.into(),
+                    Self::action_materialization_for_plan(GemmSchedulePlan::new(tile)),
+                )
+            })
+            .collect();
+        let unroll_factors = Self::REDUCE_UNROLL_FACTORS.into_iter().collect();
+        let stride_orders = Self::B_LOAD_ORDERS
+            .into_iter()
+            .map(GemmBTileLoadOrder::action_axes)
+            .collect();
+        KernelActionSpaceSet::new(vec![
+            KernelActionSpace::TileGemm {
+                variants: tile_variants,
+            },
+            KernelActionSpace::Unroll {
+                axis: 2,
+                factors: unroll_factors,
+            },
+            KernelActionSpace::StrideOrder {
+                orders: stride_orders,
+            },
+        ])
+    }
+
+    fn action_spaces(&self, candidate: &KernelCandidateMetadata) -> KernelActionSpaceSet {
         let Some(plan) = schedule_gemm_plan(&candidate.schedule) else {
-            return Self::TILE_SHAPES
+            let variants = Self::TILE_SHAPES
                 .into_iter()
                 .map(|tile| {
-                    KernelScheduleAction::tile_gemm(
-                        tile.m,
-                        tile.n,
-                        tile.k,
+                    KernelTile3dAction::new(
+                        tile.into(),
                         Self::action_materialization_for_plan(GemmSchedulePlan::new(tile)),
                     )
                 })
                 .collect();
+            return KernelActionSpaceSet::new(vec![KernelActionSpace::TileGemm { variants }]);
         };
 
         if plan.reduce_unroll == 1 {
-            let mut actions = Self::REDUCE_UNROLL_FACTORS
+            let mut spaces = Vec::new();
+            let factors = Self::REDUCE_UNROLL_FACTORS
                 .into_iter()
                 .filter(|factor| *factor <= plan.tile.k && plan.tile.k % *factor == 0)
-                .map(|factor| KernelScheduleAction::unroll(2, factor))
                 .collect::<Vec<_>>();
+            spaces.push(KernelActionSpace::Unroll { axis: 2, factors });
             if plan.b_load_order == GemmBTileLoadOrder::TileLinear {
-                actions.extend(
-                    Self::B_LOAD_ORDERS
-                        .into_iter()
-                        .map(|order| KernelScheduleAction::stride_order(order.action_axes())),
-                );
+                let orders = Self::B_LOAD_ORDERS
+                    .into_iter()
+                    .map(GemmBTileLoadOrder::action_axes)
+                    .collect();
+                spaces.push(KernelActionSpace::StrideOrder { orders });
             }
-            return actions;
+            return KernelActionSpaceSet::new(spaces);
         }
 
         if plan.b_load_order == GemmBTileLoadOrder::TileLinear {
-            return Self::B_LOAD_ORDERS
+            let orders = Self::B_LOAD_ORDERS
                 .into_iter()
-                .map(|order| KernelScheduleAction::stride_order(order.action_axes()))
+                .map(GemmBTileLoadOrder::action_axes)
                 .collect();
+            return KernelActionSpaceSet::new(vec![KernelActionSpace::StrideOrder { orders }]);
         }
 
-        Vec::new()
+        KernelActionSpaceSet::default()
     }
 
     fn apply_schedule_action(
@@ -2752,6 +2954,61 @@ fn search_report_key(report: &OptimizationSearchReport) -> KernelMetadataKey {
     KernelMetadataKey(state)
 }
 
+fn hash_action_space_set(mut state: u64, action_space: &KernelActionSpaceSet) -> u64 {
+    state = hash_str(state, "action-space-set");
+    state = hash_u64(state, action_space.spaces.len() as u64);
+    for space in &action_space.spaces {
+        state = hash_action_space(state, space);
+    }
+    state
+}
+
+fn hash_action_space(mut state: u64, action_space: &KernelActionSpace) -> u64 {
+    match action_space {
+        KernelActionSpace::Split { variants } => {
+            state = hash_str(state, "split");
+            state = hash_u64(state, variants.len() as u64);
+            for variant in variants {
+                state = hash_u64(state, variant.axis as u64);
+                state = hash_u64(state, variant.factor as u64);
+                state = hash_str(state, variant.materialization.label());
+            }
+            state
+        }
+        KernelActionSpace::Unroll { axis, factors } => {
+            state = hash_str(state, "unroll");
+            state = hash_u64(state, *axis as u64);
+            state = hash_u64(state, factors.len() as u64);
+            for factor in factors {
+                state = hash_u64(state, *factor as u64);
+            }
+            state
+        }
+        KernelActionSpace::TileGemm { variants } => {
+            state = hash_str(state, "tile-gemm");
+            state = hash_u64(state, variants.len() as u64);
+            for variant in variants {
+                state = hash_u64(state, variant.tile.m as u64);
+                state = hash_u64(state, variant.tile.n as u64);
+                state = hash_u64(state, variant.tile.k as u64);
+                state = hash_str(state, variant.materialization.label());
+            }
+            state
+        }
+        KernelActionSpace::StrideOrder { orders } => {
+            state = hash_str(state, "stride-order");
+            state = hash_u64(state, orders.len() as u64);
+            for order in orders {
+                state = hash_u64(state, order.len() as u64);
+                for axis in order {
+                    state = hash_u64(state, *axis as u64);
+                }
+            }
+            state
+        }
+    }
+}
+
 fn hash_optimization_candidate(mut state: u64, candidate: &OptimizationCandidateSpec) -> u64 {
     state = hash_str(state, &candidate.family);
     state = hash_str(state, &candidate.artifact_key);
@@ -2936,6 +3193,52 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone, Copy)]
+    struct MatvecWithoutUnrollSpace(MatvecSearchProblem);
+
+    impl KernelMetadataSearchProblem for MatvecWithoutUnrollSpace {
+        fn seed(&self) -> KernelCandidateMetadata {
+            self.0.seed()
+        }
+
+        fn expand(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelCandidateMetadata> {
+            expand_with_schedule_actions(self, candidate)
+        }
+
+        fn score(&self, candidate: &KernelCandidateMetadata) -> Option<SearchScore> {
+            self.0.score(candidate)
+        }
+    }
+
+    impl KernelActionSearchProblem for MatvecWithoutUnrollSpace {
+        fn search_space(&self) -> KernelActionSpaceSet {
+            let mut spaces = self.0.search_space();
+            spaces
+                .spaces
+                .retain(|space| !matches!(space, KernelActionSpace::Unroll { .. }));
+            spaces
+        }
+
+        fn action_spaces(&self, candidate: &KernelCandidateMetadata) -> KernelActionSpaceSet {
+            let mut spaces = self.0.action_spaces(candidate);
+            spaces
+                .spaces
+                .retain(|space| !matches!(space, KernelActionSpace::Unroll { .. }));
+            spaces
+        }
+
+        fn apply_schedule_action(
+            &self,
+            candidate: &KernelCandidateMetadata,
+            action: &KernelScheduleAction,
+        ) -> Option<KernelCandidateMetadata> {
+            if matches!(action.op, KernelScheduleActionOp::Unroll) {
+                return None;
+            }
+            self.0.apply_schedule_action(candidate, action)
+        }
+    }
+
     #[test]
     fn matvec_search_keeps_only_metadata_for_rows_per_block_variants() {
         let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
@@ -3002,8 +3305,35 @@ mod tests {
     fn matvec_action_space_exposes_existing_and_deferred_row_splits() {
         let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
         let seed = problem.seed();
+        let spaces = problem.action_spaces(&seed);
         let actions = problem.schedule_actions(&seed);
 
+        assert_eq!(spaces.spaces.len(), 1);
+        assert_eq!(spaces.actions(), actions);
+        let KernelActionSpace::Split { variants } = &spaces.spaces[0] else {
+            panic!("matvec seed should expose split action-space metadata");
+        };
+        assert_eq!(variants.len(), 8);
+        assert!(variants.contains(&KernelAxisFactorAction::new(
+            0,
+            8,
+            KernelActionMaterialization::Existing
+        )));
+        assert!(variants.contains(&KernelAxisFactorAction::new(
+            0,
+            8,
+            KernelActionMaterialization::DeferredGenerated
+        )));
+        let complete_space = problem.search_space();
+        assert_eq!(complete_space.spaces.len(), 2);
+        assert!(matches!(
+            complete_space.spaces[0],
+            KernelActionSpace::Split { .. }
+        ));
+        assert!(matches!(
+            complete_space.spaces[1],
+            KernelActionSpace::Unroll { .. }
+        ));
         assert_eq!(actions.len(), 8);
         assert!(actions.contains(&KernelScheduleAction::split(
             0,
@@ -3048,8 +3378,16 @@ mod tests {
                 &KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
             )
             .expect("row split action should produce generated candidate metadata");
+        let spaces = problem.action_spaces(&rows8);
         let actions = problem.schedule_actions(&rows8);
 
+        assert_eq!(spaces.spaces.len(), 1);
+        assert_eq!(spaces.actions(), actions);
+        let KernelActionSpace::Unroll { axis, factors } = &spaces.spaces[0] else {
+            panic!("generated matvec split should expose unroll action-space metadata");
+        };
+        assert_eq!(*axis, 1);
+        assert_eq!(factors.as_slice(), &[1, 2, 8]);
         assert_eq!(actions.len(), 3);
         assert!(actions.contains(&KernelScheduleAction::unroll(1, 1)));
         assert!(actions.contains(&KernelScheduleAction::unroll(1, 2)));
@@ -3347,6 +3685,22 @@ mod tests {
     fn gemm_action_space_exposes_tile_unroll_and_stride_metadata() {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let seed = problem.seed();
+        let full_space = problem.search_space();
+        assert_eq!(full_space.spaces.len(), 3);
+        assert!(matches!(
+            full_space.spaces[0],
+            KernelActionSpace::TileGemm { .. }
+        ));
+        assert!(matches!(
+            full_space.spaces[1],
+            KernelActionSpace::Unroll { .. }
+        ));
+        assert!(matches!(
+            full_space.spaces[2],
+            KernelActionSpace::StrideOrder { .. }
+        ));
+
+        let tile_spaces = problem.action_spaces(&seed);
         let tile_actions = problem.schedule_actions(&seed);
         let tile_action = KernelScheduleAction::tile_gemm(
             16,
@@ -3355,6 +3709,20 @@ mod tests {
             KernelActionMaterialization::DeferredGenerated,
         );
 
+        assert_eq!(tile_spaces.spaces.len(), 1);
+        assert_eq!(tile_spaces.actions(), tile_actions);
+        let KernelActionSpace::TileGemm { variants } = &tile_spaces.spaces[0] else {
+            panic!("GEMM seed should expose tile action-space metadata");
+        };
+        assert_eq!(variants.len(), 4);
+        assert!(variants.contains(&KernelTile3dAction::new(
+            KernelTile3d::new(16, 16, 16),
+            KernelActionMaterialization::Existing
+        )));
+        assert!(variants.contains(&KernelTile3dAction::new(
+            KernelTile3d::new(16, 32, 16),
+            KernelActionMaterialization::DeferredGenerated
+        )));
         assert_eq!(tile_actions.len(), 4);
         assert!(tile_actions.contains(&KernelScheduleAction::tile_gemm(
             16,
@@ -3365,7 +3733,18 @@ mod tests {
         assert!(tile_actions.contains(&tile_action));
 
         let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
+        let schedule_spaces = problem.action_spaces(&tile_candidate);
         let schedule_actions = problem.schedule_actions(&tile_candidate);
+        assert_eq!(schedule_spaces.spaces.len(), 2);
+        assert_eq!(schedule_spaces.actions(), schedule_actions);
+        assert!(matches!(
+            schedule_spaces.spaces[0],
+            KernelActionSpace::Unroll { .. }
+        ));
+        assert!(matches!(
+            schedule_spaces.spaces[1],
+            KernelActionSpace::StrideOrder { .. }
+        ));
         assert_eq!(schedule_actions.len(), 4);
         assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 4)));
         assert!(schedule_actions.contains(&KernelScheduleAction::stride_order(vec![2, 1])));
@@ -3782,6 +4161,14 @@ mod tests {
         assert_ne!(
             key,
             optimization_selection_cache_key(&problem, config, "measured-cuda-event-r5-w2")
+        );
+        assert_ne!(
+            key,
+            optimization_selection_cache_key(
+                &MatvecWithoutUnrollSpace(problem),
+                config,
+                "heuristic"
+            )
         );
         assert_eq!(key.family, "matvec-bf16-row-major");
         assert_eq!(key.hex().len(), 16);
