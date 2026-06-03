@@ -381,7 +381,7 @@ pub struct SassUnsupportedInstruction {
     pub sass_path: PathBuf,
     pub function: String,
     pub address: u64,
-    pub opcode: String,
+    pub opcode: SassOpcode,
     pub reason: String,
     pub raw: String,
 }
@@ -1102,7 +1102,7 @@ fn append_unsupported(
                 sass_path: sass_path.to_path_buf(),
                 function: function.name.clone(),
                 address: op.address,
-                opcode: opcode.to_string(),
+                opcode: opcode.clone(),
                 reason: reason.clone(),
                 raw: op.source.clone(),
             });
@@ -1577,9 +1577,7 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
         writeln!(out, "unsupported_by_opcode").expect("write to string");
         let mut by_opcode = BTreeMap::<SassOpcode, usize>::new();
         for instruction in &report.unsupported_instructions {
-            *by_opcode
-                .entry(SassOpcode::new(instruction.opcode.clone()))
-                .or_default() += 1;
+            *by_opcode.entry(instruction.opcode.clone()).or_default() += 1;
         }
         for count in sorted_opcode_counts(by_opcode) {
             writeln!(out, "{}\t{}", count.opcode, count.count).expect("write to string");
@@ -2125,7 +2123,7 @@ fn render_unsupported_tsv(report: &SassCoverageReport) -> String {
             tsv(&instruction.sass_path.display().to_string()),
             tsv(&instruction.function),
             instruction.address,
-            tsv(&instruction.opcode),
+            tsv(&instruction.opcode.to_string()),
             tsv(&instruction.reason),
             tsv(&instruction.raw)
         )

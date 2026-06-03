@@ -1569,7 +1569,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         report
             .unsupported_instructions
             .iter()
-            .any(|instruction| instruction.opcode == "MYSTERY")
+            .any(|instruction| instruction.opcode == SassOpcode::new("MYSTERY"))
     );
     assert!(report.files.iter().any(
         |file| file.sass_path.file_name().and_then(|name| name.to_str())
