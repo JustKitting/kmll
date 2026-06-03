@@ -44,7 +44,9 @@ use nn_rust_inference::{
     safetensors::{ModelTensor, ModelWeights, TensorInfo, model_tensor_alias},
     tokenizer::{QwenByteLevelBpeTokenizer, TekkenTokenizer},
 };
-use nn_rust_profiling::ProfileTimer;
+use nn_rust_profiling::{
+    OptimizationTiming, ProfileDuration, ProfileTimeSource, ProfileTimer, SampleStats,
+};
 use nn_rust_quantization::RowwiseScaledI8Matrix;
 
 type AppResult<T> = std::result::Result<T, Box<dyn Error>>;
@@ -855,9 +857,18 @@ impl<'a> MatvecAutotuneBench<'a> {
             }
         }
 
-        let median = nn_rust_profiling::median_f64(&samples).ok_or_else(|| {
+        let sample_stats = SampleStats::from_finite_samples(&samples).ok_or_else(|| {
             invalid_data("kernel-autotune-matvec measurement produced no finite samples")
         })?;
+        let selected = ProfileDuration::from_seconds_f64(sample_stats.median).ok_or_else(|| {
+            invalid_data("kernel-autotune-matvec measurement median was not a finite duration")
+        })?;
+        let timing = OptimizationTiming::new(
+            ProfileTimeSource::CudaEvent,
+            self.options.warmup_count,
+            sample_stats,
+            selected,
+        );
         let actual = self.dev_output.to_host_vec(self.stream)?;
         compare_matvec_output(
             &format!("kernel-autotune-matvec {}", candidate.launch.kernel),
@@ -866,7 +877,10 @@ impl<'a> MatvecAutotuneBench<'a> {
             self.rows,
             self.cols,
         )?;
-        Ok(SearchScore::measured(median))
+        Ok(SearchScore::measured_with_timing(
+            sample_stats.median,
+            timing,
+        ))
     }
 
     fn launch_candidate(&mut self, candidate: &KernelCandidateMetadata) -> AppResult<()> {
@@ -1097,9 +1111,18 @@ impl<'a> GemmAutotuneBench<'a> {
             }
         }
 
-        let median = nn_rust_profiling::median_f64(&samples).ok_or_else(|| {
+        let sample_stats = SampleStats::from_finite_samples(&samples).ok_or_else(|| {
             invalid_data("kernel-autotune-gemm measurement produced no finite samples")
         })?;
+        let selected = ProfileDuration::from_seconds_f64(sample_stats.median).ok_or_else(|| {
+            invalid_data("kernel-autotune-gemm measurement median was not a finite duration")
+        })?;
+        let timing = OptimizationTiming::new(
+            ProfileTimeSource::CudaEvent,
+            self.options.warmup_count,
+            sample_stats,
+            selected,
+        );
         let actual = self.dev_c.to_host_vec(self.stream)?;
         compare_gemm_output(
             &format!("kernel-autotune-gemm {}", candidate.launch.kernel),
@@ -1110,7 +1133,10 @@ impl<'a> GemmAutotuneBench<'a> {
             self.n,
             self.k,
         )?;
-        Ok(SearchScore::measured(median))
+        Ok(SearchScore::measured_with_timing(
+            sample_stats.median,
+            timing,
+        ))
     }
 
     fn launch_candidate(&mut self, candidate: &KernelCandidateMetadata) -> AppResult<()> {
@@ -1333,12 +1359,7 @@ fn print_kernel_candidate(rank: usize, candidate: &KernelCandidateMetadata) {
     };
     let score = candidate
         .score
-        .map(|score| match score.source {
-            SearchScoreSource::Heuristic => format!("{:.3}:{}", score.value, score.source.label()),
-            SearchScoreSource::Measured => {
-                format!("{:.9}s:{}", score.value, score.source.label())
-            }
-        })
+        .map(format_search_score)
         .unwrap_or_else(|| "none".to_string());
     println!(
         "candidate rank={rank} key={} family={} launchable={} score={} generator={} materialization={} kernel={} grid={}x{}x{} block={}x{}x{} schedule={} actions={}",
@@ -1358,6 +1379,28 @@ fn print_kernel_candidate(rank: usize, candidate: &KernelCandidateMetadata) {
         format_schedule(&candidate.schedule.transforms),
         format_action_trace(&candidate.action_trace)
     );
+}
+
+fn format_search_score(score: SearchScore) -> String {
+    match score.source {
+        SearchScoreSource::Heuristic => format!("{:.3}:{}", score.value, score.source.label()),
+        SearchScoreSource::Measured => {
+            let timing = score
+                .timing
+                .map(|timing| {
+                    format!(
+                        ":source={} samples={} warmup={} min={:.9}s max={:.9}s",
+                        timing.source.label(),
+                        timing.samples.count,
+                        timing.warmup_count,
+                        timing.samples.min,
+                        timing.samples.max
+                    )
+                })
+                .unwrap_or_default();
+            format!("{:.9}s:{}{}", score.value, score.source.label(), timing)
+        }
+    }
 }
 
 fn format_schedule(transforms: &[ScheduleTransform]) -> String {

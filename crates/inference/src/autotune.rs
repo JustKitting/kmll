@@ -9,6 +9,13 @@ use std::{
 use nn_rust_profiling::{
     CudaLaunchSpec, NumericKind, OperationKind, OperationRoute, TensorTypeSpec, TypedOperationSpec,
 };
+pub use nn_rust_profiling::{
+    OptimizationActionArg as KernelScheduleActionArg,
+    OptimizationActionMaterialization as KernelActionMaterialization,
+    OptimizationActionOp as KernelScheduleActionOp, OptimizationActionSpec as KernelScheduleAction,
+    OptimizationCandidateSpec, OptimizationScore as SearchScore,
+    OptimizationScoreSource as SearchScoreSource, OptimizationTiming,
+};
 use serde_json::{Value, json};
 
 use crate::{
@@ -75,102 +82,6 @@ pub enum ScheduleTransform {
     StrideOrder { axes: Vec<u8> },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum KernelScheduleActionOp {
-    Split,
-    Unroll,
-    TileGemm,
-    StrideOrder,
-}
-
-impl KernelScheduleActionOp {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Split => "split",
-            Self::Unroll => "unroll",
-            Self::TileGemm => "tile-gemm",
-            Self::StrideOrder => "stride-order",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum KernelActionMaterialization {
-    Existing,
-    DeferredGenerated,
-}
-
-impl KernelActionMaterialization {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Existing => "existing",
-            Self::DeferredGenerated => "deferred-generated",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum KernelScheduleActionArg {
-    Factor(u32),
-    Tile3d { m: u32, n: u32, k: u32 },
-    AxisOrder(Vec<u8>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KernelScheduleAction {
-    pub op: KernelScheduleActionOp,
-    pub axis: Option<u8>,
-    pub arg: KernelScheduleActionArg,
-    pub materialization: KernelActionMaterialization,
-}
-
-impl KernelScheduleAction {
-    pub const fn split(
-        axis: u8,
-        factor: u32,
-        materialization: KernelActionMaterialization,
-    ) -> Self {
-        Self {
-            op: KernelScheduleActionOp::Split,
-            axis: Some(axis),
-            arg: KernelScheduleActionArg::Factor(factor),
-            materialization,
-        }
-    }
-
-    pub const fn unroll(axis: u8, factor: u32) -> Self {
-        Self {
-            op: KernelScheduleActionOp::Unroll,
-            axis: Some(axis),
-            arg: KernelScheduleActionArg::Factor(factor),
-            materialization: KernelActionMaterialization::DeferredGenerated,
-        }
-    }
-
-    pub const fn tile_gemm(
-        m: u32,
-        n: u32,
-        k: u32,
-        materialization: KernelActionMaterialization,
-    ) -> Self {
-        Self {
-            op: KernelScheduleActionOp::TileGemm,
-            axis: None,
-            arg: KernelScheduleActionArg::Tile3d { m, n, k },
-            materialization,
-        }
-    }
-
-    pub fn stride_order(axes: Vec<u8>) -> Self {
-        Self {
-            op: KernelScheduleActionOp::StrideOrder,
-            axis: None,
-            arg: KernelScheduleActionArg::AxisOrder(axes),
-            materialization: KernelActionMaterialization::DeferredGenerated,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct KernelSchedule {
     pub transforms: Vec<ScheduleTransform>,
@@ -223,43 +134,6 @@ pub struct GeneratedKernelMetadata {
     pub materialization: KernelMaterialization,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchScoreSource {
-    Heuristic,
-    Measured,
-}
-
-impl SearchScoreSource {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Heuristic => "heuristic",
-            Self::Measured => "measured",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SearchScore {
-    pub value: f64,
-    pub source: SearchScoreSource,
-}
-
-impl SearchScore {
-    pub fn heuristic(value: f64) -> Option<Self> {
-        value.is_finite().then_some(Self {
-            value,
-            source: SearchScoreSource::Heuristic,
-        })
-    }
-
-    pub fn measured(value: f64) -> Option<Self> {
-        value.is_finite().then_some(Self {
-            value,
-            source: SearchScoreSource::Measured,
-        })
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct KernelCandidateMetadata {
     pub family: String,
@@ -279,6 +153,18 @@ impl KernelCandidateMetadata {
 
     pub fn artifact_key(&self) -> KernelMetadataKey {
         self.generated.artifact_key
+    }
+
+    pub fn optimization_spec(&self) -> OptimizationCandidateSpec {
+        OptimizationCandidateSpec::new(
+            self.family.clone(),
+            self.artifact_key().hex(),
+            self.generated.generator,
+            self.launch.clone(),
+            self.operation.clone(),
+        )
+        .with_action_trace(self.action_trace.clone())
+        .with_score(self.score)
     }
 
     pub fn new(
@@ -1581,6 +1467,22 @@ fn score_json(score: SearchScore) -> Value {
             SearchScoreSource::Heuristic => "heuristic",
             SearchScoreSource::Measured => "measured",
         },
+        "timing": score.timing.map(timing_json),
+    })
+}
+
+fn timing_json(timing: OptimizationTiming) -> Value {
+    json!({
+        "source": timing.source.label(),
+        "warmup_count": timing.warmup_count,
+        "selected_seconds": timing.selected.as_seconds_f64(),
+        "samples": {
+            "count": timing.samples.count,
+            "mean_seconds": timing.samples.mean,
+            "median_seconds": timing.samples.median,
+            "min_seconds": timing.samples.min,
+            "max_seconds": timing.samples.max,
+        },
     })
 }
 
@@ -2205,6 +2107,29 @@ mod tests {
     }
 
     #[test]
+    fn candidate_projects_to_profiling_optimization_spec() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let seed = problem.seed();
+        let mut candidate = problem
+            .apply_schedule_action(
+                &seed,
+                &KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+            )
+            .expect("row split action should produce candidate metadata");
+        candidate.score = SearchScore::heuristic(1.0);
+
+        let spec = candidate.optimization_spec();
+
+        assert_eq!(spec.family, "matvec-bf16-row-major");
+        assert_eq!(spec.artifact_key, candidate.artifact_key().hex());
+        assert_eq!(spec.generator, "row-major-matvec-generator");
+        assert_eq!(spec.launch.kernel, "matvec_bf16_rows8");
+        assert_eq!(spec.operation.kind, OperationKind::Matvec);
+        assert_eq!(spec.action_trace, candidate.action_trace);
+        assert_eq!(spec.score, candidate.score);
+    }
+
+    #[test]
     fn matvec_generator_renders_rows_per_block_source_on_demand() {
         let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
         let candidate = problem.generated_candidate_for_rows(RowMajorWarpRows::Rows8);
@@ -2569,6 +2494,56 @@ mod tests {
         assert_eq!(
             manifest["action_trace"][1]["arg"]["value"].as_u64(),
             Some(4)
+        );
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn artifact_store_records_measured_timing_metadata() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+        let problem = MatvecSearchProblem::bf16_row_major(128, 256);
+        let seed = problem.seed();
+        let mut candidate = problem
+            .apply_schedule_action(
+                &seed,
+                &KernelScheduleAction::split(0, 8, KernelActionMaterialization::Existing),
+            )
+            .expect("row split action should produce candidate metadata");
+        let samples =
+            nn_rust_profiling::SampleStats::from_finite_samples(&[0.000002, 0.000003, 0.000004])
+                .expect("sample stats should accept finite samples");
+        let selected = nn_rust_profiling::ProfileDuration::from_seconds_f64(samples.median)
+            .expect("median should be a valid duration");
+        let timing = OptimizationTiming::new(
+            nn_rust_profiling::ProfileTimeSource::CudaEvent,
+            1,
+            samples,
+            selected,
+        );
+        candidate.score = SearchScore::measured_with_timing(samples.median, timing);
+
+        let emitted = store
+            .emit_metadata(&candidate)
+            .expect("artifact store should write measured timing metadata manifest");
+        let manifest_text = fs::read_to_string(&emitted.paths.manifest_path)
+            .expect("generated manifest should be readable");
+        let manifest: Value =
+            serde_json::from_str(&manifest_text).expect("manifest should be valid JSON");
+
+        assert_eq!(manifest["score"]["source"].as_str(), Some("measured"));
+        assert_eq!(
+            manifest["score"]["timing"]["source"].as_str(),
+            Some("cuda-event")
+        );
+        assert_eq!(
+            manifest["score"]["timing"]["warmup_count"].as_u64(),
+            Some(1)
+        );
+        assert_eq!(
+            manifest["score"]["timing"]["samples"]["count"].as_u64(),
+            Some(3)
         );
 
         remove_test_generated_root(&root);

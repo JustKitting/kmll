@@ -370,6 +370,215 @@ impl TypedOperationSpec {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OptimizationActionOp {
+    Split,
+    Unroll,
+    TileGemm,
+    StrideOrder,
+}
+
+impl OptimizationActionOp {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Split => "split",
+            Self::Unroll => "unroll",
+            Self::TileGemm => "tile-gemm",
+            Self::StrideOrder => "stride-order",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OptimizationActionMaterialization {
+    Existing,
+    DeferredGenerated,
+}
+
+impl OptimizationActionMaterialization {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Existing => "existing",
+            Self::DeferredGenerated => "deferred-generated",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum OptimizationActionArg {
+    Factor(u32),
+    Tile3d { m: u32, n: u32, k: u32 },
+    AxisOrder(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct OptimizationActionSpec {
+    pub op: OptimizationActionOp,
+    pub axis: Option<u8>,
+    pub arg: OptimizationActionArg,
+    pub materialization: OptimizationActionMaterialization,
+}
+
+impl OptimizationActionSpec {
+    pub const fn split(
+        axis: u8,
+        factor: u32,
+        materialization: OptimizationActionMaterialization,
+    ) -> Self {
+        Self {
+            op: OptimizationActionOp::Split,
+            axis: Some(axis),
+            arg: OptimizationActionArg::Factor(factor),
+            materialization,
+        }
+    }
+
+    pub const fn unroll(axis: u8, factor: u32) -> Self {
+        Self {
+            op: OptimizationActionOp::Unroll,
+            axis: Some(axis),
+            arg: OptimizationActionArg::Factor(factor),
+            materialization: OptimizationActionMaterialization::DeferredGenerated,
+        }
+    }
+
+    pub const fn tile_gemm(
+        m: u32,
+        n: u32,
+        k: u32,
+        materialization: OptimizationActionMaterialization,
+    ) -> Self {
+        Self {
+            op: OptimizationActionOp::TileGemm,
+            axis: None,
+            arg: OptimizationActionArg::Tile3d { m, n, k },
+            materialization,
+        }
+    }
+
+    pub fn stride_order(axes: Vec<u8>) -> Self {
+        Self {
+            op: OptimizationActionOp::StrideOrder,
+            axis: None,
+            arg: OptimizationActionArg::AxisOrder(axes),
+            materialization: OptimizationActionMaterialization::DeferredGenerated,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptimizationScoreSource {
+    Heuristic,
+    Measured,
+}
+
+impl OptimizationScoreSource {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Heuristic => "heuristic",
+            Self::Measured => "measured",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OptimizationTiming {
+    pub source: ProfileTimeSource,
+    pub warmup_count: usize,
+    pub samples: SampleStats,
+    pub selected: ProfileDuration,
+}
+
+impl OptimizationTiming {
+    pub const fn new(
+        source: ProfileTimeSource,
+        warmup_count: usize,
+        samples: SampleStats,
+        selected: ProfileDuration,
+    ) -> Self {
+        Self {
+            source,
+            warmup_count,
+            samples,
+            selected,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OptimizationScore {
+    pub value: f64,
+    pub source: OptimizationScoreSource,
+    pub timing: Option<OptimizationTiming>,
+}
+
+impl OptimizationScore {
+    pub fn heuristic(value: f64) -> Option<Self> {
+        value.is_finite().then_some(Self {
+            value,
+            source: OptimizationScoreSource::Heuristic,
+            timing: None,
+        })
+    }
+
+    pub fn measured(value: f64) -> Option<Self> {
+        value.is_finite().then_some(Self {
+            value,
+            source: OptimizationScoreSource::Measured,
+            timing: None,
+        })
+    }
+
+    pub fn measured_with_timing(value: f64, timing: OptimizationTiming) -> Option<Self> {
+        value.is_finite().then_some(Self {
+            value,
+            source: OptimizationScoreSource::Measured,
+            timing: Some(timing),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct OptimizationCandidateSpec {
+    pub family: String,
+    pub artifact_key: String,
+    pub generator: String,
+    pub launch: CudaLaunchSpec,
+    pub operation: TypedOperationSpec,
+    pub action_trace: Vec<OptimizationActionSpec>,
+    pub score: Option<OptimizationScore>,
+}
+
+impl OptimizationCandidateSpec {
+    pub fn new(
+        family: impl Into<String>,
+        artifact_key: impl Into<String>,
+        generator: impl Into<String>,
+        launch: CudaLaunchSpec,
+        operation: TypedOperationSpec,
+    ) -> Self {
+        Self {
+            family: family.into(),
+            artifact_key: artifact_key.into(),
+            generator: generator.into(),
+            launch,
+            operation,
+            action_trace: Vec::new(),
+            score: None,
+        }
+    }
+
+    pub fn with_action_trace(mut self, action_trace: Vec<OptimizationActionSpec>) -> Self {
+        self.action_trace = action_trace;
+        self
+    }
+
+    pub fn with_score(mut self, score: Option<OptimizationScore>) -> Self {
+        self.score = score;
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProfileSegment {
     pub name: String,
@@ -1488,6 +1697,46 @@ mod tests {
         assert_eq!(operation.kind, OperationKind::Elementwise);
         assert_eq!(operation.route, OperationRoute::CudaKernel);
         assert_eq!(operation.launch, Some(launch));
+    }
+
+    #[test]
+    fn optimization_candidate_carries_action_trace_and_timing_score() {
+        let launch = CudaLaunchSpec::new("matvec_bf16_rows8", (16, 1, 1), (256, 1, 1), 0);
+        let operation = TypedOperationSpec::new(
+            "row-major-warp-rows8::bf16",
+            OperationKind::Matvec,
+            OperationRoute::CudaKernel,
+        )
+        .with_launch(launch.clone());
+        let action = OptimizationActionSpec::split(
+            0,
+            8,
+            OptimizationActionMaterialization::DeferredGenerated,
+        );
+        let samples = SampleStats::from_finite_samples(&[0.000004, 0.000003, 0.000005]).unwrap();
+        let timing = OptimizationTiming::new(
+            ProfileTimeSource::CudaEvent,
+            1,
+            samples,
+            ProfileDuration::from_seconds_f64(samples.median).unwrap(),
+        );
+        let score = OptimizationScore::measured_with_timing(samples.median, timing);
+        let candidate = OptimizationCandidateSpec::new(
+            "matvec-bf16-row-major",
+            "abc123",
+            "row-major-matvec-generator",
+            launch,
+            operation,
+        )
+        .with_action_trace(vec![action])
+        .with_score(score);
+
+        assert_eq!(candidate.action_trace[0].op, OptimizationActionOp::Split);
+        assert_eq!(
+            candidate.score.unwrap().source,
+            OptimizationScoreSource::Measured
+        );
+        assert_eq!(candidate.score.unwrap().timing.unwrap().samples.count, 3);
     }
 
     #[test]
