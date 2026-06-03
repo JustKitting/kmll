@@ -17,12 +17,13 @@ use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
     autotune::{
         AutoOptimizeConfig, BeamSearchConfig, EmittedKernelOptimizationSelection,
-        EmittedStandaloneKernelCrate, GemmRustCudaGenerator, GemmSearchProblem,
-        KernelActionSearchProblem, KernelArtifactStore, KernelCandidateMetadata,
-        KernelMaterialization, KernelMetadataSearchProblem, KernelOptimizationCacheKey,
-        KernelScheduleAction, KernelScheduleActionArg, KernelSourceGenerator,
-        MatvecRustCudaGenerator, MatvecSearchProblem, ScheduleTransform, SearchScore,
-        SearchScoreSource, SelectionCacheStatus, auto_optimize_metadata_with_selection_cache,
+        EmittedStandaloneKernelCrate, GemmRustCudaGenerator, InferenceKernelRustCudaGenerator,
+        KernelArtifactStore, KernelCandidateMetadata, KernelMaterialization,
+        KernelOptimizationCacheKey, KernelScheduleAction, KernelScheduleActionArg,
+        KernelSourceGenerator, MatvecRustCudaGenerator, ScheduleTransform, SearchScore,
+        SearchScoreSource, SelectionCacheStatus,
+        auto_optimize_inference_kernel_with_selection_cache,
+        auto_optimize_inference_kernel_with_selection_cache_scorer,
     },
     chat,
     dtypes::{Bf16, DType},
@@ -48,8 +49,9 @@ use nn_rust_inference::{
     tokenizer::{QwenByteLevelBpeTokenizer, TekkenTokenizer},
 };
 use nn_rust_profiling::{
-    MAX_OPTIMIZATION_SETUP_SEGMENTS, OptimizationTiming, OptimizationTimingSegment,
-    ProfileDuration, ProfileTimeSource, ProfileTimer, SampleStats,
+    MAX_OPTIMIZATION_SETUP_SEGMENTS, NumericKind, OperationKind, OperationRoute,
+    OptimizationTiming, OptimizationTimingSegment, ProfileDuration, ProfileTimeSource,
+    ProfileTimer, SampleStats, TensorTypeSpec, TypedOperationSpec,
 };
 use nn_rust_quantization::RowwiseScaledI8Matrix;
 
@@ -349,6 +351,42 @@ fn print_queue_operation_profile(profile: &nn_rust_profiling::QueueOperationProf
     );
 }
 
+fn matvec_autotune_operation(rows: usize, cols: usize) -> TypedOperationSpec {
+    TypedOperationSpec::new(
+        "kernel-autotune-matvec",
+        OperationKind::Matvec,
+        OperationRoute::CudaKernel,
+    )
+    .with_input(
+        TensorTypeSpec::new(NumericKind::F32, NumericKind::F32, [cols]).with_layout("contiguous"),
+    )
+    .with_input(
+        TensorTypeSpec::new(NumericKind::Bf16, NumericKind::F32, [rows, cols])
+            .with_layout("row-major"),
+    )
+    .with_output(
+        TensorTypeSpec::new(NumericKind::F32, NumericKind::F32, [rows]).with_layout("contiguous"),
+    )
+}
+
+fn gemm_autotune_operation(m: usize, n: usize, k: usize) -> TypedOperationSpec {
+    TypedOperationSpec::new(
+        "kernel-autotune-gemm",
+        OperationKind::Gemm,
+        OperationRoute::CudaKernel,
+    )
+    .with_input(
+        TensorTypeSpec::new(NumericKind::F32, NumericKind::F32, [m, k]).with_layout("row-major"),
+    )
+    .with_input(
+        TensorTypeSpec::new(NumericKind::Bf16, NumericKind::F32, [k, n])
+            .with_layout("column-major"),
+    )
+    .with_output(
+        TensorTypeSpec::new(NumericKind::F32, NumericKind::F32, [m, n]).with_layout("row-major"),
+    )
+}
+
 fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
     let mut index = 0;
     let m = parse_required_usize(args, &mut index, "m", "kernel-autotune-gemm")?;
@@ -452,7 +490,7 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         ));
     }
 
-    let problem = GemmSearchProblem::f32_bf16_row_col_row(m, n, k);
+    let operation = gemm_autotune_operation(m, n, k);
     let config = AutoOptimizeConfig::from_beam_search_config(BeamSearchConfig {
         beam_width,
         max_depth,
@@ -479,12 +517,12 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
             GemmAutotuneBench::new(&stream, &module, m, n, k, options, generated_store)?;
         let mut first_measure_error = None;
         let mut score_cache_error = None;
-        let cached = auto_optimize_metadata_with_selection_cache(
+        let cached = auto_optimize_inference_kernel_with_selection_cache_scorer(
             &store,
-            &problem,
+            &operation,
             config,
             &score_namespace,
-            |candidate| {
+            |candidate, _problem| {
                 cached_measured_score(
                     &store,
                     &score_namespace,
@@ -500,7 +538,7 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
                 "kernel-autotune-gemm score cache failed: {error}"
             )));
         }
-        if cached.result.best.is_none() {
+        if cached.result().best.is_none() {
             if let Some(error) = first_measure_error {
                 return Err(invalid_input(format!(
                     "kernel-autotune-gemm measured search did not produce a candidate; first measurement error: {error}"
@@ -509,18 +547,18 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         }
         cached
     } else {
-        auto_optimize_metadata_with_selection_cache(
+        auto_optimize_inference_kernel_with_selection_cache(
             &store,
-            &problem,
+            &operation,
             config,
             &score_namespace,
-            |candidate| problem.score(candidate),
         )?
     };
     let selection_cache_key = cached.cache_key;
     let selection_cache_status = cached.cache_status;
     let selection_cache_write = cached.cache_write;
-    let result = cached.result;
+    let optimization = cached.optimization;
+    let result = &optimization.result;
     let best = result
         .best
         .as_ref()
@@ -575,11 +613,7 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
                 emitted_cached_selection.selection_path.display(),
                 emitted_cached_selection.selection_bytes
             );
-            let report = result.auto_optimization_report_with_action_space(
-                "gemm-f32-bf16-row-col-row",
-                config,
-                &problem.search_space(),
-            );
+            let report = optimization.auto_optimization_report(config);
             let emitted_report = store.emit_auto_search_report(&report)?;
             println!(
                 "emitted_auto_search_report report_key={} report_path={} report_bytes={}",
@@ -589,7 +623,8 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
             );
         }
         if emit_crate {
-            let emitted_crate = store.emit_standalone_crate(best, &GemmRustCudaGenerator)?;
+            let emitted_crate =
+                store.emit_standalone_crate(best, &InferenceKernelRustCudaGenerator)?;
             println!(
                 "emitted_crate rank=0 artifact_key={} package={} symbol={} crate_dir={} cargo_toml={} source_path={} cargo_toml_bytes={} source_bytes={}",
                 emitted_crate.artifact_key.hex(),
@@ -727,7 +762,7 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         ));
     }
 
-    let problem = MatvecSearchProblem::bf16_row_major(rows, cols);
+    let operation = matvec_autotune_operation(rows, cols);
     let config = AutoOptimizeConfig::from_beam_search_config(BeamSearchConfig {
         beam_width,
         max_depth,
@@ -754,12 +789,12 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
             MatvecAutotuneBench::new(&stream, &module, rows, cols, options, generated_store)?;
         let mut first_measure_error = None;
         let mut score_cache_error = None;
-        let cached = auto_optimize_metadata_with_selection_cache(
+        let cached = auto_optimize_inference_kernel_with_selection_cache_scorer(
             &store,
-            &problem,
+            &operation,
             config,
             &score_namespace,
-            |candidate| {
+            |candidate, _problem| {
                 cached_measured_score(
                     &store,
                     &score_namespace,
@@ -775,7 +810,7 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
                 "kernel-autotune-matvec score cache failed: {error}"
             )));
         }
-        if cached.result.best.is_none()
+        if cached.result().best.is_none()
             && let Some(error) = first_measure_error
         {
             return Err(invalid_input(format!(
@@ -784,18 +819,18 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         }
         cached
     } else {
-        auto_optimize_metadata_with_selection_cache(
+        auto_optimize_inference_kernel_with_selection_cache(
             &store,
-            &problem,
+            &operation,
             config,
             &score_namespace,
-            |candidate| problem.score(candidate),
         )?
     };
     let selection_cache_key = cached.cache_key;
     let selection_cache_status = cached.cache_status;
     let selection_cache_write = cached.cache_write;
-    let result = cached.result;
+    let optimization = cached.optimization;
+    let result = &optimization.result;
     let best = result
         .best
         .as_ref()
@@ -850,11 +885,7 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
                 emitted_cached_selection.selection_path.display(),
                 emitted_cached_selection.selection_bytes
             );
-            let report = result.auto_optimization_report_with_action_space(
-                "matvec-bf16-row-major",
-                config,
-                &problem.search_space(),
-            );
+            let report = optimization.auto_optimization_report(config);
             let emitted_report = store.emit_auto_search_report(&report)?;
             println!(
                 "emitted_auto_search_report report_key={} report_path={} report_bytes={}",
@@ -864,7 +895,8 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
             );
         }
         if emit_crate {
-            let emitted_crate = store.emit_standalone_crate(best, &MatvecRustCudaGenerator)?;
+            let emitted_crate =
+                store.emit_standalone_crate(best, &InferenceKernelRustCudaGenerator)?;
             println!(
                 "emitted_crate rank=0 artifact_key={} package={} symbol={} crate_dir={} cargo_toml={} source_path={} cargo_toml_bytes={} source_bytes={}",
                 emitted_crate.artifact_key.hex(),
