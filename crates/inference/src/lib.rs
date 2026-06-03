@@ -1,3 +1,4 @@
+pub mod autotune;
 pub mod backends;
 pub mod chat;
 pub mod dtypes;
