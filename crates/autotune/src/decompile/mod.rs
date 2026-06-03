@@ -28,8 +28,9 @@ pub use self::{
     analysis::{
         SassAnalysisFunction, SassAnalysisModule, SassBasicBlock, SassBlockTerminator, SassCfgEdge,
         SassCfgEdgeKind, SassDataflowOp, SassDefUseEdge, SassDominatorBlock, SassLiveRange,
-        SassMemoryAccess, SassMemoryAccessKind, SassNaturalLoop, SassReachingUse, SassRegion,
-        SassRegionKind, SassRegionPath, SassSsaValue, SassValueOp, analyze_sass_ir,
+        SassMemoryAccess, SassMemoryAccessKind, SassNaturalLoop, SassOpcode, SassReachingUse,
+        SassRegion, SassRegionKind, SassRegionPath, SassSsaValue, SassValueOp, SassValueOpKind,
+        analyze_sass_ir,
     },
     coverage::{
         SassCoverageBasicBlock, SassCoverageCfgEdge, SassCoverageDataflowOp,

@@ -979,7 +979,8 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
         .iter()
         .find(|op| op.address == 0x30)
         .expect("join instruction should have a value-op row");
-    assert_eq!(joined_op.opcode, "IADD");
+    assert_eq!(joined_op.opcode, SassOpcode::new("IADD"));
+    assert_eq!(joined_op.kind, SassValueOpKind::IntegerAdd);
     assert_eq!(joined_op.input_registers, [reg("R2"), reg("R1")]);
     assert_eq!(joined_op.output_registers, [reg("R3")]);
     assert!(joined_op.input_value_ids.contains(&entry_r2_value.value_id));
@@ -1081,7 +1082,7 @@ fn analysis_recovers_constructive_region_paths_for_nested_loops() {
         .expect("function region should exist");
     assert_eq!(root.depth, 0);
     assert_eq!(root.parent, None);
-    assert!(root.opcode_closure.iter().any(|opcode| opcode == "BRA"));
+    assert!(root.opcode_closure.contains(&SassOpcode::new("BRA")));
 
     let loop_regions = function
         .regions
@@ -1107,7 +1108,7 @@ fn analysis_recovers_constructive_region_paths_for_nested_loops() {
         .map(|region| region.path.clone())
         .collect::<BTreeSet<_>>();
     assert_eq!(ordered_paths.len(), function.regions.len());
-    assert!(inner.opcode_closure.iter().any(|opcode| opcode == "ISETP"));
+    assert!(inner.opcode_closure.contains(&SassOpcode::new("ISETP")));
 
     let text = analysis.to_text();
     assert!(text.contains("regions"));

@@ -83,7 +83,7 @@ impl SassAnalysisModule {
                     format_block_ids(&region.blocks),
                     format_region_ids(&region.children),
                     format_addresses(&region.op_addresses),
-                    region.opcode_closure.join(","),
+                    format_display_list(&region.opcode_closure),
                     format_block_id(region.header_block),
                     format_block_id(region.latch_block),
                     format_block_id(region.branch_block),
@@ -221,6 +221,14 @@ fn format_optional<T: ToString>(value: &Option<T>) -> String {
 
 fn format_registers(registers: &[RegisterRef]) -> String {
     registers
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_display_list<T: ToString>(values: &[T]) -> String {
+    values
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>()

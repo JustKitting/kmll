@@ -1072,7 +1072,11 @@ fn append_analysis(
                 entry_blocks: region.entry_blocks.clone(),
                 blocks: region.blocks.clone(),
                 op_addresses: region.op_addresses.clone(),
-                opcode_closure: region.opcode_closure.clone(),
+                opcode_closure: region
+                    .opcode_closure
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
                 condition: region.condition.as_ref().map(ToString::to_string),
                 target: region.target.as_ref().map(ToString::to_string),
             });
@@ -1126,8 +1130,8 @@ fn append_analysis(
                 address: op.address,
                 block_id: op.block_id,
                 predicate: op.predicate.clone(),
-                opcode: op.opcode.clone(),
-                kind: op.kind.clone(),
+                opcode: op.opcode.to_string(),
+                kind: op.kind.to_string(),
                 input_registers: op.input_registers.iter().map(ToString::to_string).collect(),
                 output_registers: op
                     .output_registers

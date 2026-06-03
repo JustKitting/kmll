@@ -1,8 +1,8 @@
 use std::fmt;
 
 use super::super::{
-    ControlTarget, MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemorySpace,
-    PredicateCondition, RegisterRef,
+    ControlTarget, KernelIrOp, KernelIrOpKind, MemoryAddress, MemoryAddressBase,
+    MemoryAddressImmediate, MemorySpace, PredicateCondition, RegisterRef,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,7 +211,7 @@ pub struct SassRegion {
     pub entry_blocks: Vec<usize>,
     pub blocks: Vec<usize>,
     pub op_addresses: Vec<u64>,
-    pub opcode_closure: Vec<String>,
+    pub opcode_closure: Vec<SassOpcode>,
     pub condition: Option<PredicateCondition>,
     pub target: Option<ControlTarget>,
 }
@@ -294,6 +294,139 @@ impl fmt::Display for SassRegionKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SassOpcode {
+    raw: String,
+}
+
+impl SassOpcode {
+    pub fn new(raw: impl Into<String>) -> Self {
+        Self { raw: raw.into() }
+    }
+
+    pub fn from_ir_op(op: &KernelIrOp) -> Self {
+        match &op.kind {
+            KernelIrOpKind::Unsupported { opcode, .. } => Self::new(opcode.clone()),
+            _ => Self::new(op.source_opcode.clone()),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+}
+
+impl fmt::Display for SassOpcode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassValueOpKind {
+    SpecialRead,
+    Move,
+    LoadConst,
+    Load,
+    Store,
+    IntegerAdd,
+    FloatAdd,
+    FloatMul,
+    PackedHalfAdd,
+    PackedHalfMul,
+    FusedMultiplyAdd,
+    IntegerMad,
+    TensorCoreMma,
+    TensorCoreMemory,
+    TensorMemoryAccess,
+    WarpGroup,
+    CompareSet,
+    Branch,
+    Call,
+    Return,
+    Exit,
+    WarpShuffle,
+    Shift,
+    LogicLut,
+    Permute,
+    AddressCalc,
+    Sync,
+    NoOp,
+    Unsupported,
+}
+
+impl SassValueOpKind {
+    pub fn from_ir_kind(kind: &KernelIrOpKind) -> Self {
+        match kind {
+            KernelIrOpKind::ReadSpecialRegister { .. } => Self::SpecialRead,
+            KernelIrOpKind::Move { .. } => Self::Move,
+            KernelIrOpKind::LoadConst { .. } => Self::LoadConst,
+            KernelIrOpKind::Load { .. } => Self::Load,
+            KernelIrOpKind::Store { .. } => Self::Store,
+            KernelIrOpKind::IntegerAdd { .. } => Self::IntegerAdd,
+            KernelIrOpKind::FloatAdd { .. } => Self::FloatAdd,
+            KernelIrOpKind::FloatMul { .. } => Self::FloatMul,
+            KernelIrOpKind::PackedHalfAdd { .. } => Self::PackedHalfAdd,
+            KernelIrOpKind::PackedHalfMul { .. } => Self::PackedHalfMul,
+            KernelIrOpKind::FusedMultiplyAdd { .. } => Self::FusedMultiplyAdd,
+            KernelIrOpKind::IntegerMad { .. } => Self::IntegerMad,
+            KernelIrOpKind::TensorCoreMma { .. } => Self::TensorCoreMma,
+            KernelIrOpKind::TensorCoreMemory { .. } => Self::TensorCoreMemory,
+            KernelIrOpKind::TensorMemoryAccess { .. } => Self::TensorMemoryAccess,
+            KernelIrOpKind::WarpGroup { .. } => Self::WarpGroup,
+            KernelIrOpKind::CompareSet { .. } => Self::CompareSet,
+            KernelIrOpKind::Branch { .. } => Self::Branch,
+            KernelIrOpKind::Call { .. } => Self::Call,
+            KernelIrOpKind::Return { .. } => Self::Return,
+            KernelIrOpKind::Exit { .. } => Self::Exit,
+            KernelIrOpKind::WarpShuffle { .. } => Self::WarpShuffle,
+            KernelIrOpKind::Shift { .. } => Self::Shift,
+            KernelIrOpKind::LogicLut { .. } => Self::LogicLut,
+            KernelIrOpKind::Permute { .. } => Self::Permute,
+            KernelIrOpKind::AddressCalc { .. } => Self::AddressCalc,
+            KernelIrOpKind::Sync { .. } => Self::Sync,
+            KernelIrOpKind::NoOp => Self::NoOp,
+            KernelIrOpKind::Unsupported { .. } => Self::Unsupported,
+        }
+    }
+}
+
+impl fmt::Display for SassValueOpKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SpecialRead => f.write_str("special-read"),
+            Self::Move => f.write_str("move"),
+            Self::LoadConst => f.write_str("load-const"),
+            Self::Load => f.write_str("load"),
+            Self::Store => f.write_str("store"),
+            Self::IntegerAdd => f.write_str("integer-add"),
+            Self::FloatAdd => f.write_str("float-add"),
+            Self::FloatMul => f.write_str("float-mul"),
+            Self::PackedHalfAdd => f.write_str("packed-half-add"),
+            Self::PackedHalfMul => f.write_str("packed-half-mul"),
+            Self::FusedMultiplyAdd => f.write_str("fused-multiply-add"),
+            Self::IntegerMad => f.write_str("integer-mad"),
+            Self::TensorCoreMma => f.write_str("tensor-core-mma"),
+            Self::TensorCoreMemory => f.write_str("tensor-core-memory"),
+            Self::TensorMemoryAccess => f.write_str("tensor-memory-access"),
+            Self::WarpGroup => f.write_str("warpgroup"),
+            Self::CompareSet => f.write_str("compare-set"),
+            Self::Branch => f.write_str("branch"),
+            Self::Call => f.write_str("call"),
+            Self::Return => f.write_str("return"),
+            Self::Exit => f.write_str("exit"),
+            Self::WarpShuffle => f.write_str("warp-shuffle"),
+            Self::Shift => f.write_str("shift"),
+            Self::LogicLut => f.write_str("logic-lut"),
+            Self::Permute => f.write_str("permute"),
+            Self::AddressCalc => f.write_str("address-calc"),
+            Self::Sync => f.write_str("sync"),
+            Self::NoOp => f.write_str("no-op"),
+            Self::Unsupported => f.write_str("unsupported"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassDataflowOp {
     pub address: u64,
@@ -354,8 +487,8 @@ pub struct SassValueOp {
     pub address: u64,
     pub block_id: Option<usize>,
     pub predicate: Option<String>,
-    pub opcode: String,
-    pub kind: String,
+    pub opcode: SassOpcode,
+    pub kind: SassValueOpKind,
     pub input_registers: Vec<RegisterRef>,
     pub output_registers: Vec<RegisterRef>,
     pub input_value_ids: Vec<usize>,

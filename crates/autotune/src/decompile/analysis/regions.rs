@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    super::{ControlTarget, KernelIrFunction, KernelIrOpKind, PredicateCondition},
+    super::{ControlTarget, KernelIrFunction, PredicateCondition},
     types::{
-        SassBasicBlock, SassCfgEdge, SassCfgEdgeKind, SassNaturalLoop, SassRegion, SassRegionKind,
-        SassRegionPath,
+        SassBasicBlock, SassCfgEdge, SassCfgEdgeKind, SassNaturalLoop, SassOpcode, SassRegion,
+        SassRegionKind, SassRegionPath,
     },
 };
 
@@ -300,9 +300,9 @@ fn region_ops(
     function: &KernelIrFunction,
     blocks: &[SassBasicBlock],
     region_blocks: &BTreeSet<usize>,
-) -> (Vec<u64>, Vec<String>) {
+) -> (Vec<u64>, Vec<SassOpcode>) {
     let mut addresses = Vec::new();
-    let mut opcodes = BTreeSet::<String>::new();
+    let mut opcodes = BTreeSet::<SassOpcode>::new();
     for block in blocks {
         if !region_blocks.contains(&block.id) {
             continue;
@@ -312,17 +312,10 @@ fn region_ops(
                 continue;
             };
             addresses.push(op.address);
-            opcodes.insert(opcode_for_op(op));
+            opcodes.insert(SassOpcode::from_ir_op(op));
         }
     }
     (addresses, opcodes.into_iter().collect())
-}
-
-fn opcode_for_op(op: &super::super::KernelIrOp) -> String {
-    match &op.kind {
-        KernelIrOpKind::Unsupported { opcode, .. } => opcode.clone(),
-        _ => op.source_opcode.clone(),
-    }
 }
 
 fn branch_arm_blocks(

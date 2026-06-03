@@ -5,8 +5,8 @@ use super::{
     cfg::{block_id_for_op_index, predecessors_by_block},
     registers::push_register_refs,
     types::{
-        SassBasicBlock, SassCfgEdge, SassDataflowOp, SassDefUseEdge, SassLiveRange,
-        SassReachingUse, SassSsaValue, SassValueOp,
+        SassBasicBlock, SassCfgEdge, SassDataflowOp, SassDefUseEdge, SassLiveRange, SassOpcode,
+        SassReachingUse, SassSsaValue, SassValueOp, SassValueOpKind,
     },
 };
 
@@ -56,8 +56,8 @@ pub(super) fn build_value_ops(
                 address: op.address,
                 block_id: block_id_for_op_index(blocks, op_index),
                 predicate: op.predicate.as_ref().map(ToString::to_string),
-                opcode: op.source_opcode.clone(),
-                kind: format!("{:?}", op.kind),
+                opcode: SassOpcode::from_ir_op(op),
+                kind: SassValueOpKind::from_ir_kind(&op.kind),
                 input_registers: dataflow.uses.clone(),
                 output_registers: dataflow.defines.clone(),
                 input_value_ids,
