@@ -373,6 +373,7 @@ impl TypedOperationSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OptimizationActionOp {
     Split,
+    Upcast,
     Unroll,
     LocalTile,
     ThreadGroup,
@@ -385,6 +386,7 @@ impl OptimizationActionOp {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Split => "split",
+            Self::Upcast => "upcast",
             Self::Unroll => "unroll",
             Self::LocalTile => "local-tile",
             Self::ThreadGroup => "thread-group",
@@ -443,6 +445,15 @@ impl OptimizationActionSpec {
     pub const fn unroll(axis: u8, factor: u32) -> Self {
         Self {
             op: OptimizationActionOp::Unroll,
+            axis: Some(axis),
+            arg: OptimizationActionArg::Factor(factor),
+            materialization: OptimizationActionMaterialization::DeferredGenerated,
+        }
+    }
+
+    pub const fn upcast(axis: u8, factor: u32) -> Self {
+        Self {
+            op: OptimizationActionOp::Upcast,
             axis: Some(axis),
             arg: OptimizationActionArg::Factor(factor),
             materialization: OptimizationActionMaterialization::DeferredGenerated,
@@ -525,6 +536,10 @@ pub enum OptimizationActionSpace {
     Split {
         variants: Vec<OptimizationAxisFactorChoice>,
     },
+    Upcast {
+        axis: u8,
+        factors: Vec<u32>,
+    },
     Unroll {
         axis: u8,
         factors: Vec<u32>,
@@ -552,6 +567,7 @@ impl OptimizationActionSpace {
     pub fn action_count(&self) -> usize {
         match self {
             Self::Split { variants } => variants.len(),
+            Self::Upcast { factors, .. } => factors.len(),
             Self::Unroll { factors, .. } => factors.len(),
             Self::LocalTile { factors, .. } => factors.len(),
             Self::ThreadGroup { factors, .. } => factors.len(),
@@ -2038,6 +2054,18 @@ fn push_optimization_action_space_json(
             push_indent(out, indent + 2);
             out.push_str("]\n");
         }
+        OptimizationActionSpace::Upcast { axis, factors } => {
+            push_json_field_string(
+                out,
+                "op",
+                OptimizationActionOp::Upcast.label(),
+                indent + 2,
+                true,
+            );
+            push_json_field_u32(out, "axis", u32::from(*axis), indent + 2, true);
+            push_json_field_usize(out, "action_count", factors.len(), indent + 2, true);
+            push_json_field_u32_array(out, "factors", factors, indent + 2, false);
+        }
         OptimizationActionSpace::Unroll { axis, factors } => {
             push_json_field_string(
                 out,
@@ -2872,6 +2900,7 @@ mod tests {
                 8,
                 OptimizationActionMaterialization::DeferredGenerated,
             ),
+            OptimizationActionSpec::upcast(0, 2),
             OptimizationActionSpec::unroll(1, 8),
             OptimizationActionSpec::local_tile(1, 2),
             OptimizationActionSpec::thread_group(1, 16),
@@ -2901,6 +2930,10 @@ mod tests {
                     ),
                 ],
             },
+            OptimizationActionSpace::Upcast {
+                axis: 0,
+                factors: vec![2, 4],
+            },
             OptimizationActionSpace::Unroll {
                 axis: 1,
                 factors: vec![2, 4, 8],
@@ -2924,7 +2957,7 @@ mod tests {
         assert!(json.contains("\"beam_width\": 8"));
         assert!(json.contains("\"require_launchable\": false"));
         assert!(json.contains("\"action_space\""));
-        assert!(json.contains("\"total_actions\": 10"));
+        assert!(json.contains("\"total_actions\": 12"));
         assert!(json.contains("\"variants\""));
         assert!(json.contains("\"materialization\": \"existing\""));
         assert!(json.contains("\"factors\": [2, 4, 8]"));
@@ -2932,6 +2965,7 @@ mod tests {
         assert!(json.contains("\"launchable\": false"));
         assert!(json.contains("\"action_trace\""));
         assert!(json.contains("\"op\": \"split\""));
+        assert!(json.contains("\"op\": \"upcast\""));
         assert!(json.contains("\"op\": \"unroll\""));
         assert!(json.contains("\"op\": \"local-tile\""));
         assert!(json.contains("\"op\": \"thread-group\""));

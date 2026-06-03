@@ -115,6 +115,7 @@ impl KernelAxis {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ScheduleTransform {
     Split { axis: u8, factor: u32 },
+    Upcast { axis: u8, factor: u32 },
     Unroll { axis: u8, factor: u32 },
     LocalTile { axis: u8, factor: u32 },
     ThreadGroup { axis: u8, factor: u32 },
@@ -1093,6 +1094,10 @@ pub enum KernelActionSpace {
     Split {
         variants: Vec<KernelAxisFactorAction>,
     },
+    Upcast {
+        axis: u8,
+        factors: Vec<u32>,
+    },
     Unroll {
         axis: u8,
         factors: Vec<u32>,
@@ -1128,6 +1133,11 @@ impl KernelActionSpace {
                         variant.materialization,
                     )
                 })
+                .collect(),
+            Self::Upcast { axis, factors } => factors
+                .iter()
+                .copied()
+                .map(|factor| KernelScheduleAction::upcast(*axis, factor))
                 .collect(),
             Self::Unroll { axis, factors } => factors
                 .iter()
@@ -1181,6 +1191,10 @@ impl KernelActionSpace {
                         )
                     })
                     .collect(),
+            },
+            Self::Upcast { axis, factors } => ProfilingActionSpace::Upcast {
+                axis: *axis,
+                factors: factors.clone(),
             },
             Self::Unroll { axis, factors } => ProfilingActionSpace::Unroll {
                 axis: *axis,
@@ -1896,8 +1910,53 @@ impl MatvecThreadGroup {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MatvecRowUpcast {
+    factor: u32,
+}
+
+impl MatvecRowUpcast {
+    pub const DEFAULT_FACTOR: u32 = 1;
+    pub const SEARCH_FACTORS: [u32; 3] = [2, 3, 4];
+
+    pub fn new(factor: u32) -> Option<Self> {
+        (factor >= Self::DEFAULT_FACTOR && factor <= 4).then_some(Self { factor })
+    }
+
+    pub const fn default_upcast() -> Self {
+        Self {
+            factor: Self::DEFAULT_FACTOR,
+        }
+    }
+
+    pub const fn factor(self) -> u32 {
+        self.factor
+    }
+
+    pub const fn is_default(self) -> bool {
+        self.factor == Self::DEFAULT_FACTOR
+    }
+
+    pub fn symbol_suffix(self) -> String {
+        if self.is_default() {
+            String::new()
+        } else {
+            format!("_up{}", self.factor)
+        }
+    }
+
+    pub fn operation_suffix(self) -> String {
+        if self.is_default() {
+            String::new()
+        } else {
+            format!("-up{}", self.factor)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MatvecSchedulePlan {
     pub rows: MatvecRowSplit,
+    pub row_upcast: MatvecRowUpcast,
     pub reduce_unroll: u32,
     pub thread_group: MatvecThreadGroup,
 }
@@ -1908,9 +1967,15 @@ impl MatvecSchedulePlan {
     pub fn new(rows: impl Into<MatvecRowSplit>) -> Self {
         Self {
             rows: rows.into(),
+            row_upcast: MatvecRowUpcast::default_upcast(),
             reduce_unroll: Self::DEFAULT_REDUCE_UNROLL,
             thread_group: MatvecThreadGroup::default_group(),
         }
+    }
+
+    pub const fn with_row_upcast(mut self, row_upcast: MatvecRowUpcast) -> Self {
+        self.row_upcast = row_upcast;
+        self
     }
 
     pub const fn with_reduce_unroll(mut self, factor: u32) -> Self {
@@ -1923,8 +1988,14 @@ impl MatvecSchedulePlan {
         self
     }
 
+    pub const fn row_groups_per_block(self) -> u32 {
+        self.rows
+            .rows_per_block()
+            .div_ceil(self.row_upcast.factor())
+    }
+
     pub const fn block_threads(self) -> u32 {
-        self.rows.rows_per_block() * self.thread_group.lanes_per_row()
+        self.row_groups_per_block() * self.thread_group.lanes_per_row()
     }
 
     pub const fn normalized(self) -> Self {
@@ -2010,6 +2081,12 @@ impl MatvecSearchProblem {
                 axis: 0,
                 factor: plan.block_threads(),
             });
+        if !plan.row_upcast.is_default() {
+            schedule = schedule.with_transform(ScheduleTransform::Upcast {
+                axis: 0,
+                factor: plan.row_upcast.factor(),
+            });
+        }
         if !plan.thread_group.is_default() {
             schedule = schedule.with_transform(ScheduleTransform::ThreadGroup {
                 axis: 1,
@@ -2077,6 +2154,17 @@ impl MatvecSearchProblem {
         MatvecThreadGroup::SEARCH_LANES_PER_ROW.to_vec()
     }
 
+    fn row_upcast_factors(&self) -> Vec<u32> {
+        MatvecRowUpcast::SEARCH_FACTORS.to_vec()
+    }
+
+    fn row_upcast_factors_for_rows(&self, rows: MatvecRowSplit) -> Vec<u32> {
+        self.row_upcast_factors()
+            .into_iter()
+            .filter(|factor| *factor <= rows.rows_per_block())
+            .collect()
+    }
+
     fn deferred_row_split_factors(&self) -> Vec<u32> {
         bounded_unroll_factors(self.rows, Self::MAX_ROWS_PER_BLOCK, None)
     }
@@ -2100,11 +2188,16 @@ impl MatvecSearchProblem {
 impl KernelActionSearchProblem for MatvecSearchProblem {
     fn search_space(&self) -> KernelActionSpaceSet {
         let split_variants = self.split_variants();
+        let row_upcast_factors = self.row_upcast_factors();
         let unroll_factors = self.reduce_unroll_factors();
         let thread_group_factors = self.thread_group_factors();
         KernelActionSpaceSet::new(vec![
             KernelActionSpace::Split {
                 variants: split_variants,
+            },
+            KernelActionSpace::Upcast {
+                axis: 0,
+                factors: row_upcast_factors,
             },
             KernelActionSpace::Unroll {
                 axis: 1,
@@ -2133,6 +2226,12 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
             return KernelActionSpaceSet::default();
         }
         let mut spaces = Vec::new();
+        if plan.row_upcast.is_default() {
+            let factors = self.row_upcast_factors_for_rows(plan.rows);
+            if !factors.is_empty() {
+                spaces.push(KernelActionSpace::Upcast { axis: 0, factors });
+            }
+        }
         if plan.reduce_unroll == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
             spaces.push(KernelActionSpace::Unroll {
                 axis: 1,
@@ -2179,6 +2278,25 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                         self.generated_candidate_for_row_split(rows)
                     }
                 };
+                Some(candidate_with_action_trace(candidate, action, next))
+            }
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::Upcast,
+                axis: Some(0),
+                arg: KernelScheduleActionArg::Factor(factor),
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                if candidate.is_launchable() {
+                    return None;
+                }
+                let plan = schedule_matvec_plan(&candidate.schedule)?;
+                if !plan.row_upcast.is_default()
+                    || !self.row_upcast_factors_for_rows(plan.rows).contains(factor)
+                {
+                    return None;
+                }
+                let row_upcast = MatvecRowUpcast::new(*factor)?;
+                let next = self.generated_candidate_for_plan(plan.with_row_upcast(row_upcast));
                 Some(candidate_with_action_trace(candidate, action, next))
             }
             KernelScheduleAction {
@@ -2262,6 +2380,7 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
         let plan = schedule_matvec_plan(&candidate.schedule)?;
         let rows_per_block = plan.rows.rows_per_block() as usize;
         let lanes_per_row = plan.thread_group.lanes_per_row() as usize;
+        let row_upcast = plan.row_upcast.factor() as usize;
         let blocks = self.rows.div_ceil(rows_per_block);
         let padded_rows = blocks * rows_per_block;
         let useful_fma_ops = self.rows.checked_mul(self.cols)?.checked_mul(2)? as f64;
@@ -2269,11 +2388,15 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
         let wasted_fma_ops = wasted_rows.checked_mul(self.cols)?.checked_mul(2)? as f64;
         let block_overhead = blocks as f64 * 2048.0;
         let unroll = f64::from(plan.reduce_unroll.max(1));
-        let loop_overhead =
-            blocks as f64 * (self.cols as f64 / lanes_per_row as f64).ceil() * 64.0 / unroll;
+        let loop_overhead = blocks as f64
+            * row_upcast as f64
+            * (self.cols as f64 / lanes_per_row as f64).ceil()
+            * 64.0
+            / unroll;
         let thread_overhead = blocks as f64 * f64::from(plan.block_threads()) * 8.0;
         let subgroup_pressure =
             blocks as f64 * (32.0 / lanes_per_row as f64 - 1.0).max(0.0) * 256.0;
+        let row_upcast_pressure = blocks as f64 * (row_upcast as f64 - 1.0).max(0.0) * 384.0;
         let register_pressure = blocks as f64 * (unroll - 1.0).max(0.0) * 32.0;
         let generic_runtime_penalty = if candidate.is_launchable() {
             blocks as f64 * 64.0
@@ -2287,6 +2410,7 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
                 + loop_overhead
                 + thread_overhead
                 + subgroup_pressure
+                + row_upcast_pressure
                 + register_pressure
                 + generic_runtime_penalty,
         )
@@ -3357,6 +3481,17 @@ fn schedule_matvec_reduce_unroll(schedule: &KernelSchedule) -> Option<u32> {
         })
 }
 
+fn schedule_matvec_row_upcast(schedule: &KernelSchedule) -> Option<MatvecRowUpcast> {
+    schedule
+        .transforms
+        .iter()
+        .find_map(|transform| match transform {
+            ScheduleTransform::Upcast { axis: 0, factor } => MatvecRowUpcast::new(*factor),
+            _ => None,
+        })
+        .or_else(|| Some(MatvecRowUpcast::default_upcast()))
+}
+
 fn schedule_matvec_thread_group(schedule: &KernelSchedule) -> Option<MatvecThreadGroup> {
     schedule
         .transforms
@@ -3373,6 +3508,7 @@ fn schedule_matvec_plan(schedule: &KernelSchedule) -> Option<MatvecSchedulePlan>
     let rows = MatvecRowSplit::new(rows_per_block)?;
     Some(MatvecSchedulePlan {
         rows,
+        row_upcast: schedule_matvec_row_upcast(schedule)?,
         reduce_unroll: schedule_matvec_reduce_unroll(schedule)
             .unwrap_or(MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL),
         thread_group: schedule_matvec_thread_group(schedule)?,
@@ -3382,6 +3518,7 @@ fn schedule_matvec_plan(schedule: &KernelSchedule) -> Option<MatvecSchedulePlan>
 fn matvec_symbol_hint(plan: MatvecSchedulePlan) -> String {
     let plan = plan.normalized();
     let mut base = format!("matvec_bf16_rows{}", plan.rows.rows_per_block());
+    base.push_str(&plan.row_upcast.symbol_suffix());
     if plan.reduce_unroll == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
         base.push_str(&plan.thread_group.symbol_suffix());
         base
@@ -3400,11 +3537,17 @@ fn matvec_symbol_hint(plan: MatvecSchedulePlan) -> String {
 fn matvec_operation_name(plan: MatvecSchedulePlan) -> String {
     let plan = plan.normalized();
     let plan_name = plan.rows.plan_name();
+    let row_upcast_suffix = plan.row_upcast.operation_suffix();
     if plan.reduce_unroll == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
-        format!("{plan_name}::bf16{}", plan.thread_group.operation_suffix())
+        format!(
+            "{plan_name}::bf16{}{}",
+            row_upcast_suffix,
+            plan.thread_group.operation_suffix()
+        )
     } else {
         format!(
-            "{plan_name}::bf16-u{}{}",
+            "{plan_name}::bf16{}-u{}{}",
+            row_upcast_suffix,
             plan.reduce_unroll,
             plan.thread_group.operation_suffix()
         )
@@ -3602,6 +3745,7 @@ fn parse_action_json(
 ) -> Result<KernelScheduleAction, KernelGenerationError> {
     let op = match required_str(value, "op")? {
         "split" => KernelScheduleActionOp::Split,
+        "upcast" => KernelScheduleActionOp::Upcast,
         "unroll" => KernelScheduleActionOp::Unroll,
         "local-tile" => KernelScheduleActionOp::LocalTile,
         "thread-group" => KernelScheduleActionOp::ThreadGroup,
@@ -3935,6 +4079,9 @@ fn transform_json(transform: &ScheduleTransform) -> Value {
         ScheduleTransform::Split { axis, factor } => {
             json!({"op": "split", "axis": axis, "factor": factor})
         }
+        ScheduleTransform::Upcast { axis, factor } => {
+            json!({"op": "upcast", "axis": axis, "factor": factor})
+        }
         ScheduleTransform::Unroll { axis, factor } => {
             json!({"op": "unroll", "axis": axis, "factor": factor})
         }
@@ -4022,6 +4169,8 @@ fn timing_json(timing: OptimizationTiming) -> Value {
 fn render_bf16_matvec_source(symbol: &str, plan: MatvecSchedulePlan) -> String {
     let plan = plan.normalized();
     let rows_per_block = plan.rows.rows_per_block().max(1);
+    let rows_per_upcast = plan.row_upcast.factor().max(1);
+    let row_groups_per_block = rows_per_block.div_ceil(rows_per_upcast);
     let lanes_per_row = plan.thread_group.lanes_per_row().max(1);
     let reduce_unroll = plan.reduce_unroll.max(1);
     let reduce_offsets = warp_subgroup_reduce_offsets(lanes_per_row);
@@ -4045,6 +4194,12 @@ fn render_bf16_matvec_source(symbol: &str, plan: MatvecSchedulePlan) -> String {
     writeln!(source).expect("write to string");
     writeln!(source, "const LANES_PER_ROW: u32 = {lanes_per_row};").expect("write to string");
     writeln!(source, "const ROWS_PER_BLOCK: u32 = {rows_per_block};").expect("write to string");
+    writeln!(source, "const ROWS_PER_UPCAST: u32 = {rows_per_upcast};").expect("write to string");
+    writeln!(
+        source,
+        "const ROW_GROUPS_PER_BLOCK: u32 = {row_groups_per_block};"
+    )
+    .expect("write to string");
     writeln!(source, "const REDUCE_UNROLL: u32 = {reduce_unroll};").expect("write to string");
     writeln!(source).expect("write to string");
     writeln!(source, "#[inline(always)]").expect("write to string");
@@ -4068,17 +4223,16 @@ fn render_bf16_matvec_source(symbol: &str, plan: MatvecSchedulePlan) -> String {
     writeln!(source, "    mut out: DisjointSlice<f32>,").expect("write to string");
     writeln!(source, ") {{").expect("write to string");
     writeln!(source, "    let thread_x = thread::threadIdx_x();").expect("write to string");
-    writeln!(source, "    let row_in_block = thread_x / LANES_PER_ROW;").expect("write to string");
-    writeln!(source, "    if row_in_block >= ROWS_PER_BLOCK {{").expect("write to string");
-    writeln!(source, "        return;").expect("write to string");
-    writeln!(source, "    }}").expect("write to string");
-    writeln!(source).expect("write to string");
     writeln!(
         source,
-        "    let row = (thread::blockIdx_x() * ROWS_PER_BLOCK + row_in_block) as usize;"
+        "    let row_group_in_block = thread_x / LANES_PER_ROW;"
     )
     .expect("write to string");
-    writeln!(source, "    if row >= rows as usize {{").expect("write to string");
+    writeln!(
+        source,
+        "    if row_group_in_block >= ROW_GROUPS_PER_BLOCK {{"
+    )
+    .expect("write to string");
     writeln!(source, "        return;").expect("write to string");
     writeln!(source, "    }}").expect("write to string");
     writeln!(source).expect("write to string");
@@ -4086,50 +4240,97 @@ fn render_bf16_matvec_source(symbol: &str, plan: MatvecSchedulePlan) -> String {
     writeln!(source, "    let cols = cols as usize;").expect("write to string");
     writeln!(source, "    let row_stride = row_stride as usize;").expect("write to string");
     writeln!(source, "    let col_stride = col_stride as usize;").expect("write to string");
-    writeln!(source, "    let row_base = row * row_stride;").expect("write to string");
-    writeln!(source, "    let mut acc = 0.0_f32;").expect("write to string");
-    writeln!(source, "    let mut col = lane as usize;").expect("write to string");
+    writeln!(
+        source,
+        "    let row_in_block_base = row_group_in_block * ROWS_PER_UPCAST;"
+    )
+    .expect("write to string");
     writeln!(source).expect("write to string");
+    for row_offset in 0..rows_per_upcast {
+        render_matvec_upcast_row_body(
+            &mut source,
+            row_offset,
+            reduce_unroll,
+            lanes_per_row,
+            "    ",
+        );
+    }
+    writeln!(source, "}}").expect("write to string");
+    source
+}
+
+fn render_matvec_upcast_row_body(
+    source: &mut String,
+    row_offset: u32,
+    reduce_unroll: u32,
+    lanes_per_row: u32,
+    indent: &str,
+) {
+    let inner = format!("{indent}    ");
+    let last_offset = (reduce_unroll - 1) * lanes_per_row;
+    let stride = reduce_unroll * lanes_per_row;
+    writeln!(
+        source,
+        "{indent}let row{row_offset}_in_block = row_in_block_base + {row_offset};"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "{indent}let row{row_offset} = (thread::blockIdx_x() * ROWS_PER_BLOCK + row{row_offset}_in_block) as usize;"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "{indent}if row{row_offset}_in_block < ROWS_PER_BLOCK && row{row_offset} < rows as usize {{"
+    )
+    .expect("write to string");
+    writeln!(
+        source,
+        "{inner}let row_base = row{row_offset} * row_stride;"
+    )
+    .expect("write to string");
+    writeln!(source, "{inner}let mut acc = 0.0_f32;").expect("write to string");
+    writeln!(source, "{inner}let mut col = lane as usize;").expect("write to string");
     if reduce_unroll > 1 {
-        let last_offset = (reduce_unroll - 1) * lanes_per_row;
-        let stride = reduce_unroll * lanes_per_row;
-        writeln!(source, "    while col + {last_offset} < cols {{").expect("write to string");
+        writeln!(source, "{inner}while col + {last_offset} < cols {{").expect("write to string");
         for offset in 0..reduce_unroll {
             let col_expr = if offset == 0 {
                 "col".to_string()
             } else {
                 format!("col + {}", offset * lanes_per_row)
             };
-            writeln!(source, "        let col{offset} = {col_expr};").expect("write to string");
+            writeln!(source, "{inner}    let col{offset} = {col_expr};").expect("write to string");
         }
         for offset in 0..reduce_unroll {
             writeln!(
                 source,
-                "        acc += weight[row_base + col{offset} * col_stride].to_f32() * input[col{offset}];"
+                "{inner}    acc += weight[row_base + col{offset} * col_stride].to_f32() * input[col{offset}];"
             )
             .expect("write to string");
         }
-        writeln!(source, "        col += {stride};").expect("write to string");
-        writeln!(source, "    }}").expect("write to string");
-        writeln!(source).expect("write to string");
+        writeln!(source, "{inner}    col += {stride};").expect("write to string");
+        writeln!(source, "{inner}}}").expect("write to string");
     }
-    writeln!(source, "    while col < cols {{").expect("write to string");
+    writeln!(source, "{inner}while col < cols {{").expect("write to string");
     writeln!(
         source,
-        "        acc += weight[row_base + col * col_stride].to_f32() * input[col];"
+        "{inner}    acc += weight[row_base + col * col_stride].to_f32() * input[col];"
     )
     .expect("write to string");
-    writeln!(source, "        col += LANES_PER_ROW as usize;").expect("write to string");
-    writeln!(source, "    }}").expect("write to string");
+    writeln!(source, "{inner}    col += LANES_PER_ROW as usize;").expect("write to string");
+    writeln!(source, "{inner}}}").expect("write to string");
+    writeln!(source, "{inner}let acc = warp_reduce_sum(acc);").expect("write to string");
+    writeln!(source, "{inner}if lane == 0 {{").expect("write to string");
+    writeln!(source, "{inner}    unsafe {{").expect("write to string");
+    writeln!(
+        source,
+        "{inner}        *out.get_unchecked_mut(row{row_offset}) = acc;"
+    )
+    .expect("write to string");
+    writeln!(source, "{inner}    }}").expect("write to string");
+    writeln!(source, "{inner}}}").expect("write to string");
+    writeln!(source, "{indent}}}").expect("write to string");
     writeln!(source).expect("write to string");
-    writeln!(source, "    let acc = warp_reduce_sum(acc);").expect("write to string");
-    writeln!(source, "    if lane == 0 {{").expect("write to string");
-    writeln!(source, "        unsafe {{").expect("write to string");
-    writeln!(source, "            *out.get_unchecked_mut(row) = acc;").expect("write to string");
-    writeln!(source, "        }}").expect("write to string");
-    writeln!(source, "    }}").expect("write to string");
-    writeln!(source, "}}").expect("write to string");
-    source
 }
 
 fn warp_subgroup_reduce_offsets(lanes_per_row: u32) -> Vec<u32> {
@@ -4948,6 +5149,15 @@ fn hash_profiling_action_space(mut state: u64, action_space: &ProfilingActionSpa
             }
             state
         }
+        ProfilingActionSpace::Upcast { axis, factors } => {
+            state = hash_str(state, "upcast");
+            state = hash_u64(state, *axis as u64);
+            state = hash_u64(state, factors.len() as u64);
+            for factor in factors {
+                state = hash_u64(state, *factor as u64);
+            }
+            state
+        }
         ProfilingActionSpace::Unroll { axis, factors } => {
             state = hash_str(state, "unroll");
             state = hash_u64(state, *axis as u64);
@@ -5037,6 +5247,15 @@ fn hash_action_space(mut state: u64, action_space: &KernelActionSpace) -> u64 {
                 state = hash_u64(state, variant.axis as u64);
                 state = hash_u64(state, variant.factor as u64);
                 state = hash_str(state, variant.materialization.label());
+            }
+            state
+        }
+        KernelActionSpace::Upcast { axis, factors } => {
+            state = hash_str(state, "upcast");
+            state = hash_u64(state, *axis as u64);
+            state = hash_u64(state, factors.len() as u64);
+            for factor in factors {
+                state = hash_u64(state, *factor as u64);
             }
             state
         }
@@ -5224,6 +5443,11 @@ fn hash_transform(mut state: u64, transform: &ScheduleTransform) -> u64 {
     match transform {
         ScheduleTransform::Split { axis, factor } => {
             state = hash_str(state, "split");
+            state = hash_u64(state, *axis as u64);
+            hash_u64(state, *factor as u64)
+        }
+        ScheduleTransform::Upcast { axis, factor } => {
+            state = hash_str(state, "upcast");
             state = hash_u64(state, *axis as u64);
             hash_u64(state, *factor as u64)
         }
@@ -5447,17 +5671,21 @@ mod tests {
             KernelActionMaterialization::Existing
         )));
         let complete_space = problem.search_space();
-        assert_eq!(complete_space.spaces.len(), 3);
+        assert_eq!(complete_space.spaces.len(), 4);
         assert!(matches!(
             complete_space.spaces[0],
             KernelActionSpace::Split { .. }
         ));
         assert!(matches!(
             complete_space.spaces[1],
-            KernelActionSpace::Unroll { .. }
+            KernelActionSpace::Upcast { .. }
         ));
         assert!(matches!(
             complete_space.spaces[2],
+            KernelActionSpace::Unroll { .. }
+        ));
+        assert!(matches!(
+            complete_space.spaces[3],
             KernelActionSpace::ThreadGroup { .. }
         ));
         assert_eq!(actions.len(), 36);
@@ -5507,9 +5735,20 @@ mod tests {
         let spaces = problem.action_spaces(&rows8);
         let actions = problem.schedule_actions(&rows8);
 
-        assert_eq!(spaces.spaces.len(), 2);
+        assert_eq!(spaces.spaces.len(), 3);
         assert_eq!(spaces.actions(), actions);
-        let KernelActionSpace::Unroll { axis, factors } = &spaces.spaces[0] else {
+        let KernelActionSpace::Upcast { axis, factors } = &spaces.spaces[0] else {
+            panic!("generated matvec split should expose upcast action-space metadata");
+        };
+        assert_eq!(*axis, 0);
+        assert_eq!(
+            factors.as_slice(),
+            MatvecRowUpcast::SEARCH_FACTORS.as_slice()
+        );
+        assert!(actions.contains(&KernelScheduleAction::upcast(0, 2)));
+        assert!(actions.contains(&KernelScheduleAction::upcast(0, 4)));
+
+        let KernelActionSpace::Unroll { axis, factors } = &spaces.spaces[1] else {
             panic!("generated matvec split should expose unroll action-space metadata");
         };
         assert_eq!(*axis, 1);
@@ -5522,7 +5761,7 @@ mod tests {
         assert!(actions.contains(&KernelScheduleAction::unroll(1, 2)));
         assert!(actions.contains(&KernelScheduleAction::unroll(1, 7)));
         assert!(actions.contains(&KernelScheduleAction::unroll(1, 32)));
-        let KernelActionSpace::ThreadGroup { axis, factors } = &spaces.spaces[1] else {
+        let KernelActionSpace::ThreadGroup { axis, factors } = &spaces.spaces[2] else {
             panic!("generated matvec split should expose thread-group action-space metadata");
         };
         assert_eq!(*axis, 1);
@@ -5545,6 +5784,24 @@ mod tests {
             ]
         );
         assert_ne!(rows8.artifact_key(), unrolled.artifact_key());
+
+        let upcast = problem
+            .apply_schedule_action(&rows8, &KernelScheduleAction::upcast(0, 2))
+            .expect("row upcast action should produce generated candidate metadata");
+        assert_eq!(upcast.launch.kernel, "matvec_bf16_rows8_up2");
+        assert_eq!(upcast.launch.block_dim.x, 128);
+        assert_eq!(
+            schedule_matvec_row_upcast(&upcast.schedule).map(MatvecRowUpcast::factor),
+            Some(2)
+        );
+        assert_eq!(
+            upcast.action_trace,
+            vec![
+                KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+                KernelScheduleAction::upcast(0, 2),
+            ]
+        );
+        assert_ne!(rows8.artifact_key(), upcast.artifact_key());
 
         let grouped = problem
             .apply_schedule_action(&rows8, &KernelScheduleAction::thread_group(1, 16))
@@ -5575,7 +5832,12 @@ mod tests {
                 &KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
             )
             .expect("row split action should produce generated candidate metadata");
-        let KernelActionSpace::Unroll { factors, .. } = &problem.action_spaces(&rows8).spaces[0]
+        let spaces = problem.action_spaces(&rows8);
+        let KernelActionSpace::Unroll { factors, .. } = spaces
+            .spaces
+            .iter()
+            .find(|space| matches!(space, KernelActionSpace::Unroll { .. }))
+            .expect("generated matvec split should expose unroll metadata")
         else {
             panic!("generated matvec split should expose unroll metadata");
         };
@@ -5644,6 +5906,7 @@ mod tests {
             |candidate| {
                 let plan = schedule_matvec_plan(&candidate.schedule)?;
                 if plan.reduce_unroll == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL
+                    && plan.row_upcast.is_default()
                     && plan.thread_group.is_default()
                 {
                     SearchScore::measured(1.0)
@@ -5913,11 +6176,22 @@ mod tests {
         assert!(generated.source.contains("pub fn matvec_bf16_rows13("));
         assert!(generated.source.contains("pub struct Bf16(u16);"));
         assert!(generated.source.contains("const ROWS_PER_BLOCK: u32 = 13;"));
+        assert!(generated.source.contains("const ROWS_PER_UPCAST: u32 = 1;"));
+        assert!(
+            generated
+                .source
+                .contains("const ROW_GROUPS_PER_BLOCK: u32 = 13;")
+        );
         assert!(generated.source.contains("const REDUCE_UNROLL: u32 = 4;"));
         assert!(
             generated
                 .source
-                .contains("let row_in_block = thread_x / LANES_PER_ROW;")
+                .contains("let row_group_in_block = thread_x / LANES_PER_ROW;")
+        );
+        assert!(
+            generated
+                .source
+                .contains("let row0_in_block = row_in_block_base + 0;")
         );
         assert!(generated.source.contains("while col + 96 < cols"));
         assert!(generated.source.contains("warp::shuffle_down_f32(acc, 16)"));
@@ -5944,6 +6218,44 @@ mod tests {
                 .contains("acc += weight[row_base + col7 * col_stride].to_f32() * input[col7];")
         );
         assert!(generated.source.contains("col += 256;"));
+    }
+
+    #[test]
+    fn matvec_generator_renders_row_upcast_source_on_demand() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let candidate = problem.generated_candidate_for_plan(
+            MatvecSchedulePlan::new(RowMajorWarpRows::Rows8).with_row_upcast(
+                MatvecRowUpcast::new(2).expect("2 rows should be a supported upcast"),
+            ),
+        );
+        let generated = MatvecRustCudaGenerator
+            .source_for(&candidate)
+            .expect("matvec generator should render row-upcast source");
+
+        assert_eq!(generated.symbol, "matvec_bf16_rows8_up2");
+        assert_eq!(candidate.launch.block_dim.x, 128);
+        assert!(generated.source.contains("const ROWS_PER_BLOCK: u32 = 8;"));
+        assert!(generated.source.contains("const ROWS_PER_UPCAST: u32 = 2;"));
+        assert!(
+            generated
+                .source
+                .contains("const ROW_GROUPS_PER_BLOCK: u32 = 4;")
+        );
+        assert!(
+            generated
+                .source
+                .contains("let row1_in_block = row_in_block_base + 1;")
+        );
+        assert!(
+            generated
+                .source
+                .contains("if row1_in_block < ROWS_PER_BLOCK && row1 < rows as usize")
+        );
+        assert!(
+            generated
+                .source
+                .contains("*out.get_unchecked_mut(row1) = acc;")
+        );
     }
 
     #[test]
@@ -7469,6 +7781,10 @@ mod tests {
         );
         assert_eq!(
             report_json["action_space"]["spaces"][1]["op"].as_str(),
+            Some("upcast")
+        );
+        assert_eq!(
+            report_json["action_space"]["spaces"][2]["op"].as_str(),
             Some("unroll")
         );
         assert_eq!(report_json["best"]["launchable"].as_bool(), Some(false));

@@ -1779,6 +1779,9 @@ fn format_schedule(transforms: &[ScheduleTransform]) -> String {
             ScheduleTransform::Split { axis, factor } => {
                 format!("split(axis={axis},factor={factor})")
             }
+            ScheduleTransform::Upcast { axis, factor } => {
+                format!("upcast(axis={axis},factor={factor})")
+            }
             ScheduleTransform::Unroll { axis, factor } => {
                 format!("unroll(axis={axis},factor={factor})")
             }
