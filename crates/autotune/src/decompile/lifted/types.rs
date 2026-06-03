@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::super::RegisterRef;
+use super::super::{RegisterRef, SassOpcode};
 use super::semantics::SassLiftedSemantics;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,15 +29,33 @@ pub struct SassLiftedOp {
     pub address: u64,
     pub block_id: Option<usize>,
     pub predicate: Option<String>,
-    pub opcode: String,
+    pub opcode: SassOpcode,
     pub class: SassLiftedOpClass,
     pub kind: SassLiftedOpKind,
     pub semantics: SassLiftedSemantics,
     pub inputs: Vec<SassLiftedValueRef>,
     pub outputs: Vec<SassLiftedValueRef>,
     pub source_operands: Vec<String>,
-    pub detail: String,
+    pub detail: SassLiftedOpDetail,
     pub source: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SassLiftedOpDetail {
+    pub class: SassLiftedOpClass,
+    pub kind: SassLiftedOpKind,
+}
+
+impl SassLiftedOpDetail {
+    pub fn new(class: SassLiftedOpClass, kind: SassLiftedOpKind) -> Self {
+        Self { class, kind }
+    }
+}
+
+impl fmt::Display for SassLiftedOpDetail {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "class={},kind={}", self.class, self.kind)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

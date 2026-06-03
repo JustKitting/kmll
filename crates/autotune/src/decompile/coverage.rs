@@ -838,7 +838,7 @@ fn append_opcode_catalog_lifted_ops(
 ) {
     for function in &lifted.functions {
         for op in &function.ops {
-            let entry = opcode_catalog.entry(op.opcode.clone()).or_default();
+            let entry = opcode_catalog.entry(op.opcode.to_string()).or_default();
             if op.class.to_string() != "unsupported" {
                 entry.locally_mapped = true;
             }
@@ -1155,14 +1155,14 @@ fn append_analysis(
                     address: op.address,
                     block_id: op.block_id,
                     predicate: op.predicate.clone(),
-                    opcode: op.opcode.clone(),
+                    opcode: op.opcode.to_string(),
                     class: op.class.to_string(),
                     kind: op.kind.to_string(),
                     semantics: op.semantics.to_string(),
                     inputs: op.inputs.iter().map(|value| value.name()).collect(),
                     outputs: op.outputs.iter().map(|value| value.name()).collect(),
                     source_operands: op.source_operands.clone(),
-                    detail: op.detail.clone(),
+                    detail: op.detail.to_string(),
                     source: op.source.clone(),
                 });
             }

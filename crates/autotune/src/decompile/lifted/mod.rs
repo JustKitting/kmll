@@ -7,8 +7,8 @@ mod value;
 pub use self::{
     semantics::SassLiftedSemantics,
     types::{
-        SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedOpClass, SassLiftedOpKind,
-        SassLiftedValueRef,
+        SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedOpClass, SassLiftedOpDetail,
+        SassLiftedOpKind, SassLiftedValueRef,
     },
     value::lift_sass_value_ir,
 };

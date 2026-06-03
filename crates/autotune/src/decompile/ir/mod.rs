@@ -9,6 +9,6 @@ pub use self::{
         KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemoryAccessInfo,
         MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemoryAddressImmediateKind,
         MemoryAddressKind, MemorySpace, PredicateCondition, PredicateConditionKind, RegisterRef,
-        RegisterRefKind, SassMappingConfidence, ScalarOperand, ScalarOperandKind,
+        RegisterRefKind, SassMappingConfidence, SassOpcode, ScalarOperand, ScalarOperandKind,
     },
 };

@@ -28,8 +28,8 @@ pub use self::{
     analysis::{
         SassAnalysisFunction, SassAnalysisModule, SassBasicBlock, SassBlockTerminator, SassCfgEdge,
         SassCfgEdgeKind, SassDataflowOp, SassDefUseEdge, SassDominatorBlock, SassLiveRange,
-        SassMemoryAccess, SassMemoryAccessKind, SassNaturalLoop, SassOpcode, SassReachingUse,
-        SassRegion, SassRegionKind, SassRegionPath, SassSsaValue, SassValueOp, SassValueOpKind,
+        SassMemoryAccess, SassMemoryAccessKind, SassNaturalLoop, SassReachingUse, SassRegion,
+        SassRegionKind, SassRegionPath, SassSsaValue, SassValueOp, SassValueOpKind,
         analyze_sass_ir,
     },
     coverage::{
@@ -54,12 +54,13 @@ pub use self::{
         KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemoryAccessInfo,
         MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemoryAddressImmediateKind,
         MemoryAddressKind, MemorySpace, PredicateCondition, PredicateConditionKind, RegisterRef,
-        RegisterRefKind, SassMappingConfidence, ScalarOperand, ScalarOperandKind, lift_sass_module,
+        RegisterRefKind, SassMappingConfidence, SassOpcode, ScalarOperand, ScalarOperandKind,
+        lift_sass_module,
     },
     known_opcodes::{KnownSassOpcode, known_sass_opcodes},
     lifted::{
-        SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedOpClass, SassLiftedOpKind,
-        SassLiftedSemantics, SassLiftedValueRef, lift_sass_value_ir,
+        SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedOpClass, SassLiftedOpDetail,
+        SassLiftedOpKind, SassLiftedSemantics, SassLiftedValueRef, lift_sass_value_ir,
     },
     patterns::{
         SassPatternConfidence, SassPatternFunction, SassPatternModule, SassSemanticPattern,

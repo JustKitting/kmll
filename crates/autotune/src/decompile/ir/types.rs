@@ -64,6 +64,34 @@ pub struct KernelIrOp {
     pub source: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SassOpcode {
+    raw: String,
+}
+
+impl SassOpcode {
+    pub fn new(raw: impl Into<String>) -> Self {
+        Self { raw: raw.into() }
+    }
+
+    pub fn from_ir_op(op: &KernelIrOp) -> Self {
+        match &op.kind {
+            KernelIrOpKind::Unsupported { opcode, .. } => Self::new(opcode.clone()),
+            _ => Self::new(op.source_opcode.clone()),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+}
+
+impl fmt::Display for SassOpcode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KernelIrOpKind {
     ReadSpecialRegister {

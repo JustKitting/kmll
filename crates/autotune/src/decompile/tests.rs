@@ -773,7 +773,7 @@ fn lift_tensor_core_sass_keeps_known_op_families_typed() {
     let hmma = lifted.functions[0]
         .ops
         .iter()
-        .find(|op| op.opcode == "HMMA")
+        .find(|op| op.opcode == SassOpcode::new("HMMA"))
         .expect("HMMA should be lifted");
     assert_eq!(hmma.class, SassLiftedOpClass::TensorCore);
     assert_eq!(hmma.kind, SassLiftedOpKind::TensorCoreMma);

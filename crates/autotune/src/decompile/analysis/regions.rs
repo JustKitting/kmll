@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    super::{ControlTarget, KernelIrFunction, PredicateCondition},
+    super::{ControlTarget, KernelIrFunction, PredicateCondition, SassOpcode},
     types::{
-        SassBasicBlock, SassCfgEdge, SassCfgEdgeKind, SassNaturalLoop, SassOpcode, SassRegion,
-        SassRegionKind, SassRegionPath,
+        SassBasicBlock, SassCfgEdge, SassCfgEdgeKind, SassNaturalLoop, SassRegion, SassRegionKind,
+        SassRegionPath,
     },
 };
 

@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    super::{KernelIrFunction, KernelIrOp, KernelIrOpKind, RegisterRef},
+    super::{KernelIrFunction, KernelIrOp, KernelIrOpKind, RegisterRef, SassOpcode},
     cfg::{block_id_for_op_index, predecessors_by_block},
     registers::push_register_refs,
     types::{
-        SassBasicBlock, SassCfgEdge, SassDataflowOp, SassDefUseEdge, SassLiveRange, SassOpcode,
+        SassBasicBlock, SassCfgEdge, SassDataflowOp, SassDefUseEdge, SassLiveRange,
         SassReachingUse, SassSsaValue, SassValueOp, SassValueOpKind,
     },
 };

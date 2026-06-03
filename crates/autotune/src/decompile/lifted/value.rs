@@ -2,11 +2,14 @@ use std::collections::BTreeMap;
 
 use super::super::{
     KernelIrFunction, KernelIrModule, KernelIrOp, SassAnalysisFunction, SassAnalysisModule,
+    SassOpcode,
 };
 use super::{
     classify::classify_op,
     semantics::lift_semantics,
-    types::{SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedValueRef},
+    types::{
+        SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedOpDetail, SassLiftedValueRef,
+    },
 };
 
 pub fn lift_sass_value_ir(
@@ -105,14 +108,14 @@ fn lift_op(
         address: op.address,
         block_id,
         predicate: op.predicate.as_ref().map(ToString::to_string),
-        opcode: op.source_opcode.clone(),
+        opcode: SassOpcode::from_ir_op(op),
         class,
         kind,
         semantics: lift_semantics(&op.kind),
         inputs,
         outputs,
         source_operands: op.source_operands.clone(),
-        detail: format!("{:?}", op.kind),
+        detail: SassLiftedOpDetail::new(class, kind),
         source: op.source.clone(),
     }
 }
