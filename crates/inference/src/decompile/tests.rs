@@ -90,6 +90,20 @@ predicated_exit_fixture:
         /*0030*/                   EXIT ;                                        /* 0x0 */
 "#;
 
+const PREDICATED_WRITE_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.predicated_write_fixture,"ax",@progbits
+        .global predicated_write_fixture
+predicated_write_fixture:
+.text.predicated_write_fixture:
+        /*0000*/                   IADD R2, R0, R1 ;                             /* 0x0 */
+        /*0010*/                   ISETP.GT.U32.AND P0, PT, R0, R1, PT ;         /* 0x0 */
+        /*0020*/               @P0 IADD R2, R2, R1 ;                             /* 0x0 */
+        /*0030*/                   IADD R3, R2, R1 ;                             /* 0x0 */
+        /*0040*/                   EXIT ;                                        /* 0x0 */
+"#;
+
 #[test]
 fn parse_nvdisasm_sass_captures_function_and_operands() {
     let module = parse_nvdisasm_sass(SIMPLE_SASS).expect("fixture SASS should parse");
@@ -303,9 +317,43 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
     assert_eq!(add.defines, ["R2"]);
     assert_eq!(add.uses, ["R0", "R1"]);
 
+    let predicate_use = function
+        .reaching_uses
+        .iter()
+        .find(|use_site| use_site.address == 0x10 && use_site.register == "P0")
+        .expect("branch predicate use should have reaching definitions");
+    assert!(!predicate_use.reaches_entry);
+    assert_eq!(predicate_use.reaching_def_addresses.as_slice(), &[0x0]);
+
+    let joined_r2_use = function
+        .reaching_uses
+        .iter()
+        .find(|use_site| use_site.address == 0x30 && use_site.register == "R2")
+        .expect("join use of R2 should have reaching definitions");
+    assert!(joined_r2_use.reaches_entry);
+    assert_eq!(joined_r2_use.reaching_def_addresses.as_slice(), &[0x20]);
+
+    let local_r2_range = function
+        .live_ranges
+        .iter()
+        .find(|range| range.register == "R2" && range.def_address == Some(0x20))
+        .expect("R2 definition at 0x20 should have a live range");
+    assert_eq!(local_r2_range.use_addresses.as_slice(), &[0x30]);
+
+    let entry_r2_range = function
+        .live_ranges
+        .iter()
+        .find(|range| range.register == "R2" && range.def_address.is_none())
+        .expect("entry R2 should be live on the branch path");
+    assert_eq!(entry_r2_range.start_address, 0x30);
+    assert_eq!(entry_r2_range.end_address, 0x30);
+    assert_eq!(entry_r2_range.use_addresses.as_slice(), &[0x30]);
+
     let text = analysis.to_text();
     assert!(text.contains("b0 -> b2 [branch condition=P0 target=.L_then]"));
     assert!(text.contains("0x0020: def=[R2] use=[R0,R1]"));
+    assert!(text.contains("0x0030: R2 <- [entry,0x0020]"));
+    assert!(text.contains("R2@entry 0x0030-0x0030 uses=[0x0030]"));
 }
 
 #[test]
@@ -328,6 +376,51 @@ fn analysis_keeps_fallthrough_after_predicated_exit() {
             && edge.to_block == Some(1)
             && edge.kind == SassCfgEdgeKind::Fallthrough
     }));
+}
+
+#[test]
+fn analysis_keeps_previous_definition_after_predicated_write() {
+    let module =
+        parse_nvdisasm_sass(PREDICATED_WRITE_SASS).expect("predicated write fixture should parse");
+    let ir = lower_sass_module(&module);
+    let analysis = analyze_sass_ir(&ir);
+    let function = &analysis.functions[0];
+
+    let predicated_write_use = function
+        .reaching_uses
+        .iter()
+        .find(|use_site| use_site.address == 0x20 && use_site.register == "R2")
+        .expect("predicated write should use the previous R2 value");
+    assert!(!predicated_write_use.reaches_entry);
+    assert_eq!(
+        predicated_write_use.reaching_def_addresses.as_slice(),
+        &[0x0]
+    );
+
+    let post_write_use = function
+        .reaching_uses
+        .iter()
+        .find(|use_site| use_site.address == 0x30 && use_site.register == "R2")
+        .expect("post-write R2 use should have reaching definitions");
+    assert!(!post_write_use.reaches_entry);
+    assert_eq!(
+        post_write_use.reaching_def_addresses.as_slice(),
+        &[0x0, 0x20]
+    );
+
+    let original_r2_range = function
+        .live_ranges
+        .iter()
+        .find(|range| range.register == "R2" && range.def_address == Some(0x0))
+        .expect("original R2 definition should remain live after predicated write");
+    assert_eq!(original_r2_range.use_addresses.as_slice(), &[0x20, 0x30]);
+
+    let predicated_r2_range = function
+        .live_ranges
+        .iter()
+        .find(|range| range.register == "R2" && range.def_address == Some(0x20))
+        .expect("predicated R2 definition should get its own live range");
+    assert_eq!(predicated_r2_range.use_addresses.as_slice(), &[0x30]);
 }
 
 #[test]
@@ -389,10 +482,14 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.cfg_blocks_path.exists());
     assert!(report.cfg_edges_path.exists());
     assert!(report.dataflow_path.exists());
+    assert!(report.reaching_uses_path.exists());
+    assert!(report.live_ranges_path.exists());
     assert!(report.unsupported_instructions_path.exists());
     assert!(report.cfg_block_count > 0);
     assert!(report.cfg_edge_count > 0);
     assert!(report.dataflow_op_count > 0);
+    assert!(report.reaching_use_count > 0);
+    assert!(report.live_range_count > 0);
     assert!(
         report
             .files

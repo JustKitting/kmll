@@ -22,10 +22,12 @@ mod sass;
 pub use self::{
     analysis::{
         SassAnalysisFunction, SassAnalysisModule, SassBasicBlock, SassBlockTerminator, SassCfgEdge,
-        SassCfgEdgeKind, SassDataflowOp, analyze_sass_ir,
+        SassCfgEdgeKind, SassDataflowOp, SassLiveRange, SassReachingUse, analyze_sass_ir,
     },
     coverage::{
-        SassCoverageFileReport, SassCoverageOptions, SassCoverageReport, SassOpcodeCount,
+        SassCoverageBasicBlock, SassCoverageCfgEdge, SassCoverageDataflowOp,
+        SassCoverageFileReport, SassCoverageLiveRange, SassCoverageOptions,
+        SassCoverageReachingUse, SassCoverageReport, SassCoverageSemanticPattern, SassOpcodeCount,
         SassUnsupportedInstruction, run_sass_coverage_scan,
     },
     fixtures::{SimpleKernelFixture, SimpleKernelFixtureKind, simple_kernel_fixtures},
@@ -76,6 +78,8 @@ pub struct DecompileFixtureReport {
     pub parsed_instruction_count: usize,
     pub cfg_block_count: usize,
     pub cfg_edge_count: usize,
+    pub reaching_use_count: usize,
+    pub live_range_count: usize,
     pub semantic_pattern_count: usize,
     pub unsupported_instruction_count: usize,
 }
@@ -98,6 +102,8 @@ pub struct SassFileDecompileReport {
     pub parsed_instruction_count: usize,
     pub cfg_block_count: usize,
     pub cfg_edge_count: usize,
+    pub reaching_use_count: usize,
+    pub live_range_count: usize,
     pub semantic_pattern_count: usize,
     pub unsupported_instruction_count: usize,
 }
@@ -174,6 +180,8 @@ pub fn run_sass_file_decompile(
         parsed_instruction_count: parsed.instruction_count(),
         cfg_block_count: analysis.block_count(),
         cfg_edge_count: analysis.edge_count(),
+        reaching_use_count: analysis.reaching_use_count(),
+        live_range_count: analysis.live_range_count(),
         semantic_pattern_count: patterns.pattern_count(),
         unsupported_instruction_count: lowered.unsupported_instruction_count(),
     })
@@ -263,6 +271,8 @@ fn run_decompile_fixture(
         parsed_instruction_count: parsed.instruction_count(),
         cfg_block_count: analysis.block_count(),
         cfg_edge_count: analysis.edge_count(),
+        reaching_use_count: analysis.reaching_use_count(),
+        live_range_count: analysis.live_range_count(),
         semantic_pattern_count: patterns.pattern_count(),
         unsupported_instruction_count: lowered.unsupported_instruction_count(),
     })

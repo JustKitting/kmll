@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, fmt::Write as _};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+};
 
 use super::{KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind};
 
@@ -27,6 +30,20 @@ impl SassAnalysisModule {
         self.functions
             .iter()
             .map(|function| function.dataflow.len())
+            .sum()
+    }
+
+    pub fn reaching_use_count(&self) -> usize {
+        self.functions
+            .iter()
+            .map(|function| function.reaching_uses.len())
+            .sum()
+    }
+
+    pub fn live_range_count(&self) -> usize {
+        self.functions
+            .iter()
+            .map(|function| function.live_ranges.len())
             .sum()
     }
 
@@ -78,6 +95,30 @@ impl SassAnalysisModule {
                 )
                 .expect("write to string");
             }
+            writeln!(out, "  reaching_uses").expect("write to string");
+            for reaching in &function.reaching_uses {
+                writeln!(
+                    out,
+                    "    {:#06x}: {} <- [{}]",
+                    reaching.address,
+                    reaching.register,
+                    reaching.sources_text()
+                )
+                .expect("write to string");
+            }
+            writeln!(out, "  live_ranges").expect("write to string");
+            for range in &function.live_ranges {
+                writeln!(
+                    out,
+                    "    {}@{} {:#06x}-{:#06x} uses=[{}]",
+                    range.register,
+                    range.def_text(),
+                    range.start_address,
+                    range.end_address,
+                    format_addresses(&range.use_addresses)
+                )
+                .expect("write to string");
+            }
             writeln!(out, "}}").expect("write to string");
         }
         out
@@ -90,6 +131,8 @@ pub struct SassAnalysisFunction {
     pub blocks: Vec<SassBasicBlock>,
     pub edges: Vec<SassCfgEdge>,
     pub dataflow: Vec<SassDataflowOp>,
+    pub reaching_uses: Vec<SassReachingUse>,
+    pub live_ranges: Vec<SassLiveRange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,9 +201,49 @@ impl std::fmt::Display for SassCfgEdgeKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassDataflowOp {
     pub address: u64,
+    pub predicate: Option<String>,
     pub defines: Vec<String>,
     pub uses: Vec<String>,
     pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassReachingUse {
+    pub address: u64,
+    pub register: String,
+    pub reaching_def_addresses: Vec<u64>,
+    pub reaches_entry: bool,
+}
+
+impl SassReachingUse {
+    pub fn sources_text(&self) -> String {
+        let mut sources = self
+            .reaching_def_addresses
+            .iter()
+            .map(|address| format!("{address:#06x}"))
+            .collect::<Vec<_>>();
+        if self.reaches_entry {
+            sources.insert(0, "entry".to_string());
+        }
+        sources.join(",")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassLiveRange {
+    pub register: String,
+    pub def_address: Option<u64>,
+    pub start_address: u64,
+    pub end_address: u64,
+    pub use_addresses: Vec<u64>,
+}
+
+impl SassLiveRange {
+    pub fn def_text(&self) -> String {
+        self.def_address
+            .map(|address| format!("{address:#06x}"))
+            .unwrap_or_else(|| "entry".to_string())
+    }
 }
 
 pub fn analyze_sass_ir(module: &KernelIrModule) -> SassAnalysisModule {
@@ -173,12 +256,19 @@ pub fn analyze_sass_ir(module: &KernelIrModule) -> SassAnalysisModule {
 fn analyze_function(function: &KernelIrFunction) -> SassAnalysisFunction {
     let blocks = build_blocks(function);
     let edges = build_edges(function, &blocks);
-    let dataflow = function.ops.iter().map(analyze_dataflow).collect();
+    let dataflow = function
+        .ops
+        .iter()
+        .map(analyze_dataflow)
+        .collect::<Vec<_>>();
+    let (reaching_uses, live_ranges) = analyze_reaching_defs(&blocks, &edges, &dataflow);
     SassAnalysisFunction {
         name: function.name.clone(),
         blocks,
         edges,
         dataflow,
+        reaching_uses,
+        live_ranges,
     }
 }
 
@@ -333,6 +423,237 @@ fn build_edges(function: &KernelIrFunction, blocks: &[SassBasicBlock]) -> Vec<Sa
     edges
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReachingDef {
+    register: String,
+    address: Option<u64>,
+}
+
+fn analyze_reaching_defs(
+    blocks: &[SassBasicBlock],
+    edges: &[SassCfgEdge],
+    dataflow: &[SassDataflowOp],
+) -> (Vec<SassReachingUse>, Vec<SassLiveRange>) {
+    if blocks.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut definitions = Vec::new();
+    let mut def_by_op_register = BTreeMap::<(usize, String), usize>::new();
+    let mut defs_by_register = BTreeMap::<String, BTreeSet<usize>>::new();
+    let mut registers = BTreeSet::<String>::new();
+    for op in dataflow {
+        registers.extend(op.defines.iter().cloned());
+        registers.extend(op.uses.iter().cloned());
+    }
+    for register in registers {
+        let def_id = definitions.len();
+        definitions.push(ReachingDef {
+            register: register.clone(),
+            address: None,
+        });
+        defs_by_register.entry(register).or_default().insert(def_id);
+    }
+    for (op_index, op) in dataflow.iter().enumerate() {
+        for register in &op.defines {
+            let def_id = definitions.len();
+            definitions.push(ReachingDef {
+                register: register.clone(),
+                address: Some(op.address),
+            });
+            def_by_op_register.insert((op_index, register.clone()), def_id);
+            defs_by_register
+                .entry(register.clone())
+                .or_default()
+                .insert(def_id);
+        }
+    }
+
+    let predecessors = predecessors_by_block(blocks.len(), edges);
+    let entry_defs = definitions
+        .iter()
+        .enumerate()
+        .filter_map(|(def_id, definition)| definition.address.is_none().then_some(def_id))
+        .collect::<BTreeSet<_>>();
+    let mut in_sets = vec![BTreeSet::<usize>::new(); blocks.len()];
+    let mut out_sets = vec![BTreeSet::<usize>::new(); blocks.len()];
+    loop {
+        let mut changed = false;
+        for block in blocks {
+            let mut next_in = BTreeSet::new();
+            if block.id == 0 {
+                next_in.extend(entry_defs.iter().copied());
+            }
+            for pred in &predecessors[block.id] {
+                next_in.extend(out_sets[*pred].iter().copied());
+            }
+            let next_out = transfer_block(
+                block,
+                dataflow,
+                &def_by_op_register,
+                &defs_by_register,
+                next_in.clone(),
+            );
+            if next_in != in_sets[block.id] || next_out != out_sets[block.id] {
+                in_sets[block.id] = next_in;
+                out_sets[block.id] = next_out;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut reaching_uses = Vec::new();
+    let mut live_range_uses = BTreeMap::<(String, Option<u64>), BTreeSet<u64>>::new();
+    for definition in &definitions {
+        if let Some(address) = definition.address {
+            live_range_uses
+                .entry((definition.register.clone(), Some(address)))
+                .or_default();
+        }
+    }
+
+    for block in blocks {
+        let mut state = in_sets[block.id].clone();
+        for op_index in block.start_op_index..=block.end_op_index {
+            let op = &dataflow[op_index];
+            for register in &op.uses {
+                let reaching = reaching_defs_for_register(&state, &definitions, register);
+                let reaches_entry = reaching.is_empty();
+                let reaches_entry = reaches_entry
+                    || reaching
+                        .iter()
+                        .any(|def_id| definitions[*def_id].address.is_none());
+                let reaching_def_addresses = reaching
+                    .iter()
+                    .filter_map(|def_id| definitions[*def_id].address)
+                    .collect::<Vec<_>>();
+                if reaches_entry {
+                    live_range_uses
+                        .entry((register.clone(), None))
+                        .or_default()
+                        .insert(op.address);
+                }
+                for address in &reaching_def_addresses {
+                    live_range_uses
+                        .entry((register.clone(), Some(*address)))
+                        .or_default()
+                        .insert(op.address);
+                }
+                reaching_uses.push(SassReachingUse {
+                    address: op.address,
+                    register: register.clone(),
+                    reaching_def_addresses,
+                    reaches_entry,
+                });
+            }
+            apply_defs(
+                op_index,
+                op,
+                &mut state,
+                &def_by_op_register,
+                &defs_by_register,
+            );
+        }
+    }
+
+    let mut live_ranges = live_range_uses
+        .into_iter()
+        .map(|((register, def_address), uses)| {
+            let start_address = def_address
+                .or_else(|| uses.iter().next().copied())
+                .unwrap_or(0);
+            let end_address = uses.iter().next_back().copied().unwrap_or(start_address);
+            SassLiveRange {
+                register,
+                def_address,
+                start_address,
+                end_address,
+                use_addresses: uses.into_iter().collect(),
+            }
+        })
+        .collect::<Vec<_>>();
+    live_ranges.sort_by(|lhs, rhs| {
+        lhs.register
+            .cmp(&rhs.register)
+            .then_with(|| lhs.start_address.cmp(&rhs.start_address))
+            .then_with(|| lhs.def_address.cmp(&rhs.def_address))
+    });
+    reaching_uses.sort_by(|lhs, rhs| {
+        lhs.address
+            .cmp(&rhs.address)
+            .then_with(|| lhs.register.cmp(&rhs.register))
+    });
+    (reaching_uses, live_ranges)
+}
+
+fn predecessors_by_block(block_count: usize, edges: &[SassCfgEdge]) -> Vec<Vec<usize>> {
+    let mut predecessors = vec![Vec::new(); block_count];
+    for edge in edges {
+        if let Some(to_block) = edge.to_block {
+            if to_block < block_count && !predecessors[to_block].contains(&edge.from_block) {
+                predecessors[to_block].push(edge.from_block);
+            }
+        }
+    }
+    predecessors
+}
+
+fn transfer_block(
+    block: &SassBasicBlock,
+    dataflow: &[SassDataflowOp],
+    def_by_op_register: &BTreeMap<(usize, String), usize>,
+    defs_by_register: &BTreeMap<String, BTreeSet<usize>>,
+    mut state: BTreeSet<usize>,
+) -> BTreeSet<usize> {
+    for op_index in block.start_op_index..=block.end_op_index {
+        apply_defs(
+            op_index,
+            &dataflow[op_index],
+            &mut state,
+            def_by_op_register,
+            defs_by_register,
+        );
+    }
+    state
+}
+
+fn apply_defs(
+    op_index: usize,
+    op: &SassDataflowOp,
+    state: &mut BTreeSet<usize>,
+    def_by_op_register: &BTreeMap<(usize, String), usize>,
+    defs_by_register: &BTreeMap<String, BTreeSet<usize>>,
+) {
+    let conditional_write = op.predicate.is_some();
+    for register in &op.defines {
+        if !conditional_write {
+            if let Some(kill_set) = defs_by_register.get(register) {
+                for def_id in kill_set {
+                    state.remove(def_id);
+                }
+            }
+        }
+        if let Some(def_id) = def_by_op_register.get(&(op_index, register.clone())) {
+            state.insert(*def_id);
+        }
+    }
+}
+
+fn reaching_defs_for_register(
+    state: &BTreeSet<usize>,
+    definitions: &[ReachingDef],
+    register: &str,
+) -> Vec<usize> {
+    state
+        .iter()
+        .copied()
+        .filter(|def_id| definitions[*def_id].register == register)
+        .collect()
+}
+
 fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
     let mut defines = Vec::new();
     let mut uses = Vec::new();
@@ -419,6 +740,7 @@ fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
     }
     SassDataflowOp {
         address: op.address,
+        predicate: op.predicate.clone(),
         defines,
         uses,
         source: op.source.clone(),
@@ -546,4 +868,12 @@ fn is_token_boundary(text: &str, index: usize) -> bool {
 
 fn is_pseudo_register(register: &str) -> bool {
     matches!(register, "RZ" | "URZ" | "PT" | "UPT")
+}
+
+fn format_addresses(addresses: &[u64]) -> String {
+    addresses
+        .iter()
+        .map(|address| format!("{address:#06x}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
