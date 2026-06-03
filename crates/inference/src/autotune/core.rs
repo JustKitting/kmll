@@ -223,6 +223,10 @@ pub enum KernelGenerationError {
         kind: OperationKind,
         reason: String,
     },
+    NoOptimizationCandidate {
+        name: String,
+        kind: OperationKind,
+    },
     MissingTransform {
         family: String,
         transform: &'static str,
@@ -247,6 +251,13 @@ impl fmt::Display for KernelGenerationError {
                 write!(
                     f,
                     "operation {name:?} ({}) is not supported by inference autotune: {reason}",
+                    kind.label()
+                )
+            }
+            Self::NoOptimizationCandidate { name, kind } => {
+                write!(
+                    f,
+                    "operation {name:?} ({}) did not produce an inference autotune candidate",
                     kind.label()
                 )
             }

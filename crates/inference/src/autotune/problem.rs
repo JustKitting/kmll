@@ -1,3 +1,95 @@
+#[derive(Debug, Clone, PartialEq)]
+pub struct InferenceKernelAutoOptimize {
+    pub operation: TypedOperationSpec,
+    pub problem: InferenceKernelOptimizationProblem,
+    pub result: AutoOptimizeResult,
+}
+
+impl InferenceKernelAutoOptimize {
+    pub fn best_candidate(&self) -> Option<&KernelCandidateMetadata> {
+        self.result.best.as_ref()
+    }
+
+    pub fn auto_optimization_report(
+        &self,
+        config: AutoOptimizeConfig,
+    ) -> AutoOptimizationSearchReport {
+        self.result.auto_optimization_report_with_action_space(
+            self.problem.family(),
+            config,
+            &self.problem.search_space(),
+        )
+    }
+
+    pub fn render_best_source(&self) -> Result<GeneratedKernelSource, KernelGenerationError> {
+        let candidate =
+            self.best_candidate()
+                .ok_or_else(|| KernelGenerationError::NoOptimizationCandidate {
+                    name: self.operation.name.clone(),
+                    kind: self.operation.kind,
+                })?;
+        InferenceKernelRustCudaGenerator.source_for(candidate)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeneratedInferenceKernelSource {
+    pub optimization: InferenceKernelAutoOptimize,
+    pub candidate: KernelCandidateMetadata,
+    pub source: GeneratedKernelSource,
+}
+
+pub fn auto_optimize_inference_kernel(
+    operation: &TypedOperationSpec,
+    config: AutoOptimizeConfig,
+) -> Result<InferenceKernelAutoOptimize, KernelGenerationError> {
+    let problem = InferenceKernelOptimizationProblem::from_operation(operation)?;
+    let result = auto_optimize_metadata(&problem, config);
+    Ok(InferenceKernelAutoOptimize {
+        operation: operation.clone(),
+        problem,
+        result,
+    })
+}
+
+pub fn auto_optimize_inference_kernel_with_scorer<F>(
+    operation: &TypedOperationSpec,
+    config: AutoOptimizeConfig,
+    mut score_candidate: F,
+) -> Result<InferenceKernelAutoOptimize, KernelGenerationError>
+where
+    F: FnMut(&KernelCandidateMetadata) -> Option<SearchScore>,
+{
+    let problem = InferenceKernelOptimizationProblem::from_operation(operation)?;
+    let result = auto_optimize_metadata_with_scorer(&problem, config, |candidate| {
+        score_candidate(candidate)
+    });
+    Ok(InferenceKernelAutoOptimize {
+        operation: operation.clone(),
+        problem,
+        result,
+    })
+}
+
+pub fn generate_inference_kernel_source(
+    operation: &TypedOperationSpec,
+    config: AutoOptimizeConfig,
+) -> Result<GeneratedInferenceKernelSource, KernelGenerationError> {
+    let optimization = auto_optimize_inference_kernel(operation, config)?;
+    let candidate = optimization.best_candidate().cloned().ok_or_else(|| {
+        KernelGenerationError::NoOptimizationCandidate {
+            name: operation.name.clone(),
+            kind: operation.kind,
+        }
+    })?;
+    let source = InferenceKernelRustCudaGenerator.source_for(&candidate)?;
+    Ok(GeneratedInferenceKernelSource {
+        optimization,
+        candidate,
+        source,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InferenceKernelOptimizationProblem {
     MatvecBf16RowMajor(MatvecSearchProblem),
