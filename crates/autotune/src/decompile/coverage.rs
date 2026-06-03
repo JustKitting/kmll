@@ -170,7 +170,7 @@ pub struct SassOpcodeCatalogEntry {
     pub instruction_count: usize,
     pub signature_count: usize,
     pub signatures: Vec<String>,
-    pub source_formats: Vec<String>,
+    pub source_formats: Vec<SassCoverageSourceFormat>,
     pub architectures: Vec<String>,
     pub known_sources: Vec<String>,
     pub classes: Vec<String>,
@@ -302,11 +302,7 @@ impl OpcodeCatalogBuilder {
             instruction_count: self.instruction_count,
             signature_count: signatures.len(),
             signatures,
-            source_formats: self
-                .source_formats
-                .into_iter()
-                .map(|format| format.to_string())
-                .collect(),
+            source_formats: self.source_formats.into_iter().collect(),
             architectures: self.architectures.into_iter().collect(),
             known_sources: self
                 .known_sources
@@ -360,7 +356,7 @@ impl fmt::Display for SassOpcodeSignature {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum SassCoverageSourceFormat {
+pub enum SassCoverageSourceFormat {
     Cuobjdump,
     Nvdisasm,
     Sass,
@@ -1604,7 +1600,7 @@ fn render_opcode_catalog_tsv(report: &SassCoverageReport) -> String {
             entry.instruction_count,
             entry.signature_count,
             tsv(&entry.signatures.join(",")),
-            tsv(&entry.source_formats.join(",")),
+            tsv(&display_list(&entry.source_formats)),
             tsv(&entry.architectures.join(",")),
             tsv(&entry.known_sources.join(",")),
             tsv(&entry.classes.join(",")),

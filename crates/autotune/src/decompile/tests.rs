@@ -1508,13 +1508,13 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         iadd_catalog
             .source_formats
             .iter()
-            .any(|format| format == "cuobjdump")
+            .any(|format| format == &SassCoverageSourceFormat::Cuobjdump)
     );
     assert!(
         iadd_catalog
             .source_formats
             .iter()
-            .any(|format| format == "sass")
+            .any(|format| format == &SassCoverageSourceFormat::Sass)
     );
     let hmma_catalog = report
         .opcode_catalog
