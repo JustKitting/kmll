@@ -1,6 +1,64 @@
 use super::matvec_body::{render_interleaved_matvec_upcast_body, render_matvec_upcast_row_body};
 use super::*;
 
+pub(in crate::autotune) fn render_bf16_naive_matvec_source(symbol: &str) -> String {
+    let mut source = String::new();
+    writeln!(
+        source,
+        "use cuda_device::{{DisjointSlice, kernel, thread}};"
+    )
+    .expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "#[repr(transparent)]").expect("write to string");
+    writeln!(source, "#[derive(Clone, Copy, Default)]").expect("write to string");
+    writeln!(source, "pub struct Bf16(u16);").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "impl Bf16 {{").expect("write to string");
+    writeln!(source, "    #[inline(always)]").expect("write to string");
+    writeln!(source, "    pub fn to_f32(self) -> f32 {{").expect("write to string");
+    writeln!(source, "        f32::from_bits((self.0 as u32) << 16)").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source, "}}").expect("write to string");
+    writeln!(source).expect("write to string");
+    writeln!(source, "#[kernel]").expect("write to string");
+    writeln!(source, "pub fn {symbol}(").expect("write to string");
+    writeln!(source, "    input: &[f32],").expect("write to string");
+    writeln!(source, "    weight: &[Bf16],").expect("write to string");
+    writeln!(source, "    rows: u32,").expect("write to string");
+    writeln!(source, "    cols: u32,").expect("write to string");
+    writeln!(source, "    row_stride: u32,").expect("write to string");
+    writeln!(source, "    col_stride: u32,").expect("write to string");
+    writeln!(source, "    _rows_per_block: u32,").expect("write to string");
+    writeln!(source, "    mut out: DisjointSlice<f32>,").expect("write to string");
+    writeln!(source, ") {{").expect("write to string");
+    writeln!(source, "    if thread::threadIdx_x() != 0 {{").expect("write to string");
+    writeln!(source, "        return;").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source, "    let row = thread::blockIdx_x() as usize;").expect("write to string");
+    writeln!(source, "    if row >= rows as usize {{").expect("write to string");
+    writeln!(source, "        return;").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source, "    let cols = cols as usize;").expect("write to string");
+    writeln!(source, "    let row_stride = row_stride as usize;").expect("write to string");
+    writeln!(source, "    let col_stride = col_stride as usize;").expect("write to string");
+    writeln!(source, "    let row_base = row * row_stride;").expect("write to string");
+    writeln!(source, "    let mut acc = 0.0_f32;").expect("write to string");
+    writeln!(source, "    let mut col = 0usize;").expect("write to string");
+    writeln!(source, "    while col < cols {{").expect("write to string");
+    writeln!(
+        source,
+        "        acc += weight[row_base + col * col_stride].to_f32() * input[col];"
+    )
+    .expect("write to string");
+    writeln!(source, "        col += 1;").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source, "    unsafe {{").expect("write to string");
+    writeln!(source, "        *out.get_unchecked_mut(row) = acc;").expect("write to string");
+    writeln!(source, "    }}").expect("write to string");
+    writeln!(source, "}}").expect("write to string");
+    source
+}
+
 pub(in crate::autotune) fn render_bf16_matvec_source(
     symbol: &str,
     plan: MatvecSchedulePlan,

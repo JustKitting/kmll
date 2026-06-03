@@ -13,6 +13,43 @@ pub(in crate::autotune::matvec::problem) enum MatvecReduceGroupingTransform {
 }
 
 impl MatvecSearchProblem {
+    pub fn generated_naive_candidate(&self) -> KernelCandidateMetadata {
+        let schedule =
+            KernelSchedule::new().with_transform(ScheduleTransform::Split { axis: 0, factor: 1 });
+        let launch =
+            CudaLaunchSpec::new("matvec_bf16_naive", (self.rows as u32, 1, 1), (1, 1, 1), 0);
+        let operation = TypedOperationSpec::new(
+            "row-major-naive-matvec::bf16",
+            OperationKind::Matvec,
+            OperationRoute::CudaKernel,
+        )
+        .with_input(
+            TensorTypeSpec::new(self.input_dtype, self.accumulator, [self.cols])
+                .with_layout("contiguous"),
+        )
+        .with_input(
+            TensorTypeSpec::new(self.weight_dtype, self.accumulator, [self.rows, self.cols])
+                .with_layout("row-major"),
+        )
+        .with_output(
+            TensorTypeSpec::new(self.accumulator, self.accumulator, [self.rows])
+                .with_layout("contiguous"),
+        )
+        .with_launch(launch.clone());
+
+        KernelCandidateMetadata::new(
+            "matvec-bf16-row-major",
+            self.axes(),
+            schedule,
+            "row-major-matvec-generator",
+            KernelMaterialization::Generated {
+                symbol: "matvec_bf16_naive".to_string(),
+            },
+            launch,
+            operation,
+        )
+    }
+
     pub fn candidate_for_rows(&self, plan: RowMajorWarpRows) -> KernelCandidateMetadata {
         self.candidate_for_plan_with_materialization(
             MatvecSchedulePlan::new(plan),

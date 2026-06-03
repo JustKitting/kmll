@@ -31,6 +31,12 @@ impl KernelSourceGenerator for MatvecRustCudaGenerator {
                 sanitize_identifier(symbol_hint)
             }
         };
+        if symbol == "matvec_bf16_naive" {
+            return Ok(GeneratedKernelSource {
+                symbol: symbol.clone(),
+                source: render_bf16_naive_matvec_source(&symbol),
+            });
+        }
         Ok(GeneratedKernelSource {
             symbol: symbol.clone(),
             source: render_bf16_matvec_source(&symbol, plan),

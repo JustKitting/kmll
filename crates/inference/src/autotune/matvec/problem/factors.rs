@@ -118,6 +118,11 @@ impl MatvecSearchProblem {
         &self,
     ) -> Vec<KernelAxisFactorAction> {
         let mut variants = Vec::new();
+        variants.push(KernelAxisFactorAction::new(
+            0,
+            1,
+            KernelActionMaterialization::DeferredGenerated,
+        ));
         variants.extend(RowMajorWarpRows::ALL.into_iter().map(|plan| {
             KernelAxisFactorAction::new(
                 0,

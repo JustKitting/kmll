@@ -12,7 +12,12 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
     let KernelActionSpace::Split { variants } = &spaces.spaces[0] else {
         panic!("matvec seed should expose existing split action-space metadata");
     };
-    assert_eq!(variants.len(), 4);
+    assert_eq!(variants.len(), 5);
+    assert!(variants.contains(&KernelAxisFactorAction::new(
+        0,
+        1,
+        KernelActionMaterialization::DeferredGenerated
+    )));
     assert!(variants.contains(&KernelAxisFactorAction::new(
         0,
         8,
@@ -74,7 +79,12 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
         complete_space.spaces[8],
         KernelActionSpace::StrideOrder { .. }
     ));
-    assert_eq!(actions.len(), 36);
+    assert_eq!(actions.len(), 37);
+    assert!(actions.contains(&KernelScheduleAction::split(
+        0,
+        1,
+        KernelActionMaterialization::DeferredGenerated
+    )));
     assert!(actions.contains(&KernelScheduleAction::split(
         0,
         8,
@@ -105,6 +115,22 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
         generated.generated.materialization,
         KernelMaterialization::Generated {
             symbol: "matvec_bf16_rows13".to_string()
+        }
+    );
+
+    let naive = problem
+        .apply_schedule_action(
+            &seed,
+            &KernelScheduleAction::split(0, 1, KernelActionMaterialization::DeferredGenerated),
+        )
+        .expect("deferred row split of one should produce naive baseline metadata");
+    assert_eq!(naive.launch.kernel, "matvec_bf16_naive");
+    assert_eq!(naive.launch.grid_dim.x, 4096);
+    assert_eq!(naive.launch.block_dim.x, 1);
+    assert_eq!(
+        naive.generated.materialization,
+        KernelMaterialization::Generated {
+            symbol: "matvec_bf16_naive".to_string()
         }
     );
 

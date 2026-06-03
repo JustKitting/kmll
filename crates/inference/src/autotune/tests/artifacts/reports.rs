@@ -173,9 +173,20 @@ fn artifact_store_writes_auto_search_report_with_step_metadata() {
         report_json["action_space"]["total_actions"].as_u64(),
         Some(problem.search_space().actions().len() as u64)
     );
-    assert_eq!(
-        report_json["action_space"]["spaces"][0]["variants"][0]["materialization"].as_str(),
-        Some("existing")
+    let split_variants = report_json["action_space"]["spaces"][0]["variants"]
+        .as_array()
+        .expect("split variants should be serialized");
+    assert!(
+        split_variants
+            .iter()
+            .any(|variant| variant["factor"].as_u64() == Some(1)
+                && variant["materialization"].as_str() == Some("deferred-generated"))
+    );
+    assert!(
+        split_variants
+            .iter()
+            .any(|variant| variant["factor"].as_u64() == Some(1)
+                && variant["materialization"].as_str() == Some("existing"))
     );
     assert_eq!(
         report_json["exit_reason"]["label"].as_str(),

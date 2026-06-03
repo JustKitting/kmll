@@ -18,7 +18,7 @@ fn operation_problem_routes_matvec_search_and_source_generation() {
             require_launchable: false,
         },
     );
-    assert_eq!(result.explored, 36);
+    assert_eq!(result.explored, 37);
     let seed = problem.seed();
     let generated = problem
         .apply_schedule_action(

@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn matvec_generator_renders_naive_source_on_demand() {
+    let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+    let candidate = problem.generated_naive_candidate();
+    let generated = MatvecRustCudaGenerator
+        .source_for(&candidate)
+        .expect("matvec generator should render naive source");
+
+    assert_eq!(generated.symbol, "matvec_bf16_naive");
+    assert_eq!(candidate.launch.grid_dim.x, 4096);
+    assert_eq!(candidate.launch.block_dim.x, 1);
+    assert!(generated.source.contains("#[kernel]"));
+    assert!(generated.source.contains("pub fn matvec_bf16_naive("));
+    assert!(generated.source.contains("if thread::threadIdx_x() != 0"));
+    assert!(
+        generated
+            .source
+            .contains("let row = thread::blockIdx_x() as usize;")
+    );
+    assert!(generated.source.contains("while col < cols"));
+    assert!(
+        generated
+            .source
+            .contains("acc += weight[row_base + col * col_stride].to_f32() * input[col];")
+    );
+    assert!(!generated.source.contains("warp::shuffle_down_f32"));
+}
+
+#[test]
 fn matvec_generator_renders_rows_per_block_source_on_demand() {
     let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
     let candidate = problem.generated_candidate_for_row_split(

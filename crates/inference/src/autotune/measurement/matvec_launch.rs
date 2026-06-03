@@ -79,7 +79,8 @@ fn matvec_rows_per_block(candidate: &KernelCandidateMetadata) -> KernelAutotuneM
         .transforms
         .iter()
         .find_map(|transform| match transform {
-            ScheduleTransform::Split { axis: 0, factor } => Some(*factor),
+            ScheduleTransform::Split { axis: 0, factor }
+            | ScheduleTransform::GroupTop { axis: 0, factor } => Some(*factor),
             _ => None,
         })
         .ok_or_else(|| {

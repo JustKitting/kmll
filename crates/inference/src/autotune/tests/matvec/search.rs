@@ -14,8 +14,8 @@ fn matvec_search_keeps_only_metadata_for_rows_per_block_variants() {
     let best = result
         .best
         .expect("matvec search should produce a candidate");
-    assert_eq!(result.explored, 36);
-    assert_eq!(result.rejected, 32);
+    assert_eq!(result.explored, 37);
+    assert_eq!(result.rejected, 33);
     assert!(best.is_launchable());
     assert_eq!(best.launch.kernel, "matvec_bf16_kernel");
     assert_eq!(best.launch.grid_dim.x, 512);
@@ -45,7 +45,15 @@ fn matvec_search_exposes_generated_row_split_metadata() {
     let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
     let seed = problem.seed();
     let candidates = problem.expand(&seed);
-    assert_eq!(candidates.len(), 36);
+    assert_eq!(candidates.len(), 37);
+
+    let naive = candidates
+        .iter()
+        .find(|candidate| candidate.launch.kernel == "matvec_bf16_naive")
+        .expect("matvec search should expose a generated naive baseline");
+    assert!(!naive.is_launchable());
+    assert_eq!(naive.launch.grid_dim.x, 4096);
+    assert_eq!(naive.launch.block_dim.x, 1);
 
     let generated = candidates
         .iter()

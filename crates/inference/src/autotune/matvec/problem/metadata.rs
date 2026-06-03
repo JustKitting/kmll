@@ -41,6 +41,10 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
 
     fn score(&self, candidate: &KernelCandidateMetadata) -> Option<SearchScore> {
         let plan = schedule_matvec_plan(&candidate.schedule)?;
+        let is_naive = matches!(
+            &candidate.generated.materialization,
+            KernelMaterialization::Generated { symbol } if symbol == "matvec_bf16_naive"
+        );
         let rows_per_block = plan.rows.rows_per_block() as usize;
         let lanes_per_row = plan.thread_group.lanes_per_row() as usize;
         let row_upcast = plan.row_upcast.factor() as usize;
@@ -76,6 +80,11 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
         } else {
             0.0
         };
+        let naive_serial_penalty = if is_naive {
+            useful_fma_ops * 16.0 + self.rows as f64 * 4096.0
+        } else {
+            0.0
+        };
         SearchScore::heuristic(
             useful_fma_ops
                 + wasted_fma_ops * 8.0
@@ -86,7 +95,8 @@ impl KernelMetadataSearchProblem for MatvecSearchProblem {
                 + subgroup_pressure
                 + row_upcast_pressure
                 + register_pressure
-                + generic_runtime_penalty,
+                + generic_runtime_penalty
+                + naive_serial_penalty,
         )
     }
 }

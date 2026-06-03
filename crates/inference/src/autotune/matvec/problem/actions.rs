@@ -150,6 +150,13 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                         if !self.deferred_row_split_factors().contains(rows_per_block) {
                             return None;
                         }
+                        if *rows_per_block == 1 {
+                            return Some(candidate_with_action_trace(
+                                candidate,
+                                action,
+                                self.generated_naive_candidate(),
+                            ));
+                        }
                         let rows = MatvecRowSplit::new(*rows_per_block)?;
                         self.generated_candidate_for_row_split(rows)
                     }

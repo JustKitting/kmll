@@ -15,8 +15,8 @@ fn metadata_expansion_filters_launchability_and_tracks_duplicates() {
     );
 
     assert_eq!(expansion.accepted, 4);
-    assert_eq!(expansion.rejected, 32);
-    assert_eq!(expansion.explored(), 36);
+    assert_eq!(expansion.rejected, 33);
+    assert_eq!(expansion.explored(), 37);
     assert_eq!(expansion.duplicates, 0);
     assert_eq!(
         expansion.last_reject_reason,
@@ -38,7 +38,7 @@ fn metadata_expansion_filters_launchability_and_tracks_duplicates() {
     assert_eq!(duplicate_expansion.accepted, 0);
     assert_eq!(duplicate_expansion.rejected, 0);
     assert_eq!(duplicate_expansion.explored(), 0);
-    assert_eq!(duplicate_expansion.duplicates, 36);
+    assert_eq!(duplicate_expansion.duplicates, 37);
 }
 
 #[test]
