@@ -22,6 +22,10 @@ pub enum KernelActionReplayError {
         expected: bool,
         actual: bool,
     },
+    MaterializationMismatch {
+        expected: KernelMaterializationDescriptor,
+        actual: KernelMaterializationDescriptor,
+    },
 }
 
 impl fmt::Display for KernelActionReplayError {
@@ -52,6 +56,12 @@ impl fmt::Display for KernelActionReplayError {
                 write!(
                     f,
                     "replayed candidate launchable={actual} did not match expected launchable={expected}"
+                )
+            }
+            Self::MaterializationMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "replayed candidate materialization {actual:?} did not match expected {expected:?}"
                 )
             }
         }

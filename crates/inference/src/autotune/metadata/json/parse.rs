@@ -14,6 +14,10 @@ pub(in crate::autotune) fn parse_selection_json(
         artifact_key: required_str(value, "artifact_key")?.to_string(),
         generator: required_str(value, "generator")?.to_string(),
         launchable: required_bool(value, "launchable")?,
+        materialization: parse_optional_materialization_descriptor(
+            value.get("materialization").unwrap_or(&Value::Null),
+            "materialization",
+        )?,
         action_trace: parse_action_trace(required_array(value, "action_trace")?)?,
         score: parse_optional_score(value.get("score").unwrap_or(&Value::Null))?,
     })
@@ -36,9 +40,38 @@ pub(in crate::autotune) fn parse_score_record_json(
         artifact_key: required_str(value, "artifact_key")?.to_string(),
         generator: required_str(value, "generator")?.to_string(),
         launchable: required_bool(value, "launchable")?,
+        materialization: parse_optional_materialization_descriptor(
+            value.get("materialization").unwrap_or(&Value::Null),
+            "materialization",
+        )?,
         action_trace: parse_action_trace(required_array(value, "action_trace")?)?,
         score,
     })
+}
+
+pub(in crate::autotune) fn parse_optional_materialization_descriptor(
+    value: &Value,
+    field_name: &str,
+) -> Result<Option<KernelMaterializationDescriptor>, KernelGenerationError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let kind = required_str(value, "kind")?;
+    match kind {
+        "existing" => Ok(Some(KernelMaterializationDescriptor::Existing {
+            symbol: required_str(value, "symbol")?.to_string(),
+        })),
+        "generated" => Ok(Some(KernelMaterializationDescriptor::Generated {
+            symbol: required_str(value, "symbol")?.to_string(),
+        })),
+        "deferred-generated" => Ok(Some(KernelMaterializationDescriptor::DeferredGenerated {
+            symbol_hint: required_str(value, "symbol_hint")?.to_string(),
+            reason: required_str(value, "reason")?.to_string(),
+        })),
+        kind => Err(invalid_selection(format!(
+            "{field_name}.kind is unsupported: {kind:?}"
+        ))),
+    }
 }
 
 pub(in crate::autotune) fn parse_action_trace(

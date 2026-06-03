@@ -229,3 +229,65 @@ fn cached_beam_search_falls_back_on_stale_selection() {
 
     remove_test_generated_root(&root);
 }
+
+#[test]
+fn cached_beam_search_falls_back_on_stale_materialization() {
+    let root = test_generated_root();
+    let store = KernelArtifactStore::new(&root);
+    let problem = MatvecSearchProblem::bf16_row_major(128, 256);
+    let config = BeamSearchConfig {
+        beam_width: 4,
+        max_depth: 2,
+        require_launchable: false,
+    };
+    let cache_key = optimization_selection_cache_key(&problem, config, "heuristic");
+    let candidate = replay_schedule_actions(
+        &problem,
+        &[
+            KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+            KernelScheduleAction::unroll(1, 8),
+        ],
+    )
+    .expect("valid matvec action trace should replay into candidate metadata");
+    let mut stale_selection = KernelOptimizationSelection::from_candidate(&candidate);
+    stale_selection.materialization = Some(KernelMaterializationDescriptor::Existing {
+        symbol: "matvec_bf16_kernel".to_string(),
+    });
+    store
+        .emit_selection_cache(&cache_key, &stale_selection)
+        .expect("artifact store should write stale materialization selection cache metadata");
+
+    let cached = beam_search_metadata_with_selection_cache(
+        &store,
+        &problem,
+        config,
+        "heuristic",
+        |candidate| problem.score(candidate),
+    )
+    .expect("stale materialization should fall back to beam search");
+
+    assert!(matches!(
+        cached.cache_status,
+        SelectionCacheStatus::Stale { .. }
+    ));
+    assert!(cached.cache_write.is_some());
+    let refreshed = store
+        .read_selection_cache(&cached.cache_key)
+        .expect("selection cache read should succeed after stale materialization fallback")
+        .expect("stale materialization fallback should refresh selection cache metadata");
+    assert!(matches!(
+        refreshed.materialization,
+        Some(KernelMaterializationDescriptor::Generated { .. })
+    ));
+    let refreshed_candidate = refreshed
+        .replay(&problem)
+        .expect("refreshed materialization selection should replay");
+    assert_eq!(
+        refreshed.materialization,
+        Some(KernelMaterializationDescriptor::from_materialization(
+            &refreshed_candidate.generated.materialization
+        ))
+    );
+
+    remove_test_generated_root(&root);
+}

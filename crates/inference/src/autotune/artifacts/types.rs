@@ -39,12 +39,62 @@ impl KernelOptimizationCacheKey {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KernelMaterializationDescriptor {
+    Existing { symbol: String },
+    Generated { symbol: String },
+    DeferredGenerated { symbol_hint: String, reason: String },
+}
+
+impl KernelMaterializationDescriptor {
+    pub fn from_materialization(materialization: &KernelMaterialization) -> Self {
+        match materialization {
+            KernelMaterialization::Existing { symbol } => Self::Existing {
+                symbol: (*symbol).to_string(),
+            },
+            KernelMaterialization::Generated { symbol } => Self::Generated {
+                symbol: symbol.clone(),
+            },
+            KernelMaterialization::DeferredGenerated {
+                symbol_hint,
+                reason,
+            } => Self::DeferredGenerated {
+                symbol_hint: symbol_hint.clone(),
+                reason: reason.clone(),
+            },
+        }
+    }
+
+    pub fn matches_materialization(&self, materialization: &KernelMaterialization) -> bool {
+        match (self, materialization) {
+            (Self::Existing { symbol: expected }, KernelMaterialization::Existing { symbol }) => {
+                expected == symbol
+            }
+            (Self::Generated { symbol: expected }, KernelMaterialization::Generated { symbol }) => {
+                expected == symbol
+            }
+            (
+                Self::DeferredGenerated {
+                    symbol_hint: expected_hint,
+                    reason: expected_reason,
+                },
+                KernelMaterialization::DeferredGenerated {
+                    symbol_hint,
+                    reason,
+                },
+            ) => expected_hint == symbol_hint && expected_reason == reason,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct KernelOptimizationSelection {
     pub family: String,
     pub artifact_key: String,
     pub generator: String,
     pub launchable: bool,
+    pub materialization: Option<KernelMaterializationDescriptor>,
     pub action_trace: Vec<KernelScheduleAction>,
     pub score: Option<SearchScore>,
 }
@@ -56,6 +106,9 @@ impl KernelOptimizationSelection {
             artifact_key: candidate.artifact_key().hex(),
             generator: candidate.generated.generator.to_string(),
             launchable: candidate.is_launchable(),
+            materialization: Some(KernelMaterializationDescriptor::from_materialization(
+                &candidate.generated.materialization,
+            )),
             action_trace: candidate.action_trace.clone(),
             score: candidate.score,
         }
@@ -92,6 +145,16 @@ impl KernelOptimizationSelection {
                 actual: actual_launchable,
             });
         }
+        if let Some(materialization) = &self.materialization
+            && !materialization.matches_materialization(&candidate.generated.materialization)
+        {
+            return Err(KernelActionReplayError::MaterializationMismatch {
+                expected: materialization.clone(),
+                actual: KernelMaterializationDescriptor::from_materialization(
+                    &candidate.generated.materialization,
+                ),
+            });
+        }
         Ok(candidate)
     }
 }
@@ -103,6 +166,7 @@ pub struct KernelOptimizationScoreRecord {
     pub artifact_key: String,
     pub generator: String,
     pub launchable: bool,
+    pub materialization: Option<KernelMaterializationDescriptor>,
     pub action_trace: Vec<KernelScheduleAction>,
     pub score: SearchScore,
 }
@@ -118,6 +182,9 @@ impl KernelOptimizationScoreRecord {
             artifact_key: candidate.artifact_key().hex(),
             generator: candidate.generated.generator.to_string(),
             launchable: candidate.is_launchable(),
+            materialization: Some(KernelMaterializationDescriptor::from_materialization(
+                &candidate.generated.materialization,
+            )),
             action_trace: candidate.action_trace.clone(),
             score: candidate.score?,
         })
@@ -133,6 +200,13 @@ impl KernelOptimizationScoreRecord {
             && self.artifact_key == candidate.artifact_key().hex()
             && self.generator == candidate.generated.generator
             && self.launchable == candidate.is_launchable()
+            && self
+                .materialization
+                .as_ref()
+                .map(|materialization| {
+                    materialization.matches_materialization(&candidate.generated.materialization)
+                })
+                .unwrap_or(true)
             && self.action_trace == candidate.action_trace
     }
 }

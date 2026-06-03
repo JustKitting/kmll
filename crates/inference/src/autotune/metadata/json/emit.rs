@@ -33,6 +33,10 @@ pub(in crate::autotune) fn selection_json(selection: &KernelOptimizationSelectio
         "artifact_key": &selection.artifact_key,
         "generator": &selection.generator,
         "launchable": selection.launchable,
+        "materialization": selection
+            .materialization
+            .as_ref()
+            .map(materialization_descriptor_json),
         "action_trace": selection
             .action_trace
             .iter()
@@ -50,6 +54,10 @@ pub(in crate::autotune) fn score_record_json(record: &KernelOptimizationScoreRec
         "artifact_key": &record.artifact_key,
         "generator": &record.generator,
         "launchable": record.launchable,
+        "materialization": record
+            .materialization
+            .as_ref()
+            .map(materialization_descriptor_json),
         "action_trace": record
             .action_trace
             .iter()
@@ -68,6 +76,27 @@ pub(in crate::autotune) fn materialization_json(materialization: &KernelMaterial
             json!({"kind": "generated", "symbol": symbol})
         }
         KernelMaterialization::DeferredGenerated {
+            symbol_hint,
+            reason,
+        } => json!({
+            "kind": "deferred-generated",
+            "symbol_hint": symbol_hint,
+            "reason": reason,
+        }),
+    }
+}
+
+pub(in crate::autotune) fn materialization_descriptor_json(
+    materialization: &KernelMaterializationDescriptor,
+) -> Value {
+    match materialization {
+        KernelMaterializationDescriptor::Existing { symbol } => {
+            json!({"kind": "existing", "symbol": symbol})
+        }
+        KernelMaterializationDescriptor::Generated { symbol } => {
+            json!({"kind": "generated", "symbol": symbol})
+        }
+        KernelMaterializationDescriptor::DeferredGenerated {
             symbol_hint,
             reason,
         } => json!({
