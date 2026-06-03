@@ -1613,6 +1613,33 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.lifted_op_count > 0);
     assert!(report.live_range_count > 0);
     assert!(report.memory_access_count > 0);
+    assert!(report.dataflow.iter().any(|op| {
+        op.address == 0x10 && op.defines == [reg("R2")] && op.uses.contains(&reg("R0"))
+    }));
+    assert!(
+        report
+            .reaching_uses
+            .iter()
+            .any(|use_site| use_site.register == reg("R2"))
+    );
+    assert!(
+        report
+            .ssa_values
+            .iter()
+            .any(|value| value.register == reg("R2"))
+    );
+    assert!(
+        report
+            .def_use_edges
+            .iter()
+            .any(|edge| edge.register == reg("R2"))
+    );
+    assert!(
+        report
+            .live_ranges
+            .iter()
+            .any(|range| range.register == reg("R2"))
+    );
     assert!(report.value_ops.iter().any(|op| {
         op.opcode == SassOpcode::new("LD")
             && op.kind == SassValueOpKind::Load
