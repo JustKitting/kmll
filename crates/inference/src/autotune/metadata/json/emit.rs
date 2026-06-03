@@ -164,6 +164,12 @@ pub(in crate::autotune) fn transform_json(transform: &ScheduleTransform) -> Valu
         ScheduleTransform::LocalTile { axis, factor } => {
             json!({"op": "local-tile", "axis": axis, "factor": factor})
         }
+        ScheduleTransform::GroupTop { axis, factor } => {
+            json!({"op": "group-top", "axis": axis, "factor": factor})
+        }
+        ScheduleTransform::Group { axis, factor } => {
+            json!({"op": "group", "axis": axis, "factor": factor})
+        }
         ScheduleTransform::ThreadGroup { axis, factor } => {
             json!({"op": "thread-group", "axis": axis, "factor": factor})
         }

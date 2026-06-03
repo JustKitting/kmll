@@ -1163,6 +1163,12 @@ fn format_schedule(transforms: &[ScheduleTransform]) -> String {
             ScheduleTransform::LocalTile { axis, factor } => {
                 format!("local_tile(axis={axis},factor={factor})")
             }
+            ScheduleTransform::GroupTop { axis, factor } => {
+                format!("group_top(axis={axis},factor={factor})")
+            }
+            ScheduleTransform::Group { axis, factor } => {
+                format!("group(axis={axis},factor={factor})")
+            }
             ScheduleTransform::ThreadGroup { axis, factor } => {
                 format!("thread_group(axis={axis},factor={factor})")
             }

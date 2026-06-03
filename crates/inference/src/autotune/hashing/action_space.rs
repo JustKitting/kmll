@@ -66,6 +66,24 @@ pub(in crate::autotune) fn hash_profiling_action_space(
             }
             state
         }
+        ProfilingActionSpace::GroupTop { axis, factors } => {
+            state = hash_str(state, "group-top");
+            state = hash_u64(state, *axis as u64);
+            state = hash_u64(state, factors.len() as u64);
+            for factor in factors {
+                state = hash_u64(state, *factor as u64);
+            }
+            state
+        }
+        ProfilingActionSpace::Group { axis, factors } => {
+            state = hash_str(state, "group");
+            state = hash_u64(state, *axis as u64);
+            state = hash_u64(state, factors.len() as u64);
+            for factor in factors {
+                state = hash_u64(state, *factor as u64);
+            }
+            state
+        }
         ProfilingActionSpace::ThreadGroup { axis, factors } => {
             state = hash_str(state, "thread-group");
             state = hash_u64(state, *axis as u64);
@@ -156,6 +174,24 @@ pub(in crate::autotune) fn hash_action_space(
         }
         KernelActionSpace::LocalTile { axis, factors } => {
             state = hash_str(state, "local-tile");
+            state = hash_u64(state, *axis as u64);
+            state = hash_u64(state, factors.len() as u64);
+            for factor in factors {
+                state = hash_u64(state, *factor as u64);
+            }
+            state
+        }
+        KernelActionSpace::GroupTop { axis, factors } => {
+            state = hash_str(state, "group-top");
+            state = hash_u64(state, *axis as u64);
+            state = hash_u64(state, factors.len() as u64);
+            for factor in factors {
+                state = hash_u64(state, *factor as u64);
+            }
+            state
+        }
+        KernelActionSpace::Group { axis, factors } => {
+            state = hash_str(state, "group");
             state = hash_u64(state, *axis as u64);
             state = hash_u64(state, factors.len() as u64);
             for factor in factors {

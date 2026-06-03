@@ -376,6 +376,8 @@ pub enum OptimizationActionOp {
     Upcast,
     Unroll,
     LocalTile,
+    GroupTop,
+    Group,
     ThreadGroup,
     TileGemm,
     StrideOrder,
@@ -389,6 +391,8 @@ impl OptimizationActionOp {
             Self::Upcast => "upcast",
             Self::Unroll => "unroll",
             Self::LocalTile => "local-tile",
+            Self::GroupTop => "group-top",
+            Self::Group => "group",
             Self::ThreadGroup => "thread-group",
             Self::TileGemm => "tile-gemm",
             Self::StrideOrder => "stride-order",
@@ -463,6 +467,24 @@ impl OptimizationActionSpec {
     pub const fn local_tile(axis: u8, factor: u32) -> Self {
         Self {
             op: OptimizationActionOp::LocalTile,
+            axis: Some(axis),
+            arg: OptimizationActionArg::Factor(factor),
+            materialization: OptimizationActionMaterialization::DeferredGenerated,
+        }
+    }
+
+    pub const fn group_top(axis: u8, factor: u32) -> Self {
+        Self {
+            op: OptimizationActionOp::GroupTop,
+            axis: Some(axis),
+            arg: OptimizationActionArg::Factor(factor),
+            materialization: OptimizationActionMaterialization::DeferredGenerated,
+        }
+    }
+
+    pub const fn group(axis: u8, factor: u32) -> Self {
+        Self {
+            op: OptimizationActionOp::Group,
             axis: Some(axis),
             arg: OptimizationActionArg::Factor(factor),
             materialization: OptimizationActionMaterialization::DeferredGenerated,
@@ -548,6 +570,14 @@ pub enum OptimizationActionSpace {
         axis: u8,
         factors: Vec<u32>,
     },
+    GroupTop {
+        axis: u8,
+        factors: Vec<u32>,
+    },
+    Group {
+        axis: u8,
+        factors: Vec<u32>,
+    },
     ThreadGroup {
         axis: u8,
         factors: Vec<u32>,
@@ -570,6 +600,8 @@ impl OptimizationActionSpace {
             Self::Upcast { factors, .. } => factors.len(),
             Self::Unroll { factors, .. } => factors.len(),
             Self::LocalTile { factors, .. } => factors.len(),
+            Self::GroupTop { factors, .. } => factors.len(),
+            Self::Group { factors, .. } => factors.len(),
             Self::ThreadGroup { factors, .. } => factors.len(),
             Self::TileGemm { variants } => variants.len(),
             Self::StrideOrder { orders } => orders.len(),
@@ -2177,6 +2209,30 @@ fn push_optimization_action_space_json(
             push_json_field_usize(out, "action_count", factors.len(), indent + 2, true);
             push_json_field_u32_array(out, "factors", factors, indent + 2, false);
         }
+        OptimizationActionSpace::GroupTop { axis, factors } => {
+            push_json_field_string(
+                out,
+                "op",
+                OptimizationActionOp::GroupTop.label(),
+                indent + 2,
+                true,
+            );
+            push_json_field_u32(out, "axis", u32::from(*axis), indent + 2, true);
+            push_json_field_usize(out, "action_count", factors.len(), indent + 2, true);
+            push_json_field_u32_array(out, "factors", factors, indent + 2, false);
+        }
+        OptimizationActionSpace::Group { axis, factors } => {
+            push_json_field_string(
+                out,
+                "op",
+                OptimizationActionOp::Group.label(),
+                indent + 2,
+                true,
+            );
+            push_json_field_u32(out, "axis", u32::from(*axis), indent + 2, true);
+            push_json_field_usize(out, "action_count", factors.len(), indent + 2, true);
+            push_json_field_u32_array(out, "factors", factors, indent + 2, false);
+        }
         OptimizationActionSpace::ThreadGroup { axis, factors } => {
             push_json_field_string(
                 out,
@@ -3060,6 +3116,8 @@ mod tests {
             OptimizationActionSpec::upcast(0, 2),
             OptimizationActionSpec::unroll(1, 8),
             OptimizationActionSpec::local_tile(1, 2),
+            OptimizationActionSpec::group_top(0, 16),
+            OptimizationActionSpec::group(1, 8),
             OptimizationActionSpec::thread_group(1, 16),
             OptimizationActionSpec::swap(0, 1),
         ])
@@ -3100,6 +3158,14 @@ mod tests {
                 axis: 1,
                 factors: vec![2, 4],
             },
+            OptimizationActionSpace::GroupTop {
+                axis: 0,
+                factors: vec![16, 32],
+            },
+            OptimizationActionSpace::Group {
+                axis: 1,
+                factors: vec![4, 8],
+            },
             OptimizationActionSpace::ThreadGroup {
                 axis: 1,
                 factors: vec![8, 16],
@@ -3116,7 +3182,7 @@ mod tests {
         assert!(json.contains("\"require_launchable\": false"));
         assert!(json.contains("\"duplicates\": 2"));
         assert!(json.contains("\"action_space\""));
-        assert!(json.contains("\"total_actions\": 12"));
+        assert!(json.contains("\"total_actions\": 16"));
         assert!(json.contains("\"variants\""));
         assert!(json.contains("\"materialization\": \"existing\""));
         assert!(json.contains("\"materialization\": \"generated\""));
@@ -3131,6 +3197,8 @@ mod tests {
         assert!(json.contains("\"op\": \"upcast\""));
         assert!(json.contains("\"op\": \"unroll\""));
         assert!(json.contains("\"op\": \"local-tile\""));
+        assert!(json.contains("\"op\": \"group-top\""));
+        assert!(json.contains("\"op\": \"group\""));
         assert!(json.contains("\"op\": \"thread-group\""));
         assert!(json.contains("\"op\": \"swap\""));
         assert!(json.contains("\"kind\": \"axis-pair\""));

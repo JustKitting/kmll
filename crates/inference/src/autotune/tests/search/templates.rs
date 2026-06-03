@@ -11,6 +11,7 @@ fn schedule_action_template_captures_tinygrad_like_beam_factors() {
         template.group_top_factors,
         &[13, 16, 28, 29, 32, 49, 64, 256]
     );
+    assert_eq!(template.group_factors, &[4, 8, 16]);
     assert_eq!(
         template.thread_group_factors,
         &[2, 3, 4, 5, 8, 12, 16, 24, 32, 64]
@@ -37,5 +38,54 @@ fn inference_template_keeps_arbitrary_legal_split_and_unroll_factors() {
     assert_eq!(
         template.legal_thread_group_factors(|factor| factor >= 32 && factor < 128),
         vec![32, 64]
+    );
+}
+
+#[test]
+fn group_action_spaces_project_to_actions_and_report_metadata() {
+    let spaces = KernelActionSpaceSet::new(vec![
+        KernelActionSpace::GroupTop {
+            axis: 0,
+            factors: vec![16, 32],
+        },
+        KernelActionSpace::Group {
+            axis: 1,
+            factors: vec![4, 8],
+        },
+    ]);
+
+    assert_eq!(
+        spaces.actions(),
+        vec![
+            KernelScheduleAction::group_top(0, 16),
+            KernelScheduleAction::group_top(0, 32),
+            KernelScheduleAction::group(1, 4),
+            KernelScheduleAction::group(1, 8),
+        ]
+    );
+    let spec = spaces.optimization_spec();
+    assert_eq!(spec.action_count(), 4);
+    assert_eq!(
+        spec.spaces,
+        vec![
+            ProfilingActionSpace::GroupTop {
+                axis: 0,
+                factors: vec![16, 32],
+            },
+            ProfilingActionSpace::Group {
+                axis: 1,
+                factors: vec![4, 8],
+            },
+        ]
+    );
+    assert_ne!(
+        crate::autotune::hashing::hash_action_space_set(0, &spaces),
+        crate::autotune::hashing::hash_action_space_set(
+            0,
+            &KernelActionSpaceSet::new(vec![KernelActionSpace::ThreadGroup {
+                axis: 1,
+                factors: vec![4, 8],
+            }]),
+        )
     );
 }

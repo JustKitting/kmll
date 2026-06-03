@@ -93,6 +93,8 @@ pub(in crate::autotune) fn parse_action_json(
         "upcast" => KernelScheduleActionOp::Upcast,
         "unroll" => KernelScheduleActionOp::Unroll,
         "local-tile" => KernelScheduleActionOp::LocalTile,
+        "group-top" => KernelScheduleActionOp::GroupTop,
+        "group" => KernelScheduleActionOp::Group,
         "thread-group" => KernelScheduleActionOp::ThreadGroup,
         "tile-gemm" => KernelScheduleActionOp::TileGemm,
         "stride-order" => KernelScheduleActionOp::StrideOrder,

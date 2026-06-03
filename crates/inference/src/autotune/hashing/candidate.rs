@@ -163,6 +163,16 @@ pub(in crate::autotune) fn hash_transform(mut state: u64, transform: &ScheduleTr
             state = hash_u64(state, *axis as u64);
             hash_u64(state, *factor as u64)
         }
+        ScheduleTransform::GroupTop { axis, factor } => {
+            state = hash_str(state, "group-top");
+            state = hash_u64(state, *axis as u64);
+            hash_u64(state, *factor as u64)
+        }
+        ScheduleTransform::Group { axis, factor } => {
+            state = hash_str(state, "group");
+            state = hash_u64(state, *axis as u64);
+            hash_u64(state, *factor as u64)
+        }
         ScheduleTransform::ThreadGroup { axis, factor } => {
             state = hash_str(state, "thread-group");
             state = hash_u64(state, *axis as u64);

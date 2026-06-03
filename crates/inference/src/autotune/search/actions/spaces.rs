@@ -50,6 +50,14 @@ pub enum KernelActionSpace {
         axis: u8,
         factors: Vec<u32>,
     },
+    GroupTop {
+        axis: u8,
+        factors: Vec<u32>,
+    },
+    Group {
+        axis: u8,
+        factors: Vec<u32>,
+    },
     ThreadGroup {
         axis: u8,
         factors: Vec<u32>,
@@ -92,6 +100,16 @@ impl KernelActionSpace {
                 .iter()
                 .copied()
                 .map(|factor| KernelScheduleAction::local_tile(*axis, factor))
+                .collect(),
+            Self::GroupTop { axis, factors } => factors
+                .iter()
+                .copied()
+                .map(|factor| KernelScheduleAction::group_top(*axis, factor))
+                .collect(),
+            Self::Group { axis, factors } => factors
+                .iter()
+                .copied()
+                .map(|factor| KernelScheduleAction::group(*axis, factor))
                 .collect(),
             Self::ThreadGroup { axis, factors } => factors
                 .iter()
@@ -145,6 +163,14 @@ impl KernelActionSpace {
                 factors: factors.clone(),
             },
             Self::LocalTile { axis, factors } => ProfilingActionSpace::LocalTile {
+                axis: *axis,
+                factors: factors.clone(),
+            },
+            Self::GroupTop { axis, factors } => ProfilingActionSpace::GroupTop {
+                axis: *axis,
+                factors: factors.clone(),
+            },
+            Self::Group { axis, factors } => ProfilingActionSpace::Group {
                 axis: *axis,
                 factors: factors.clone(),
             },
