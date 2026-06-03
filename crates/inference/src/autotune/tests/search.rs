@@ -132,6 +132,10 @@ fn candidate_projects_to_profiling_optimization_spec() {
     assert_eq!(spec.artifact_key, candidate.artifact_key().hex());
     assert_eq!(spec.generator, "row-major-matvec-generator");
     assert!(!spec.launchable);
+    assert_eq!(
+        spec.materialization,
+        ProfilingCandidateMaterialization::Generated
+    );
     assert_eq!(spec.launch.kernel, "matvec_bf16_rows8");
     assert_eq!(spec.operation.kind, OperationKind::Matvec);
     assert_eq!(spec.action_trace, candidate.action_trace);

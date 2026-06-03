@@ -16,11 +16,12 @@ pub use nn_rust_profiling::{
     OptimizationActionSpace as ProfilingActionSpace,
     OptimizationActionSpaceSet as ProfilingActionSpaceSet,
     OptimizationActionSpec as KernelScheduleAction,
-    OptimizationAxisFactorChoice as ProfilingAxisFactorChoice, OptimizationCandidateSpec,
-    OptimizationResourceUsage as KernelResourceUsage, OptimizationScore as SearchScore,
-    OptimizationScoreSource as SearchScoreSource, OptimizationSearchConfig,
-    OptimizationSearchReport, OptimizationTile3dChoice as ProfilingTile3dChoice,
-    OptimizationTiming,
+    OptimizationAxisFactorChoice as ProfilingAxisFactorChoice,
+    OptimizationCandidateMaterialization as ProfilingCandidateMaterialization,
+    OptimizationCandidateSpec, OptimizationResourceUsage as KernelResourceUsage,
+    OptimizationScore as SearchScore, OptimizationScoreSource as SearchScoreSource,
+    OptimizationSearchConfig, OptimizationSearchReport,
+    OptimizationTile3dChoice as ProfilingTile3dChoice, OptimizationTiming,
 };
 use nn_rust_profiling::{
     CudaLaunchSpec, MAX_OPTIMIZATION_SETUP_SEGMENTS, NumericKind, OperationKind, OperationRoute,

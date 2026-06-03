@@ -745,6 +745,7 @@ pub struct OptimizationCandidateSpec {
     pub artifact_key: String,
     pub generator: String,
     pub launchable: bool,
+    pub materialization: OptimizationCandidateMaterialization,
     pub launch: CudaLaunchSpec,
     pub operation: TypedOperationSpec,
     pub action_trace: Vec<OptimizationActionSpec>,
@@ -765,6 +766,7 @@ impl OptimizationCandidateSpec {
             artifact_key: artifact_key.into(),
             generator: generator.into(),
             launchable: true,
+            materialization: OptimizationCandidateMaterialization::Existing,
             launch,
             operation,
             action_trace: Vec::new(),
@@ -775,6 +777,14 @@ impl OptimizationCandidateSpec {
 
     pub fn with_launchable(mut self, launchable: bool) -> Self {
         self.launchable = launchable;
+        self
+    }
+
+    pub fn with_materialization(
+        mut self,
+        materialization: OptimizationCandidateMaterialization,
+    ) -> Self {
+        self.materialization = materialization;
         self
     }
 
@@ -791,6 +801,23 @@ impl OptimizationCandidateSpec {
     pub fn with_score(mut self, score: Option<OptimizationScore>) -> Self {
         self.score = score;
         self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptimizationCandidateMaterialization {
+    Existing,
+    Generated,
+    DeferredGenerated,
+}
+
+impl OptimizationCandidateMaterialization {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Existing => "existing",
+            Self::Generated => "generated",
+            Self::DeferredGenerated => "deferred-generated",
+        }
     }
 }
 
@@ -2305,6 +2332,13 @@ fn push_optimization_candidate_json(
     );
     push_json_field_string(out, "generator", &candidate.generator, indent + 2, true);
     push_json_field_bool(out, "launchable", candidate.launchable, indent + 2, true);
+    push_json_field_string(
+        out,
+        "materialization",
+        candidate.materialization.label(),
+        indent + 2,
+        true,
+    );
     push_json_field_launch_spec(out, "launch", Some(&candidate.launch), indent + 2, true);
     push_json_field_operation_spec(
         out,
@@ -2960,10 +2994,15 @@ mod tests {
             operation,
         )
         .with_launchable(false)
+        .with_materialization(OptimizationCandidateMaterialization::Generated)
         .with_action_trace(vec![action])
         .with_score(score);
 
         assert!(!candidate.launchable);
+        assert_eq!(
+            candidate.materialization,
+            OptimizationCandidateMaterialization::Generated
+        );
         assert_eq!(candidate.action_trace[0].op, OptimizationActionOp::Split);
         assert_eq!(
             candidate.score.unwrap().source,
@@ -3010,6 +3049,7 @@ mod tests {
             operation,
         )
         .with_launchable(false)
+        .with_materialization(OptimizationCandidateMaterialization::Generated)
         .with_resource_usage(Some(OptimizationResourceUsage::new(256, 0, 1, 1, 0)))
         .with_action_trace(vec![
             OptimizationActionSpec::split(
@@ -3079,6 +3119,7 @@ mod tests {
         assert!(json.contains("\"total_actions\": 12"));
         assert!(json.contains("\"variants\""));
         assert!(json.contains("\"materialization\": \"existing\""));
+        assert!(json.contains("\"materialization\": \"generated\""));
         assert!(json.contains("\"factors\": [2, 4, 8]"));
         assert!(json.contains("\"pairs\""));
         assert!(json.contains("\"launchable\": false"));
@@ -3118,6 +3159,7 @@ mod tests {
             operation,
         )
         .with_launchable(false)
+        .with_materialization(OptimizationCandidateMaterialization::Generated)
         .with_action_trace(vec![OptimizationActionSpec::split(
             0,
             8,
@@ -3181,6 +3223,7 @@ mod tests {
         assert!(json.contains("\"best_before\""));
         assert!(json.contains("\"best_after\""));
         assert!(json.contains("\"best_candidate\""));
+        assert!(json.contains("\"materialization\": \"generated\""));
         assert!(json.contains("\"improvement\": -1.000000000000"));
         assert!(json.contains("\"action_trace\""));
         assert!(!json.contains("#[kernel]"));

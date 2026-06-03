@@ -19,6 +19,7 @@ pub(in crate::autotune) fn hash_optimization_candidate(
     state = hash_str(state, &candidate.artifact_key);
     state = hash_str(state, &candidate.generator);
     state = hash_u64(state, u64::from(candidate.launchable));
+    state = hash_str(state, candidate.materialization.label());
     state = hash_str(state, &candidate.launch.kernel);
     state = hash_u64(state, candidate.launch.grid_dim.x as u64);
     state = hash_u64(state, candidate.launch.grid_dim.y as u64);

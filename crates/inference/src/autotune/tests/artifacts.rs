@@ -852,6 +852,10 @@ fn artifact_store_writes_search_report_metadata_without_kernel_source() {
     );
     assert_eq!(report_json["best"]["launchable"].as_bool(), Some(false));
     assert_eq!(
+        report_json["best"]["materialization"].as_str(),
+        Some("generated")
+    );
+    assert_eq!(
         report_json["best"]["launch"]["kernel"].as_str(),
         Some("matvec_bf16_rows32_u32")
     );

@@ -241,6 +241,14 @@ impl KernelMaterialization {
             Self::Generated { .. } | Self::DeferredGenerated { .. }
         )
     }
+
+    pub const fn profiling_materialization(&self) -> ProfilingCandidateMaterialization {
+        match self {
+            Self::Existing { .. } => ProfilingCandidateMaterialization::Existing,
+            Self::Generated { .. } => ProfilingCandidateMaterialization::Generated,
+            Self::DeferredGenerated { .. } => ProfilingCandidateMaterialization::DeferredGenerated,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -285,6 +293,7 @@ impl KernelCandidateMetadata {
             self.operation.clone(),
         )
         .with_launchable(self.is_launchable())
+        .with_materialization(self.generated.materialization.profiling_materialization())
         .with_action_trace(self.action_trace.clone())
         .with_resource_usage(self.resources)
         .with_score(self.score)
