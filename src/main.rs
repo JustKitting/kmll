@@ -17,10 +17,10 @@ use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
     autotune::{
         BeamSearchConfig, GemmRustCudaGenerator, GemmSearchProblem, KernelArtifactStore,
-        KernelCandidateMetadata, KernelMaterialization, KernelScheduleAction,
-        KernelScheduleActionArg, MatvecRustCudaGenerator, MatvecSearchProblem, ScheduleTransform,
-        SearchScore, SearchScoreSource, beam_search_metadata, beam_search_metadata_with_scorer,
-        optimization_selection_cache_key,
+        KernelCandidateMetadata, KernelMaterialization, KernelMetadataSearchProblem,
+        KernelOptimizationCacheKey, KernelScheduleAction, KernelScheduleActionArg,
+        MatvecRustCudaGenerator, MatvecSearchProblem, ScheduleTransform, SearchScore,
+        SearchScoreSource, SelectionCacheStatus, beam_search_metadata_with_selection_cache,
     },
     chat,
     dtypes::{Bf16, DType},
@@ -455,21 +455,31 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         max_depth,
         require_launchable: !allow_generated,
     };
-    let result = if measure {
+    let store = artifact_root
+        .as_ref()
+        .map(|root| KernelArtifactStore::new(root.clone()))
+        .unwrap_or_else(KernelArtifactStore::managed);
+    let score_namespace = if measure {
+        format!("measured-cuda-event-r{measure_repeat_count}-w{measure_warmup_count}")
+    } else {
+        "heuristic".to_string()
+    };
+    let cached = if measure {
         let (stream, module) = cuda_handles()?;
         let options = KernelAutotuneMeasureOptions {
             repeat_count: measure_repeat_count,
             warmup_count: measure_warmup_count,
         };
-        let generated_store = artifact_root
-            .as_ref()
-            .map(|root| KernelArtifactStore::new(root.clone()))
-            .unwrap_or_else(KernelArtifactStore::managed);
+        let generated_store = store.clone();
         let mut bench =
             GemmAutotuneBench::new(&stream, &module, m, n, k, options, generated_store)?;
         let mut first_measure_error = None;
-        let result = beam_search_metadata_with_scorer(&problem, config, |candidate| {
-            match bench.score_candidate(candidate) {
+        let cached = beam_search_metadata_with_selection_cache(
+            &store,
+            &problem,
+            config,
+            &score_namespace,
+            |candidate| match bench.score_candidate(candidate) {
                 Ok(score) => score,
                 Err(error) => {
                     if first_measure_error.is_none() {
@@ -477,29 +487,32 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
                     }
                     None
                 }
-            }
-        });
-        if result.best.is_none() {
+            },
+        )?;
+        if cached.result.best.is_none() {
             if let Some(error) = first_measure_error {
                 return Err(invalid_input(format!(
                     "kernel-autotune-gemm measured search did not produce a candidate; first measurement error: {error}"
                 )));
             }
         }
-        result
+        cached
     } else {
-        beam_search_metadata(&problem, config)
+        beam_search_metadata_with_selection_cache(
+            &store,
+            &problem,
+            config,
+            &score_namespace,
+            |candidate| problem.score(candidate),
+        )?
     };
+    let selection_cache_key = cached.cache_key;
+    let selection_cache_status = cached.cache_status;
+    let result = cached.result;
     let best = result
         .best
         .as_ref()
         .ok_or_else(|| invalid_input("kernel-autotune-gemm did not produce any candidates"))?;
-    let score_namespace = if measure {
-        format!("measured-cuda-event-r{measure_repeat_count}-w{measure_warmup_count}")
-    } else {
-        "heuristic".to_string()
-    };
-    let selection_cache_key = optimization_selection_cache_key(&problem, config, &score_namespace);
 
     println!(
         "kernel_autotune_gemm m={m} n={n} k={k} beam_width={beam_width} max_depth={max_depth} allow_generated={allow_generated} measure={measure}"
@@ -515,14 +528,12 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         result.rejected,
         result.beam.len()
     );
+    print_selection_cache_status(&selection_cache_key, &selection_cache_status);
     for (rank, candidate) in result.beam.iter().enumerate() {
         print_kernel_candidate(rank, candidate);
     }
 
     if emit || emit_crate {
-        let store = artifact_root
-            .map(KernelArtifactStore::new)
-            .unwrap_or_else(KernelArtifactStore::managed);
         if emit {
             let emitted = store.emit_metadata(best)?;
             println!(
@@ -700,21 +711,31 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         max_depth,
         require_launchable: !allow_generated,
     };
-    let result = if measure {
+    let store = artifact_root
+        .as_ref()
+        .map(|root| KernelArtifactStore::new(root.clone()))
+        .unwrap_or_else(KernelArtifactStore::managed);
+    let score_namespace = if measure {
+        format!("measured-cuda-event-r{measure_repeat_count}-w{measure_warmup_count}")
+    } else {
+        "heuristic".to_string()
+    };
+    let cached = if measure {
         let (stream, module) = cuda_handles()?;
         let options = KernelAutotuneMeasureOptions {
             repeat_count: measure_repeat_count,
             warmup_count: measure_warmup_count,
         };
-        let generated_store = artifact_root
-            .as_ref()
-            .map(|root| KernelArtifactStore::new(root.clone()))
-            .unwrap_or_else(KernelArtifactStore::managed);
+        let generated_store = store.clone();
         let mut bench =
             MatvecAutotuneBench::new(&stream, &module, rows, cols, options, generated_store)?;
         let mut first_measure_error = None;
-        let result = beam_search_metadata_with_scorer(&problem, config, |candidate| {
-            match bench.score_candidate(candidate) {
+        let cached = beam_search_metadata_with_selection_cache(
+            &store,
+            &problem,
+            config,
+            &score_namespace,
+            |candidate| match bench.score_candidate(candidate) {
                 Ok(score) => score,
                 Err(error) => {
                     if first_measure_error.is_none() {
@@ -722,29 +743,32 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
                     }
                     None
                 }
-            }
-        });
-        if result.best.is_none()
+            },
+        )?;
+        if cached.result.best.is_none()
             && let Some(error) = first_measure_error
         {
             return Err(invalid_input(format!(
                 "kernel-autotune-matvec measured search did not produce a candidate; first measurement error: {error}"
             )));
         }
-        result
+        cached
     } else {
-        beam_search_metadata(&problem, config)
+        beam_search_metadata_with_selection_cache(
+            &store,
+            &problem,
+            config,
+            &score_namespace,
+            |candidate| problem.score(candidate),
+        )?
     };
+    let selection_cache_key = cached.cache_key;
+    let selection_cache_status = cached.cache_status;
+    let result = cached.result;
     let best = result
         .best
         .as_ref()
         .ok_or_else(|| invalid_input("kernel-autotune-matvec did not produce any candidates"))?;
-    let score_namespace = if measure {
-        format!("measured-cuda-event-r{measure_repeat_count}-w{measure_warmup_count}")
-    } else {
-        "heuristic".to_string()
-    };
-    let selection_cache_key = optimization_selection_cache_key(&problem, config, &score_namespace);
 
     println!(
         "kernel_autotune_matvec rows={rows} cols={cols} beam_width={beam_width} max_depth={max_depth} allow_generated={allow_generated} measure={measure}"
@@ -760,14 +784,12 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         result.rejected,
         result.beam.len()
     );
+    print_selection_cache_status(&selection_cache_key, &selection_cache_status);
     for (rank, candidate) in result.beam.iter().enumerate() {
         print_kernel_candidate(rank, candidate);
     }
 
     if emit || emit_crate {
-        let store = artifact_root
-            .map(KernelArtifactStore::new)
-            .unwrap_or_else(KernelArtifactStore::managed);
         if emit {
             let emitted = store.emit_metadata(best)?;
             println!(
@@ -1408,6 +1430,29 @@ struct CompiledStandaloneKernelCrate {
     ptx_path: PathBuf,
     stdout_bytes: usize,
     stderr_bytes: usize,
+}
+
+fn print_selection_cache_status(
+    cache_key: &KernelOptimizationCacheKey,
+    status: &SelectionCacheStatus,
+) {
+    match status {
+        SelectionCacheStatus::Stale { reason } => {
+            println!(
+                "selection_cache cache_key={} status={} reason={}",
+                cache_key.hex(),
+                status.label(),
+                reason
+            );
+        }
+        _ => {
+            println!(
+                "selection_cache cache_key={} status={}",
+                cache_key.hex(),
+                status.label()
+            );
+        }
+    }
 }
 
 fn print_kernel_candidate(rank: usize, candidate: &KernelCandidateMetadata) {

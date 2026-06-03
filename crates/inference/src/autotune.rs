@@ -732,6 +732,30 @@ impl BeamSearchResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectionCacheStatus {
+    Hit,
+    Miss,
+    Stale { reason: String },
+}
+
+impl SelectionCacheStatus {
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::Hit => "hit",
+            Self::Miss => "miss",
+            Self::Stale { .. } => "stale",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CachedBeamSearchResult {
+    pub result: BeamSearchResult,
+    pub cache_key: KernelOptimizationCacheKey,
+    pub cache_status: SelectionCacheStatus,
+}
+
 pub trait KernelMetadataSearchProblem {
     fn seed(&self) -> KernelCandidateMetadata;
     fn expand(&self, candidate: &KernelCandidateMetadata) -> Vec<KernelCandidateMetadata>;
@@ -928,6 +952,48 @@ where
         explored,
         rejected,
     }
+}
+
+pub fn beam_search_metadata_with_selection_cache<P, F>(
+    store: &KernelArtifactStore,
+    problem: &P,
+    config: BeamSearchConfig,
+    score_namespace: &str,
+    mut score_candidate: F,
+) -> Result<CachedBeamSearchResult, KernelGenerationError>
+where
+    P: KernelActionSearchProblem,
+    F: FnMut(&KernelCandidateMetadata) -> Option<SearchScore>,
+{
+    let cache_key = optimization_selection_cache_key(problem, config, score_namespace);
+    let cache_status = match store.read_selection_cache(&cache_key)? {
+        Some(selection) => match selection.replay(problem) {
+            Ok(mut candidate) => {
+                candidate.score = selection.score;
+                return Ok(CachedBeamSearchResult {
+                    result: BeamSearchResult {
+                        best: Some(candidate.clone()),
+                        beam: vec![candidate],
+                        explored: 0,
+                        rejected: 0,
+                    },
+                    cache_key,
+                    cache_status: SelectionCacheStatus::Hit,
+                });
+            }
+            Err(error) => SelectionCacheStatus::Stale {
+                reason: error.to_string(),
+            },
+        },
+        None => SelectionCacheStatus::Miss,
+    };
+    let result =
+        beam_search_metadata_with_scorer(problem, config, |candidate| score_candidate(candidate));
+    Ok(CachedBeamSearchResult {
+        result,
+        cache_key,
+        cache_status,
+    })
 }
 
 pub fn optimization_selection_cache_key<P>(
@@ -3780,6 +3846,130 @@ mod tests {
         assert!(cache_text.contains("\"action_trace\""));
         assert!(!cache_text.contains("#[kernel]"));
         assert!(!cache_text.contains("pub fn gemm_f32_bf16"));
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn cached_beam_search_reports_miss_and_runs_search() {
+        let root = test_generated_root();
+        fs::create_dir_all(&root).expect("test-generated root should be creatable");
+        let store = KernelArtifactStore::new(&root);
+        let problem = MatvecSearchProblem::bf16_row_major(128, 256);
+        let config = BeamSearchConfig {
+            beam_width: 4,
+            max_depth: 2,
+            require_launchable: false,
+        };
+
+        let cached = beam_search_metadata_with_selection_cache(
+            &store,
+            &problem,
+            config,
+            "heuristic",
+            |candidate| problem.score(candidate),
+        )
+        .expect("cache miss should still run beam search");
+
+        assert_eq!(cached.cache_status, SelectionCacheStatus::Miss);
+        assert!(cached.result.explored > 0);
+        assert!(cached.result.best.is_some());
+        assert_eq!(
+            cached.cache_key,
+            optimization_selection_cache_key(&problem, config, "heuristic")
+        );
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn cached_beam_search_replays_hit_without_expanding_beam() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+        let problem = MatvecSearchProblem::bf16_row_major(128, 256);
+        let config = BeamSearchConfig {
+            beam_width: 4,
+            max_depth: 2,
+            require_launchable: false,
+        };
+        let cache_key = optimization_selection_cache_key(&problem, config, "heuristic");
+        let mut candidate = replay_schedule_actions(
+            &problem,
+            &[
+                KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+                KernelScheduleAction::unroll(1, 8),
+            ],
+        )
+        .expect("valid matvec action trace should replay into candidate metadata");
+        candidate.score = SearchScore::heuristic(12.0);
+        store
+            .emit_selection_cache_for_candidate(&cache_key, &candidate)
+            .expect("artifact store should write selection cache metadata");
+
+        let cached = beam_search_metadata_with_selection_cache(
+            &store,
+            &problem,
+            config,
+            "heuristic",
+            |candidate| problem.score(candidate),
+        )
+        .expect("cache hit should replay selected candidate");
+        let best = cached
+            .result
+            .best
+            .expect("cache hit should produce selected candidate");
+
+        assert_eq!(cached.cache_status, SelectionCacheStatus::Hit);
+        assert_eq!(cached.result.explored, 0);
+        assert_eq!(cached.result.rejected, 0);
+        assert_eq!(cached.result.beam.len(), 1);
+        assert_eq!(best.artifact_key(), candidate.artifact_key());
+        assert_eq!(best.score, SearchScore::heuristic(12.0));
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn cached_beam_search_falls_back_on_stale_selection() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+        let problem = MatvecSearchProblem::bf16_row_major(128, 256);
+        let config = BeamSearchConfig {
+            beam_width: 4,
+            max_depth: 2,
+            require_launchable: false,
+        };
+        let cache_key = optimization_selection_cache_key(&problem, config, "heuristic");
+        let candidate = replay_schedule_actions(
+            &problem,
+            &[KernelScheduleAction::split(
+                0,
+                8,
+                KernelActionMaterialization::DeferredGenerated,
+            )],
+        )
+        .expect("valid matvec action trace should replay into candidate metadata");
+        let mut stale_selection = KernelOptimizationSelection::from_candidate(&candidate);
+        stale_selection.artifact_key = "0000000000000000".to_string();
+        store
+            .emit_selection_cache(&cache_key, &stale_selection)
+            .expect("artifact store should write stale selection cache metadata");
+
+        let cached = beam_search_metadata_with_selection_cache(
+            &store,
+            &problem,
+            config,
+            "heuristic",
+            |candidate| problem.score(candidate),
+        )
+        .expect("stale cache should fall back to beam search");
+
+        assert!(matches!(
+            cached.cache_status,
+            SelectionCacheStatus::Stale { .. }
+        ));
+        assert!(cached.result.explored > 0);
+        assert!(cached.result.best.is_some());
 
         remove_test_generated_root(&root);
     }
