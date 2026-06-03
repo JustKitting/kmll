@@ -1563,10 +1563,13 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         .expect("known unobserved HMMA should be a probe target");
     assert_eq!(hmma_probe.priority, 90);
     assert!(hmma_probe.locally_mapped);
-    assert_eq!(hmma_probe.recommended_action, "generate-sass-artifact");
+    assert_eq!(
+        hmma_probe.recommended_action,
+        SassOpcodeProbeAction::GenerateSassArtifact
+    );
     assert_eq!(
         hmma_probe.reason,
-        "tensor-core opcode is mapped but unobserved in generated SASS artifacts"
+        SassOpcodeProbeReason::TensorCoreMappedUnobserved
     );
     assert!(
         hmma_probe

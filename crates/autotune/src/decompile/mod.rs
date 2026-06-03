@@ -39,8 +39,9 @@ pub use self::{
         SassCoverageOptions, SassCoverageReachingUse, SassCoverageRegion, SassCoverageReport,
         SassCoverageSemanticPattern, SassCoverageSourceFormat, SassCoverageSsaValue,
         SassCoverageValueOp, SassOpcodeCatalogEntry, SassOpcodeCount, SassOpcodeCoverageState,
-        SassOpcodeProbeTarget, SassOpcodeSignature, SassOpcodeSignatureCount, SassOpcodeSupport,
-        SassSemanticPatternCount, SassUnsupportedInstruction, run_sass_coverage_scan,
+        SassOpcodeProbeAction, SassOpcodeProbeReason, SassOpcodeProbeTarget, SassOpcodeSignature,
+        SassOpcodeSignatureCount, SassOpcodeSupport, SassSemanticPatternCount,
+        SassUnsupportedInstruction, run_sass_coverage_scan,
     },
     coverage_compare::{
         SassCoverageComparisonOptions, SassCoverageComparisonReport, SassCoverageOpcodeChange,

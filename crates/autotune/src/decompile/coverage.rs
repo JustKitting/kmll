@@ -163,8 +163,58 @@ pub struct SassOpcodeProbeTarget {
     pub kinds: Vec<SassOpcodeCatalogKind>,
     pub known_sources: Vec<SassOpcodeCatalogSource>,
     pub locally_mapped: bool,
-    pub recommended_action: String,
-    pub reason: String,
+    pub recommended_action: SassOpcodeProbeAction,
+    pub reason: SassOpcodeProbeReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassOpcodeProbeAction {
+    GenerateSassArtifact,
+    AddLifterMapping,
+}
+
+impl fmt::Display for SassOpcodeProbeAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::GenerateSassArtifact => f.write_str("generate-sass-artifact"),
+            Self::AddLifterMapping => f.write_str("add-lifter-mapping"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassOpcodeProbeReason {
+    MissingLocalLifterMapping,
+    TensorCoreMappedUnobserved,
+    TensorMemoryMappedUnobserved,
+    WarpGroupMappedUnobserved,
+    ArchitectureSpecificMappedUnobserved,
+    ScalarMappedUnobserved,
+}
+
+impl fmt::Display for SassOpcodeProbeReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingLocalLifterMapping => {
+                f.write_str("known opcode has no local lifter mapping")
+            }
+            Self::TensorCoreMappedUnobserved => f.write_str(
+                "tensor-core opcode is mapped but unobserved in generated SASS artifacts",
+            ),
+            Self::TensorMemoryMappedUnobserved => f.write_str(
+                "tensor-memory opcode is mapped but unobserved in generated SASS artifacts",
+            ),
+            Self::WarpGroupMappedUnobserved => {
+                f.write_str("warpgroup opcode is mapped but unobserved in generated SASS artifacts")
+            }
+            Self::ArchitectureSpecificMappedUnobserved => f.write_str(
+                "architecture-specific opcode is mapped but unobserved in generated SASS artifacts",
+            ),
+            Self::ScalarMappedUnobserved => {
+                f.write_str("mapped scalar opcode is unobserved in generated SASS artifacts")
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1012,11 +1062,10 @@ fn opcode_probe_targets(
             known_sources: entry.known_sources.iter().copied().collect(),
             locally_mapped: entry.locally_mapped,
             recommended_action: if entry.locally_mapped {
-                "generate-sass-artifact"
+                SassOpcodeProbeAction::GenerateSassArtifact
             } else {
-                "add-lifter-mapping"
-            }
-            .to_string(),
+                SassOpcodeProbeAction::AddLifterMapping
+            },
             reason: opcode_probe_reason(entry),
         })
         .collect::<Vec<_>>();
@@ -1044,26 +1093,23 @@ fn opcode_probe_priority(entry: &OpcodeCatalogBuilder) -> u8 {
     }
 }
 
-fn opcode_probe_reason(entry: &OpcodeCatalogBuilder) -> String {
+fn opcode_probe_reason(entry: &OpcodeCatalogBuilder) -> SassOpcodeProbeReason {
     if !entry.locally_mapped {
-        return "known opcode has no local lifter mapping".to_string();
+        return SassOpcodeProbeReason::MissingLocalLifterMapping;
     }
     if opcode_has_class(entry, SassOpcodeCatalogClass::TensorCore) {
-        return "tensor-core opcode is mapped but unobserved in generated SASS artifacts"
-            .to_string();
+        return SassOpcodeProbeReason::TensorCoreMappedUnobserved;
     }
     if opcode_has_class(entry, SassOpcodeCatalogClass::TensorMemory) {
-        return "tensor-memory opcode is mapped but unobserved in generated SASS artifacts"
-            .to_string();
+        return SassOpcodeProbeReason::TensorMemoryMappedUnobserved;
     }
     if opcode_has_class(entry, SassOpcodeCatalogClass::WarpGroup) {
-        return "warpgroup opcode is mapped but unobserved in generated SASS artifacts".to_string();
+        return SassOpcodeProbeReason::WarpGroupMappedUnobserved;
     }
     if !entry.architectures.is_empty() {
-        return "architecture-specific opcode is mapped but unobserved in generated SASS artifacts"
-            .to_string();
+        return SassOpcodeProbeReason::ArchitectureSpecificMappedUnobserved;
     }
-    "mapped scalar opcode is unobserved in generated SASS artifacts".to_string()
+    SassOpcodeProbeReason::ScalarMappedUnobserved
 }
 
 fn opcode_has_class(entry: &OpcodeCatalogBuilder, class: SassOpcodeCatalogClass) -> bool {
@@ -1613,8 +1659,8 @@ fn render_opcode_probe_targets_tsv(report: &SassCoverageReport) -> String {
             tsv(&display_list(&target.classes)),
             tsv(&display_list(&target.kinds)),
             tsv(&display_list(&target.known_sources)),
-            tsv(&target.recommended_action),
-            tsv(&target.reason),
+            tsv(&target.recommended_action.to_string()),
+            tsv(&target.reason.to_string()),
         )
         .expect("write to string");
     }
