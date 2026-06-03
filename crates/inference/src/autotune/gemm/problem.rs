@@ -19,8 +19,6 @@ impl GemmSearchProblem {
     const MAX_ACCUMULATOR_ELEMENTS_PER_THREAD: u32 = 16;
     const MAX_REDUCE_UNROLL_FACTOR: u32 = 32;
     const MAX_LOAD_UNROLL_FACTOR: u32 = 4;
-    const LOAD_THREAD_GROUP_FACTORS: [u32; 4] = [32, 64, 128, 256];
-
     pub const fn f32_bf16_row_col_row(m: usize, n: usize, k: usize) -> Self {
         Self {
             m,
@@ -298,9 +296,8 @@ impl GemmSearchProblem {
 
     pub(in crate::autotune) fn m_per_thread_factors_for_tile(tile: GemmTileShape) -> Vec<u32> {
         const MAX_M_PER_THREAD: u32 = 4;
-        (2..=MAX_M_PER_THREAD)
-            .filter(|factor| tile.m % *factor == 0)
-            .collect()
+        KernelScheduleActionTemplate::INFERENCE_DEFAULT
+            .legal_upcast_factors(|factor| factor <= MAX_M_PER_THREAD && tile.m % factor == 0)
     }
 
     pub(in crate::autotune) fn n_per_thread_factors(&self) -> Vec<u32> {
@@ -315,9 +312,8 @@ impl GemmSearchProblem {
 
     pub(in crate::autotune) fn n_per_thread_factors_for_tile(tile: GemmTileShape) -> Vec<u32> {
         const MAX_N_PER_THREAD: u32 = 4;
-        (2..=MAX_N_PER_THREAD)
-            .filter(|factor| tile.n % *factor == 0)
-            .collect()
+        KernelScheduleActionTemplate::INFERENCE_DEFAULT
+            .legal_upcast_factors(|factor| factor <= MAX_N_PER_THREAD && tile.n % factor == 0)
     }
 
     pub(in crate::autotune) fn per_thread_plans_for_tile(
@@ -457,10 +453,8 @@ impl GemmSearchProblem {
         plan: GemmSchedulePlan,
     ) -> Vec<u32> {
         let thread_count = plan.thread_count();
-        Self::LOAD_THREAD_GROUP_FACTORS
-            .into_iter()
-            .filter(|factor| *factor < thread_count)
-            .collect()
+        KernelScheduleActionTemplate::INFERENCE_DEFAULT
+            .legal_thread_group_factors(|factor| factor >= 32 && factor < thread_count)
     }
 
     pub(in crate::autotune) fn tile_shapes(&self) -> Vec<GemmTileShape> {

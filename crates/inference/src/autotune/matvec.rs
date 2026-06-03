@@ -395,11 +395,14 @@ impl MatvecSearchProblem {
     }
 
     fn thread_group_factors(&self) -> Vec<u32> {
-        MatvecThreadGroup::SEARCH_LANES_PER_ROW.to_vec()
+        KernelScheduleActionTemplate::INFERENCE_DEFAULT.legal_thread_group_factors(|factor| {
+            MatvecThreadGroup::SEARCH_LANES_PER_ROW.contains(&factor)
+        })
     }
 
     fn row_upcast_factors(&self) -> Vec<u32> {
-        MatvecRowUpcast::SEARCH_FACTORS.to_vec()
+        KernelScheduleActionTemplate::INFERENCE_DEFAULT
+            .legal_upcast_factors(|factor| MatvecRowUpcast::SEARCH_FACTORS.contains(&factor))
     }
 
     fn row_upcast_factors_for_rows(&self, rows: MatvecRowSplit) -> Vec<u32> {
