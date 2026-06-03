@@ -1609,17 +1609,69 @@ impl RowMajorWarpRows {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MatvecRowSplit {
+    rows_per_block: u32,
+}
+
+impl MatvecRowSplit {
+    pub const LANES_PER_ROW: u32 = 32;
+    pub const MAX_ROWS_PER_BLOCK: u32 = 32;
+
+    pub fn new(rows_per_block: u32) -> Option<Self> {
+        (rows_per_block > 0 && rows_per_block <= Self::MAX_ROWS_PER_BLOCK)
+            .then_some(Self { rows_per_block })
+    }
+
+    pub const fn rows_per_block(self) -> u32 {
+        self.rows_per_block
+    }
+
+    pub const fn block_threads(self) -> u32 {
+        self.rows_per_block * Self::LANES_PER_ROW
+    }
+
+    pub fn grid_rows(self, rows: usize) -> u32 {
+        (rows as u32).div_ceil(self.rows_per_block)
+    }
+
+    pub fn existing_plan(self) -> Option<RowMajorWarpRows> {
+        RowMajorWarpRows::from_rows_per_block(self.rows_per_block)
+    }
+
+    pub fn plan_name(self) -> String {
+        self.existing_plan()
+            .map(RowMajorWarpRows::plan_name)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("row-major-warp-rows{}-matvec", self.rows_per_block))
+    }
+}
+
+impl From<RowMajorWarpRows> for MatvecRowSplit {
+    fn from(value: RowMajorWarpRows) -> Self {
+        Self {
+            rows_per_block: value.rows_per_block(),
+        }
+    }
+}
+
+impl PartialEq<RowMajorWarpRows> for MatvecRowSplit {
+    fn eq(&self, other: &RowMajorWarpRows) -> bool {
+        self.rows_per_block == other.rows_per_block()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MatvecSchedulePlan {
-    pub rows: RowMajorWarpRows,
+    pub rows: MatvecRowSplit,
     pub reduce_unroll: u32,
 }
 
 impl MatvecSchedulePlan {
     pub const DEFAULT_REDUCE_UNROLL: u32 = 4;
 
-    pub const fn new(rows: RowMajorWarpRows) -> Self {
+    pub fn new(rows: impl Into<MatvecRowSplit>) -> Self {
         Self {
-            rows,
+            rows: rows.into(),
             reduce_unroll: Self::DEFAULT_REDUCE_UNROLL,
         }
     }
@@ -1644,6 +1696,7 @@ pub struct MatvecSearchProblem {
 }
 
 impl MatvecSearchProblem {
+    const MAX_ROWS_PER_BLOCK: u32 = MatvecRowSplit::MAX_ROWS_PER_BLOCK;
     const MAX_REDUCE_UNROLL_FACTOR: u32 = 32;
 
     pub const fn bf16_row_major(rows: usize, cols: usize) -> Self {
@@ -1668,6 +1721,13 @@ impl MatvecSearchProblem {
 
     pub fn generated_candidate_for_rows(&self, plan: RowMajorWarpRows) -> KernelCandidateMetadata {
         self.generated_candidate_for_plan(MatvecSchedulePlan::new(plan))
+    }
+
+    pub fn generated_candidate_for_row_split(
+        &self,
+        rows: MatvecRowSplit,
+    ) -> KernelCandidateMetadata {
+        self.generated_candidate_for_plan(MatvecSchedulePlan::new(rows))
     }
 
     pub fn generated_candidate_for_plan(
@@ -1760,28 +1820,30 @@ impl MatvecSearchProblem {
             Some(MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL),
         )
     }
+
+    fn deferred_row_split_factors(&self) -> Vec<u32> {
+        bounded_unroll_factors(self.rows, Self::MAX_ROWS_PER_BLOCK, None)
+    }
+
+    fn split_variants(&self) -> Vec<KernelAxisFactorAction> {
+        let mut variants = Vec::new();
+        variants.extend(RowMajorWarpRows::ALL.into_iter().map(|plan| {
+            KernelAxisFactorAction::new(
+                0,
+                plan.rows_per_block(),
+                KernelActionMaterialization::Existing,
+            )
+        }));
+        variants.extend(self.deferred_row_split_factors().into_iter().map(|factor| {
+            KernelAxisFactorAction::new(0, factor, KernelActionMaterialization::DeferredGenerated)
+        }));
+        variants
+    }
 }
 
 impl KernelActionSearchProblem for MatvecSearchProblem {
     fn search_space(&self) -> KernelActionSpaceSet {
-        let split_variants = RowMajorWarpRows::ALL
-            .into_iter()
-            .flat_map(|plan| {
-                let rows_per_block = plan.rows_per_block();
-                [
-                    KernelAxisFactorAction::new(
-                        0,
-                        rows_per_block,
-                        KernelActionMaterialization::Existing,
-                    ),
-                    KernelAxisFactorAction::new(
-                        0,
-                        rows_per_block,
-                        KernelActionMaterialization::DeferredGenerated,
-                    ),
-                ]
-            })
-            .collect();
+        let split_variants = self.split_variants();
         let unroll_factors = self.reduce_unroll_factors();
         KernelActionSpaceSet::new(vec![
             KernelActionSpace::Split {
@@ -1799,25 +1861,9 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
             return KernelActionSpaceSet::default();
         }
         if candidate.schedule.depth() == 0 {
-            let variants = RowMajorWarpRows::ALL
-                .into_iter()
-                .flat_map(|plan| {
-                    let rows_per_block = plan.rows_per_block();
-                    [
-                        KernelAxisFactorAction::new(
-                            0,
-                            rows_per_block,
-                            KernelActionMaterialization::Existing,
-                        ),
-                        KernelAxisFactorAction::new(
-                            0,
-                            rows_per_block,
-                            KernelActionMaterialization::DeferredGenerated,
-                        ),
-                    ]
-                })
-                .collect();
-            return KernelActionSpaceSet::new(vec![KernelActionSpace::Split { variants }]);
+            return KernelActionSpaceSet::new(vec![KernelActionSpace::Split {
+                variants: self.split_variants(),
+            }]);
         }
         let Some(plan) = schedule_matvec_plan(&candidate.schedule) else {
             return KernelActionSpaceSet::default();
@@ -1849,11 +1895,17 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 if candidate.schedule.depth() > 0 {
                     return None;
                 }
-                let rows = RowMajorWarpRows::from_rows_per_block(*rows_per_block)?;
                 let next = match materialization {
-                    KernelActionMaterialization::Existing => self.candidate_for_rows(rows),
+                    KernelActionMaterialization::Existing => {
+                        let rows = RowMajorWarpRows::from_rows_per_block(*rows_per_block)?;
+                        self.candidate_for_rows(rows)
+                    }
                     KernelActionMaterialization::DeferredGenerated => {
-                        self.generated_candidate_for_rows(rows)
+                        if !self.deferred_row_split_factors().contains(rows_per_block) {
+                            return None;
+                        }
+                        let rows = MatvecRowSplit::new(*rows_per_block)?;
+                        self.generated_candidate_for_row_split(rows)
                     }
                 };
                 Some(candidate_with_action_trace(candidate, action, next))
@@ -2440,7 +2492,7 @@ fn schedule_matvec_reduce_unroll(schedule: &KernelSchedule) -> Option<u32> {
 
 fn schedule_matvec_plan(schedule: &KernelSchedule) -> Option<MatvecSchedulePlan> {
     let rows_per_block = schedule_rows_per_block(schedule)?;
-    let rows = RowMajorWarpRows::from_rows_per_block(rows_per_block)?;
+    let rows = MatvecRowSplit::new(rows_per_block)?;
     Some(MatvecSchedulePlan {
         rows,
         reduce_unroll: schedule_matvec_reduce_unroll(schedule)
@@ -2460,10 +2512,11 @@ fn matvec_symbol_hint(plan: MatvecSchedulePlan) -> String {
 
 fn matvec_operation_name(plan: MatvecSchedulePlan) -> String {
     let plan = plan.normalized();
+    let plan_name = plan.rows.plan_name();
     if plan.reduce_unroll == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
-        format!("{}::bf16", plan.rows.plan_name())
+        format!("{plan_name}::bf16")
     } else {
-        format!("{}::bf16-u{}", plan.rows.plan_name(), plan.reduce_unroll)
+        format!("{plan_name}::bf16-u{}", plan.reduce_unroll)
     }
 }
 
@@ -3715,8 +3768,8 @@ mod tests {
         let best = result
             .best
             .expect("matvec search should produce a candidate");
-        assert_eq!(result.explored, 8);
-        assert_eq!(result.rejected, 4);
+        assert_eq!(result.explored, 36);
+        assert_eq!(result.rejected, 32);
         assert!(best.is_launchable());
         assert_eq!(best.launch.kernel, "matvec_bf16_kernel");
         assert_eq!(best.launch.grid_dim.x, 512);
@@ -3746,16 +3799,18 @@ mod tests {
         let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
         let seed = problem.seed();
         let candidates = problem.expand(&seed);
-        assert_eq!(candidates.len(), 8);
+        assert_eq!(candidates.len(), 36);
 
         let generated = candidates
             .iter()
             .find(|candidate| {
                 !candidate.is_launchable()
-                    && schedule_rows_per_block(&candidate.schedule) == Some(8)
+                    && schedule_rows_per_block(&candidate.schedule) == Some(13)
             })
-            .expect("matvec search should expose generated rows-per-block metadata");
-        assert_eq!(generated.launch.kernel, "matvec_bf16_rows8");
+            .expect("matvec search should expose arbitrary generated rows-per-block metadata");
+        assert_eq!(generated.launch.kernel, "matvec_bf16_rows13");
+        assert_eq!(generated.launch.grid_dim.x, 316);
+        assert_eq!(generated.launch.block_dim.x, 416);
         assert!(matches!(
             generated.generated.materialization,
             KernelMaterialization::DeferredGenerated { .. }
@@ -3775,7 +3830,7 @@ mod tests {
         let KernelActionSpace::Split { variants } = &spaces.spaces[0] else {
             panic!("matvec seed should expose split action-space metadata");
         };
-        assert_eq!(variants.len(), 8);
+        assert_eq!(variants.len(), 36);
         assert!(variants.contains(&KernelAxisFactorAction::new(
             0,
             8,
@@ -3783,8 +3838,18 @@ mod tests {
         )));
         assert!(variants.contains(&KernelAxisFactorAction::new(
             0,
-            8,
+            13,
             KernelActionMaterialization::DeferredGenerated
+        )));
+        assert!(variants.contains(&KernelAxisFactorAction::new(
+            0,
+            32,
+            KernelActionMaterialization::DeferredGenerated
+        )));
+        assert!(!variants.contains(&KernelAxisFactorAction::new(
+            0,
+            32,
+            KernelActionMaterialization::Existing
         )));
         let complete_space = problem.search_space();
         assert_eq!(complete_space.spaces.len(), 2);
@@ -3796,7 +3861,7 @@ mod tests {
             complete_space.spaces[1],
             KernelActionSpace::Unroll { .. }
         ));
-        assert_eq!(actions.len(), 8);
+        assert_eq!(actions.len(), 36);
         assert!(actions.contains(&KernelScheduleAction::split(
             0,
             8,
@@ -3804,23 +3869,23 @@ mod tests {
         )));
         assert!(actions.contains(&KernelScheduleAction::split(
             0,
-            8,
+            13,
             KernelActionMaterialization::DeferredGenerated
         )));
 
         let generated = problem
             .apply_schedule_action(
                 &seed,
-                &KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+                &KernelScheduleAction::split(0, 13, KernelActionMaterialization::DeferredGenerated),
             )
             .expect("row split action should produce candidate metadata");
-        assert_eq!(generated.launch.kernel, "matvec_bf16_rows8");
-        assert_eq!(schedule_rows_per_block(&generated.schedule), Some(8));
+        assert_eq!(generated.launch.kernel, "matvec_bf16_rows13");
+        assert_eq!(schedule_rows_per_block(&generated.schedule), Some(13));
         assert_eq!(
             generated.action_trace,
             vec![KernelScheduleAction::split(
                 0,
-                8,
+                13,
                 KernelActionMaterialization::DeferredGenerated
             )]
         );
@@ -3908,13 +3973,13 @@ mod tests {
         let result = beam_search_metadata_with_scorer(
             &problem,
             BeamSearchConfig {
-                beam_width: 8,
+                beam_width: 40,
                 max_depth: 2,
                 require_launchable: false,
             },
             |candidate| {
                 let plan = schedule_matvec_plan(&candidate.schedule)?;
-                if plan.rows == RowMajorWarpRows::Rows8 && plan.reduce_unroll == 7 {
+                if plan.rows.rows_per_block() == 13 && plan.reduce_unroll == 7 {
                     SearchScore::measured(0.0)
                 } else {
                     SearchScore::measured(
@@ -3930,9 +3995,9 @@ mod tests {
             .expect("matvec search should produce an unrolled generated candidate");
         let plan = schedule_matvec_plan(&best.schedule).expect("best candidate should have plan");
 
-        assert_eq!(plan.rows, RowMajorWarpRows::Rows8);
+        assert_eq!(plan.rows.rows_per_block(), 13);
         assert_eq!(plan.reduce_unroll, 7);
-        assert_eq!(best.launch.kernel, "matvec_bf16_rows8_u7");
+        assert_eq!(best.launch.kernel, "matvec_bf16_rows13_u7");
         assert_eq!(
             best.score.map(|score| score.source),
             Some(SearchScoreSource::Measured)
@@ -4138,16 +4203,18 @@ mod tests {
     #[test]
     fn matvec_generator_renders_rows_per_block_source_on_demand() {
         let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
-        let candidate = problem.generated_candidate_for_rows(RowMajorWarpRows::Rows8);
+        let candidate = problem.generated_candidate_for_row_split(
+            MatvecRowSplit::new(13).expect("rows13 should be a legal generated split"),
+        );
         let generated = MatvecRustCudaGenerator
             .source_for(&candidate)
             .expect("matvec generator should render rows-per-block source");
 
-        assert_eq!(generated.symbol, "matvec_bf16_rows8");
+        assert_eq!(generated.symbol, "matvec_bf16_rows13");
         assert!(generated.source.contains("#[kernel]"));
-        assert!(generated.source.contains("pub fn matvec_bf16_rows8("));
+        assert!(generated.source.contains("pub fn matvec_bf16_rows13("));
         assert!(generated.source.contains("pub struct Bf16(u16);"));
-        assert!(generated.source.contains("const ROWS_PER_BLOCK: u32 = 8;"));
+        assert!(generated.source.contains("const ROWS_PER_BLOCK: u32 = 13;"));
         assert!(generated.source.contains("const REDUCE_UNROLL: u32 = 4;"));
         assert!(
             generated
@@ -4198,7 +4265,7 @@ mod tests {
                 } else {
                     0.0
                 };
-                SearchScore::measured(generated_bonus + f64::from(8 - rows_per_block))
+                SearchScore::measured(generated_bonus + (32.0 - f64::from(rows_per_block)))
             },
         );
         let best = result
@@ -4206,8 +4273,8 @@ mod tests {
             .expect("matvec search should keep externally best generated candidate");
 
         assert!(!best.is_launchable());
-        assert_eq!(best.launch.kernel, "matvec_bf16_rows8");
-        assert_eq!(schedule_rows_per_block(&best.schedule), Some(8));
+        assert_eq!(best.launch.kernel, "matvec_bf16_rows32");
+        assert_eq!(schedule_rows_per_block(&best.schedule), Some(32));
         assert_eq!(
             best.score.map(|score| score.source),
             Some(SearchScoreSource::Measured)
@@ -5133,7 +5200,7 @@ mod tests {
         assert_eq!(report_json["best"]["launchable"].as_bool(), Some(false));
         assert_eq!(
             report_json["best"]["launch"]["kernel"].as_str(),
-            Some("matvec_bf16_rows8_u32")
+            Some("matvec_bf16_rows32_u32")
         );
         assert_eq!(
             report_json["best"]["action_trace"].as_array().map(Vec::len),
