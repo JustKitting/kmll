@@ -4,6 +4,7 @@ use super::{
     super::{KernelIrFunction, KernelIrOpKind},
     types::{
         SassBasicBlock, SassCfgEdge, SassCfgEdgeKind, SassNaturalLoop, SassRegion, SassRegionKind,
+        SassRegionPath,
     },
 };
 
@@ -263,7 +264,7 @@ fn build_regions(
                 parent: seed.parent,
                 children: children[id].clone(),
                 depth: 0,
-                path: Vec::new(),
+                path: SassRegionPath::default(),
                 local_rank: seed.local_rank,
                 kind: seed.kind,
                 header_block: seed.header_block,
@@ -280,12 +281,12 @@ fn build_regions(
         .collect::<Vec<_>>();
 
     if !regions.is_empty() {
-        assign_paths(0, Vec::new(), 0, &mut regions);
+        assign_paths(0, SassRegionPath::default(), 0, &mut regions);
     }
     regions
 }
 
-fn assign_paths(id: usize, mut prefix: Vec<usize>, depth: usize, regions: &mut [SassRegion]) {
+fn assign_paths(id: usize, mut prefix: SassRegionPath, depth: usize, regions: &mut [SassRegion]) {
     prefix.push(regions[id].local_rank);
     regions[id].depth = depth;
     regions[id].path = prefix.clone();

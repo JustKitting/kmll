@@ -10,7 +10,7 @@ pub use self::types::{
     SassAnalysisFunction, SassAnalysisModule, SassBasicBlock, SassBlockTerminator, SassCfgEdge,
     SassCfgEdgeKind, SassDataflowOp, SassDefUseEdge, SassDominatorBlock, SassLiveRange,
     SassMemoryAccess, SassMemoryAccessKind, SassNaturalLoop, SassReachingUse, SassRegion,
-    SassRegionKind, SassSsaValue, SassValueOp,
+    SassRegionKind, SassRegionPath, SassSsaValue, SassValueOp,
 };
 
 use super::{KernelIrFunction, KernelIrModule};

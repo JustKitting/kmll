@@ -970,6 +970,13 @@ fn analysis_recovers_constructive_region_paths_for_nested_loops() {
     assert_eq!(inner.parent, Some(outer.id));
     assert!(inner.path.len() > outer.path.len());
     assert!(inner.path.starts_with(&outer.path));
+    assert!(outer.path < inner.path);
+    let ordered_paths = function
+        .regions
+        .iter()
+        .map(|region| region.path.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(ordered_paths.len(), function.regions.len());
     assert!(inner.opcode_closure.iter().any(|opcode| opcode == "ISETP"));
 
     let text = analysis.to_text();

@@ -74,7 +74,7 @@ impl SassAnalysisModule {
                     region.id,
                     format_region_id(region.parent),
                     region.depth,
-                    format_region_path(&region.path),
+                    region.path,
                     region.local_rank,
                     region.kind,
                     format_block_ids(&region.blocks),
@@ -227,13 +227,6 @@ fn format_region_ids(region_ids: &[usize]) -> String {
         .map(|region_id| format!("r{region_id}"))
         .collect::<Vec<_>>()
         .join(",")
-}
-
-fn format_region_path(path: &[usize]) -> String {
-    path.iter()
-        .map(usize::to_string)
-        .collect::<Vec<_>>()
-        .join(".")
 }
 
 fn format_value_ids(value_ids: &[usize]) -> String {

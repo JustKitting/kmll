@@ -199,7 +199,7 @@ pub struct SassRegion {
     pub parent: Option<usize>,
     pub children: Vec<usize>,
     pub depth: usize,
-    pub path: Vec<usize>,
+    pub path: SassRegionPath,
     pub local_rank: usize,
     pub kind: SassRegionKind,
     pub header_block: Option<usize>,
@@ -211,6 +211,65 @@ pub struct SassRegion {
     pub opcode_closure: Vec<String>,
     pub condition: Option<String>,
     pub target: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SassRegionPath {
+    ranks: Vec<usize>,
+}
+
+impl SassRegionPath {
+    pub fn new(ranks: Vec<usize>) -> Self {
+        Self { ranks }
+    }
+
+    pub fn len(&self) -> usize {
+        self.ranks.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ranks.is_empty()
+    }
+
+    pub fn push(&mut self, rank: usize) {
+        self.ranks.push(rank);
+    }
+
+    pub fn starts_with(&self, parent: &Self) -> bool {
+        self.ranks.starts_with(&parent.ranks)
+    }
+
+    pub fn as_slice(&self) -> &[usize] {
+        &self.ranks
+    }
+
+    pub fn to_vec(&self) -> Vec<usize> {
+        self.ranks.clone()
+    }
+}
+
+impl From<Vec<usize>> for SassRegionPath {
+    fn from(ranks: Vec<usize>) -> Self {
+        Self::new(ranks)
+    }
+}
+
+impl AsRef<[usize]> for SassRegionPath {
+    fn as_ref(&self) -> &[usize] {
+        self.as_slice()
+    }
+}
+
+impl fmt::Display for SassRegionPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, rank) in self.ranks.iter().enumerate() {
+            if index > 0 {
+                f.write_str(".")?;
+            }
+            write!(f, "{rank}")?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

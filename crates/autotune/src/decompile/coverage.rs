@@ -10,8 +10,8 @@ use nn_rust_inference::runtime;
 
 use super::{
     KernelIrModule, KernelIrOpKind, KnownSassOpcode, SassAnalysisModule, SassLiftedModule,
-    SassPatternModule, analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass,
-    recover_sass_patterns, render_sass_file_side_by_side,
+    SassPatternModule, SassRegionPath, analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir,
+    parse_nvidia_sass, recover_sass_patterns, render_sass_file_side_by_side,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,7 +303,7 @@ pub struct SassCoverageRegion {
     pub parent: Option<usize>,
     pub children: Vec<usize>,
     pub depth: usize,
-    pub path: Vec<usize>,
+    pub path: SassRegionPath,
     pub local_rank: usize,
     pub kind: String,
     pub header_block: Option<usize>,
@@ -1656,7 +1656,7 @@ fn render_regions_tsv(report: &SassCoverageReport) -> String {
             region.parent.map(|id| id.to_string()).unwrap_or_default(),
             tsv(&format_blocks(&region.children)),
             region.depth,
-            tsv(&format_region_path(&region.path)),
+            tsv(&region.path.to_string()),
             region.local_rank,
             tsv(&region.kind),
             region
@@ -1962,13 +1962,6 @@ fn format_blocks(blocks: &[usize]) -> String {
         .map(|block| block.to_string())
         .collect::<Vec<_>>()
         .join(",")
-}
-
-fn format_region_path(path: &[usize]) -> String {
-    path.iter()
-        .map(usize::to_string)
-        .collect::<Vec<_>>()
-        .join(".")
 }
 
 fn format_values(values: &[usize]) -> String {
