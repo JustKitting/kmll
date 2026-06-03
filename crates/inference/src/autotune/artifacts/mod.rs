@@ -1,4 +1,5 @@
 mod generators;
+mod paths;
 mod store;
 mod types;
 

@@ -3,7 +3,9 @@ use std::{error::Error, io};
 mod cache;
 mod compile;
 mod gemm;
+mod gemm_launch;
 mod matvec;
+mod matvec_launch;
 mod validation;
 
 pub use self::{
