@@ -153,9 +153,9 @@ pub struct SassOpcodeProbeTarget {
     pub opcode: SassOpcode,
     pub priority: u8,
     pub architectures: Vec<String>,
-    pub classes: Vec<String>,
-    pub kinds: Vec<String>,
-    pub known_sources: Vec<String>,
+    pub classes: Vec<SassOpcodeCatalogClass>,
+    pub kinds: Vec<SassOpcodeCatalogKind>,
+    pub known_sources: Vec<SassOpcodeCatalogSource>,
     pub locally_mapped: bool,
     pub recommended_action: String,
     pub reason: String,
@@ -172,9 +172,9 @@ pub struct SassOpcodeCatalogEntry {
     pub signatures: Vec<String>,
     pub source_formats: Vec<SassCoverageSourceFormat>,
     pub architectures: Vec<String>,
-    pub known_sources: Vec<String>,
-    pub classes: Vec<String>,
-    pub kinds: Vec<String>,
+    pub known_sources: Vec<SassOpcodeCatalogSource>,
+    pub classes: Vec<SassOpcodeCatalogClass>,
+    pub kinds: Vec<SassOpcodeCatalogKind>,
     pub support: SassOpcodeSupport,
     pub coverage: SassOpcodeCoverageState,
     pub unsupported_count: usize,
@@ -304,21 +304,9 @@ impl OpcodeCatalogBuilder {
             signatures,
             source_formats: self.source_formats.into_iter().collect(),
             architectures: self.architectures.into_iter().collect(),
-            known_sources: self
-                .known_sources
-                .into_iter()
-                .map(|source| source.to_string())
-                .collect(),
-            classes: self
-                .classes
-                .into_iter()
-                .map(|class| class.to_string())
-                .collect(),
-            kinds: self
-                .kinds
-                .into_iter()
-                .map(|kind| kind.to_string())
-                .collect(),
+            known_sources: self.known_sources.into_iter().collect(),
+            classes: self.classes.into_iter().collect(),
+            kinds: self.kinds.into_iter().collect(),
             support,
             coverage,
             unsupported_count: self.unsupported_count,
@@ -1017,13 +1005,9 @@ fn opcode_probe_targets(
             opcode: opcode.clone(),
             priority: opcode_probe_priority(entry),
             architectures: entry.architectures.iter().cloned().collect(),
-            classes: entry.classes.iter().map(ToString::to_string).collect(),
-            kinds: entry.kinds.iter().map(ToString::to_string).collect(),
-            known_sources: entry
-                .known_sources
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
+            classes: entry.classes.iter().copied().collect(),
+            kinds: entry.kinds.iter().copied().collect(),
+            known_sources: entry.known_sources.iter().copied().collect(),
             locally_mapped: entry.locally_mapped,
             recommended_action: if entry.locally_mapped {
                 "generate-sass-artifact"
@@ -1602,9 +1586,9 @@ fn render_opcode_catalog_tsv(report: &SassCoverageReport) -> String {
             tsv(&entry.signatures.join(",")),
             tsv(&display_list(&entry.source_formats)),
             tsv(&entry.architectures.join(",")),
-            tsv(&entry.known_sources.join(",")),
-            tsv(&entry.classes.join(",")),
-            tsv(&entry.kinds.join(",")),
+            tsv(&display_list(&entry.known_sources)),
+            tsv(&display_list(&entry.classes)),
+            tsv(&display_list(&entry.kinds)),
             tsv(&entry.support.to_string()),
             tsv(&entry.coverage.to_string()),
             entry.unsupported_count,
@@ -1629,9 +1613,9 @@ fn render_opcode_probe_targets_tsv(report: &SassCoverageReport) -> String {
             target.priority,
             target.locally_mapped,
             tsv(&target.architectures.join(",")),
-            tsv(&target.classes.join(",")),
-            tsv(&target.kinds.join(",")),
-            tsv(&target.known_sources.join(",")),
+            tsv(&display_list(&target.classes)),
+            tsv(&display_list(&target.kinds)),
+            tsv(&display_list(&target.known_sources)),
             tsv(&target.recommended_action),
             tsv(&target.reason),
         )

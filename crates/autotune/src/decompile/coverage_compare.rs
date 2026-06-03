@@ -7,8 +7,8 @@ use std::{
 };
 
 use super::{
-    SassCoverageOptions, SassCoverageReport, SassOpcode, SassOpcodeCatalogEntry,
-    SassOpcodeCoverageState, run_sass_coverage_scan,
+    SassCoverageOptions, SassCoverageReport, SassOpcode, SassOpcodeCatalogClass,
+    SassOpcodeCatalogEntry, SassOpcodeCatalogKind, SassOpcodeCoverageState, run_sass_coverage_scan,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,8 +58,8 @@ pub struct SassCoverageProbeTargetDelta {
     pub baseline_coverage: SassOpcodeCoverageState,
     pub candidate_coverage: SassOpcodeCoverageState,
     pub candidate_instruction_count: usize,
-    pub classes: Vec<String>,
-    pub kinds: Vec<String>,
+    pub classes: Vec<SassOpcodeCatalogClass>,
+    pub kinds: Vec<SassOpcodeCatalogKind>,
     pub architectures: Vec<String>,
 }
 
@@ -421,13 +421,21 @@ fn render_probe_target_delta_tsv(targets: &[SassCoverageProbeTargetDelta]) -> St
             tsv(&target.baseline_coverage.to_string()),
             tsv(&target.candidate_coverage.to_string()),
             target.candidate_instruction_count,
-            tsv(&target.classes.join(",")),
-            tsv(&target.kinds.join(",")),
+            tsv(&display_list(&target.classes)),
+            tsv(&display_list(&target.kinds)),
             tsv(&target.architectures.join(",")),
         )
         .expect("write to string");
     }
     out
+}
+
+fn display_list<T: fmt::Display>(values: &[T]) -> String {
+    values
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn tsv(value: &str) -> String {

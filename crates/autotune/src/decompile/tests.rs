@@ -1489,7 +1489,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         mystery_catalog
             .kinds
             .iter()
-            .any(|kind| kind == "unsupported")
+            .any(|kind| kind == &SassOpcodeCatalogKind::Unsupported)
     );
     let iadd_catalog = report
         .opcode_catalog
@@ -1539,8 +1539,11 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         hmma_catalog
             .classes
             .iter()
-            .any(|class| class == "tensor-core")
+            .any(|class| class == &SassOpcodeCatalogClass::TensorCore)
     );
+    assert!(hmma_catalog.known_sources.iter().any(|source| {
+        source == &SassOpcodeCatalogSource::NvidiaCudaBinaryUtilitiesInstructionReference
+    }));
     let hmma_probe = report
         .opcode_probe_targets
         .iter()
