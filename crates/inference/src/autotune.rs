@@ -83,10 +83,30 @@ pub enum KernelScheduleActionOp {
     StrideOrder,
 }
 
+impl KernelScheduleActionOp {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Split => "split",
+            Self::Unroll => "unroll",
+            Self::TileGemm => "tile-gemm",
+            Self::StrideOrder => "stride-order",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KernelActionMaterialization {
     Existing,
     DeferredGenerated,
+}
+
+impl KernelActionMaterialization {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Existing => "existing",
+            Self::DeferredGenerated => "deferred-generated",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -245,6 +265,7 @@ pub struct KernelCandidateMetadata {
     pub family: String,
     pub axes: Vec<KernelAxis>,
     pub schedule: KernelSchedule,
+    pub action_trace: Vec<KernelScheduleAction>,
     pub generated: GeneratedKernelMetadata,
     pub launch: CudaLaunchSpec,
     pub operation: TypedOperationSpec,
@@ -275,6 +296,7 @@ impl KernelCandidateMetadata {
             family,
             axes,
             schedule,
+            action_trace: Vec::new(),
             generated: GeneratedKernelMetadata {
                 generator,
                 artifact_key,
@@ -285,6 +307,16 @@ impl KernelCandidateMetadata {
             score: None,
         }
     }
+}
+
+fn candidate_with_action_trace(
+    parent: &KernelCandidateMetadata,
+    action: &KernelScheduleAction,
+    mut candidate: KernelCandidateMetadata,
+) -> KernelCandidateMetadata {
+    candidate.action_trace = parent.action_trace.clone();
+    candidate.action_trace.push(action.clone());
+    candidate
 }
 
 #[derive(Debug)]
@@ -871,12 +903,13 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
         };
         let plan = RowMajorWarpRows::from_rows_per_block(*rows_per_block)?;
 
-        match materialization {
-            KernelActionMaterialization::Existing => Some(self.candidate_for_rows(plan)),
+        let next = match materialization {
+            KernelActionMaterialization::Existing => self.candidate_for_rows(plan),
             KernelActionMaterialization::DeferredGenerated => {
-                Some(self.generated_candidate_for_rows(plan))
+                self.generated_candidate_for_rows(plan)
             }
-        }
+        };
+        Some(candidate_with_action_trace(candidate, action, next))
     }
 }
 
@@ -1233,7 +1266,11 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 if *materialization != Self::action_materialization_for_plan(plan) {
                     return None;
                 }
-                Some(self.candidate_for_plan(plan))
+                Some(candidate_with_action_trace(
+                    candidate,
+                    action,
+                    self.candidate_for_plan(plan),
+                ))
             }
             KernelScheduleAction {
                 op: KernelScheduleActionOp::Unroll,
@@ -1245,7 +1282,11 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 if plan.reduce_unroll != 1 || *factor > plan.tile.k || plan.tile.k % *factor != 0 {
                     return None;
                 }
-                Some(self.candidate_for_plan(plan.with_reduce_unroll(*factor)))
+                Some(candidate_with_action_trace(
+                    candidate,
+                    action,
+                    self.candidate_for_plan(plan.with_reduce_unroll(*factor)),
+                ))
             }
             KernelScheduleAction {
                 op: KernelScheduleActionOp::StrideOrder,
@@ -1261,7 +1302,11 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 if order == GemmBTileLoadOrder::TileLinear {
                     return None;
                 }
-                Some(self.candidate_for_plan(plan.with_b_load_order(order)))
+                Some(candidate_with_action_trace(
+                    candidate,
+                    action,
+                    self.candidate_for_plan(plan.with_b_load_order(order)),
+                ))
             }
             _ => None,
         }
@@ -1417,6 +1462,11 @@ fn generated_kernel_manifest(candidate: &KernelCandidateMetadata) -> Value {
             .iter()
             .map(transform_json)
             .collect::<Vec<_>>(),
+        "action_trace": candidate
+            .action_trace
+            .iter()
+            .map(action_json)
+            .collect::<Vec<_>>(),
         "score": candidate.score.map(score_json),
     })
 }
@@ -1499,6 +1549,27 @@ fn transform_json(transform: &ScheduleTransform) -> Value {
         }
         ScheduleTransform::StrideOrder { axes } => {
             json!({"op": "stride-order", "axes": axes})
+        }
+    }
+}
+
+fn action_json(action: &KernelScheduleAction) -> Value {
+    json!({
+        "op": action.op.label(),
+        "axis": action.axis,
+        "arg": action_arg_json(&action.arg),
+        "materialization": action.materialization.label(),
+    })
+}
+
+fn action_arg_json(arg: &KernelScheduleActionArg) -> Value {
+    match arg {
+        KernelScheduleActionArg::Factor(factor) => json!({"kind": "factor", "value": factor}),
+        KernelScheduleActionArg::Tile3d { m, n, k } => {
+            json!({"kind": "tile-3d", "m": m, "n": n, "k": k})
+        }
+        KernelScheduleActionArg::AxisOrder(axes) => {
+            json!({"kind": "axis-order", "axes": axes})
         }
     }
 }
@@ -2119,6 +2190,14 @@ mod tests {
             .expect("row split action should produce candidate metadata");
         assert_eq!(generated.launch.kernel, "matvec_bf16_rows8");
         assert_eq!(schedule_rows_per_block(&generated.schedule), Some(8));
+        assert_eq!(
+            generated.action_trace,
+            vec![KernelScheduleAction::split(
+                0,
+                8,
+                KernelActionMaterialization::DeferredGenerated
+            )]
+        );
         assert!(matches!(
             generated.generated.materialization,
             KernelMaterialization::DeferredGenerated { .. }
@@ -2217,6 +2296,12 @@ mod tests {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let seed = problem.seed();
         let tile_actions = problem.schedule_actions(&seed);
+        let tile_action = KernelScheduleAction::tile_gemm(
+            16,
+            32,
+            16,
+            KernelActionMaterialization::DeferredGenerated,
+        );
 
         assert_eq!(tile_actions.len(), 4);
         assert!(tile_actions.contains(&KernelScheduleAction::tile_gemm(
@@ -2225,12 +2310,7 @@ mod tests {
             16,
             KernelActionMaterialization::Existing
         )));
-        assert!(tile_actions.contains(&KernelScheduleAction::tile_gemm(
-            16,
-            32,
-            16,
-            KernelActionMaterialization::DeferredGenerated
-        )));
+        assert!(tile_actions.contains(&tile_action));
 
         let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
         let schedule_actions = problem.schedule_actions(&tile_candidate);
@@ -2245,6 +2325,18 @@ mod tests {
             schedule_gemm_plan(&unrolled.schedule).expect("unrolled candidate should have plan");
         assert_eq!(unrolled_plan.reduce_unroll, 4);
         assert_eq!(unrolled.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u4");
+
+        let traced_tile = problem
+            .apply_schedule_action(&seed, &tile_action)
+            .expect("tile action should produce candidate metadata");
+        let traced_unrolled = problem
+            .apply_schedule_action(&traced_tile, &KernelScheduleAction::unroll(2, 4))
+            .expect("unroll action should extend candidate action trace");
+        assert_eq!(
+            traced_unrolled.action_trace,
+            vec![tile_action, KernelScheduleAction::unroll(2, 4)]
+        );
+        assert_eq!(traced_unrolled.artifact_key(), unrolled.artifact_key());
 
         let reordered = problem
             .apply_schedule_action(
@@ -2417,6 +2509,67 @@ mod tests {
         );
         assert_eq!(manifest["schedule"][0]["op"].as_str(), Some("tile-gemm"));
         assert_eq!(manifest["schedule"][0]["n"].as_u64(), Some(32));
+        assert_eq!(manifest["action_trace"].as_array().map(Vec::len), Some(0));
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn artifact_store_records_action_trace_metadata_without_changing_kernel_key() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let seed = problem.seed();
+        let tile_action = KernelScheduleAction::tile_gemm(
+            16,
+            32,
+            16,
+            KernelActionMaterialization::DeferredGenerated,
+        );
+        let tile_candidate = problem
+            .apply_schedule_action(&seed, &tile_action)
+            .expect("tile action should produce candidate metadata");
+        let candidate = problem
+            .apply_schedule_action(&tile_candidate, &KernelScheduleAction::unroll(2, 4))
+            .expect("unroll action should produce candidate metadata");
+        let direct_candidate = problem.candidate_for_plan(
+            GemmSchedulePlan::new(GemmTileShape::new(16, 32, 16)).with_reduce_unroll(4),
+        );
+
+        assert_eq!(candidate.artifact_key(), direct_candidate.artifact_key());
+        assert_eq!(
+            candidate.action_trace,
+            vec![tile_action, KernelScheduleAction::unroll(2, 4)]
+        );
+
+        let emitted = store
+            .emit_metadata(&candidate)
+            .expect("artifact store should write action trace metadata manifest");
+        let manifest_text = fs::read_to_string(&emitted.paths.manifest_path)
+            .expect("generated manifest should be readable");
+        let manifest: Value =
+            serde_json::from_str(&manifest_text).expect("manifest should be valid JSON");
+
+        assert_eq!(manifest["action_trace"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            manifest["action_trace"][0]["op"].as_str(),
+            Some("tile-gemm")
+        );
+        assert_eq!(
+            manifest["action_trace"][0]["materialization"].as_str(),
+            Some("deferred-generated")
+        );
+        assert_eq!(
+            manifest["action_trace"][0]["arg"]["kind"].as_str(),
+            Some("tile-3d")
+        );
+        assert_eq!(manifest["action_trace"][0]["arg"]["n"].as_u64(), Some(32));
+        assert_eq!(manifest["action_trace"][1]["op"].as_str(), Some("unroll"));
+        assert_eq!(manifest["action_trace"][1]["axis"].as_u64(), Some(2));
+        assert_eq!(
+            manifest["action_trace"][1]["arg"]["value"].as_u64(),
+            Some(4)
+        );
 
         remove_test_generated_root(&root);
     }

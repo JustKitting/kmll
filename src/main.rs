@@ -17,9 +17,9 @@ use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
     autotune::{
         BeamSearchConfig, GemmRustCudaGenerator, GemmSearchProblem, KernelArtifactStore,
-        KernelCandidateMetadata, KernelMaterialization, MatvecRustCudaGenerator,
-        MatvecSearchProblem, ScheduleTransform, SearchScore, SearchScoreSource,
-        beam_search_metadata, beam_search_metadata_with_scorer,
+        KernelCandidateMetadata, KernelMaterialization, KernelScheduleAction,
+        KernelScheduleActionArg, MatvecRustCudaGenerator, MatvecSearchProblem, ScheduleTransform,
+        SearchScore, SearchScoreSource, beam_search_metadata, beam_search_metadata_with_scorer,
     },
     chat,
     dtypes::{Bf16, DType},
@@ -1341,7 +1341,7 @@ fn print_kernel_candidate(rank: usize, candidate: &KernelCandidateMetadata) {
         })
         .unwrap_or_else(|| "none".to_string());
     println!(
-        "candidate rank={rank} key={} family={} launchable={} score={} generator={} materialization={} kernel={} grid={}x{}x{} block={}x{}x{} schedule={}",
+        "candidate rank={rank} key={} family={} launchable={} score={} generator={} materialization={} kernel={} grid={}x{}x{} block={}x{}x{} schedule={} actions={}",
         candidate.artifact_key().hex(),
         candidate.family,
         candidate.is_launchable(),
@@ -1355,7 +1355,8 @@ fn print_kernel_candidate(rank: usize, candidate: &KernelCandidateMetadata) {
         candidate.launch.block_dim.x,
         candidate.launch.block_dim.y,
         candidate.launch.block_dim.z,
-        format_schedule(&candidate.schedule.transforms)
+        format_schedule(&candidate.schedule.transforms),
+        format_action_trace(&candidate.action_trace)
     );
 }
 
@@ -1383,6 +1384,37 @@ fn format_schedule(transforms: &[ScheduleTransform]) -> String {
         })
         .collect::<Vec<_>>();
     format!("[{}]", parts.join(","))
+}
+
+fn format_action_trace(actions: &[KernelScheduleAction]) -> String {
+    if actions.is_empty() {
+        return "[]".to_string();
+    }
+    let parts = actions
+        .iter()
+        .map(|action| {
+            let axis = action
+                .axis
+                .map(|axis| axis.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            format!(
+                "{}(axis={},arg={},materialization={})",
+                action.op.label(),
+                axis,
+                format_action_arg(&action.arg),
+                action.materialization.label()
+            )
+        })
+        .collect::<Vec<_>>();
+    format!("[{}]", parts.join(","))
+}
+
+fn format_action_arg(arg: &KernelScheduleActionArg) -> String {
+    match arg {
+        KernelScheduleActionArg::Factor(factor) => format!("factor:{factor}"),
+        KernelScheduleActionArg::Tile3d { m, n, k } => format!("tile3d:{m}x{n}x{k}"),
+        KernelScheduleActionArg::AxisOrder(axes) => format!("axis_order:{axes:?}"),
+    }
 }
 
 fn run_relu(stream: &Arc<CudaStream>, module: &Arc<CudaModule>) -> AppResult<()> {
