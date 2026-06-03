@@ -16,11 +16,12 @@ use cuda_core::{CudaContext, CudaFunction, CudaModule, CudaStream, DeviceBuffer}
 use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
     autotune::{
-        BeamSearchConfig, GemmRustCudaGenerator, GemmSearchProblem, KernelArtifactStore,
-        KernelCandidateMetadata, KernelMaterialization, KernelMetadataSearchProblem,
-        KernelOptimizationCacheKey, KernelScheduleAction, KernelScheduleActionArg,
-        MatvecRustCudaGenerator, MatvecSearchProblem, ScheduleTransform, SearchScore,
-        SearchScoreSource, SelectionCacheStatus, beam_search_metadata_with_selection_cache,
+        BeamSearchConfig, EmittedKernelOptimizationSelection, GemmRustCudaGenerator,
+        GemmSearchProblem, KernelArtifactStore, KernelCandidateMetadata, KernelMaterialization,
+        KernelMetadataSearchProblem, KernelOptimizationCacheKey, KernelScheduleAction,
+        KernelScheduleActionArg, MatvecRustCudaGenerator, MatvecSearchProblem, ScheduleTransform,
+        SearchScore, SearchScoreSource, SelectionCacheStatus,
+        beam_search_metadata_with_selection_cache,
     },
     chat,
     dtypes::{Bf16, DType},
@@ -508,6 +509,7 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
     };
     let selection_cache_key = cached.cache_key;
     let selection_cache_status = cached.cache_status;
+    let selection_cache_write = cached.cache_write;
     let result = cached.result;
     let best = result
         .best
@@ -529,6 +531,9 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         result.beam.len()
     );
     print_selection_cache_status(&selection_cache_key, &selection_cache_status);
+    if let Some(emitted) = &selection_cache_write {
+        print_selection_cache_write(&selection_cache_key, emitted);
+    }
     for (rank, candidate) in result.beam.iter().enumerate() {
         print_kernel_candidate(rank, candidate);
     }
@@ -764,6 +769,7 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
     };
     let selection_cache_key = cached.cache_key;
     let selection_cache_status = cached.cache_status;
+    let selection_cache_write = cached.cache_write;
     let result = cached.result;
     let best = result
         .best
@@ -785,6 +791,9 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         result.beam.len()
     );
     print_selection_cache_status(&selection_cache_key, &selection_cache_status);
+    if let Some(emitted) = &selection_cache_write {
+        print_selection_cache_write(&selection_cache_key, emitted);
+    }
     for (rank, candidate) in result.beam.iter().enumerate() {
         print_kernel_candidate(rank, candidate);
     }
@@ -1453,6 +1462,19 @@ fn print_selection_cache_status(
             );
         }
     }
+}
+
+fn print_selection_cache_write(
+    cache_key: &KernelOptimizationCacheKey,
+    emitted: &EmittedKernelOptimizationSelection,
+) {
+    println!(
+        "selection_cache_write cache_key={} artifact_key={} selection_path={} selection_bytes={}",
+        cache_key.hex(),
+        emitted.artifact_key,
+        emitted.selection_path.display(),
+        emitted.selection_bytes
+    );
 }
 
 fn print_kernel_candidate(rank: usize, candidate: &KernelCandidateMetadata) {

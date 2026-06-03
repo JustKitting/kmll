@@ -754,6 +754,7 @@ pub struct CachedBeamSearchResult {
     pub result: BeamSearchResult,
     pub cache_key: KernelOptimizationCacheKey,
     pub cache_status: SelectionCacheStatus,
+    pub cache_write: Option<EmittedKernelOptimizationSelection>,
 }
 
 pub trait KernelMetadataSearchProblem {
@@ -979,6 +980,7 @@ where
                     },
                     cache_key,
                     cache_status: SelectionCacheStatus::Hit,
+                    cache_write: None,
                 });
             }
             Err(error) => SelectionCacheStatus::Stale {
@@ -989,10 +991,16 @@ where
     };
     let result =
         beam_search_metadata_with_scorer(problem, config, |candidate| score_candidate(candidate));
+    let cache_write = result
+        .best
+        .as_ref()
+        .map(|candidate| store.emit_selection_cache_for_candidate(&cache_key, candidate))
+        .transpose()?;
     Ok(CachedBeamSearchResult {
         result,
         cache_key,
         cache_status,
+        cache_write,
     })
 }
 
@@ -3874,9 +3882,26 @@ mod tests {
         assert_eq!(cached.cache_status, SelectionCacheStatus::Miss);
         assert!(cached.result.explored > 0);
         assert!(cached.result.best.is_some());
+        assert!(cached.cache_write.is_some());
         assert_eq!(
             cached.cache_key,
             optimization_selection_cache_key(&problem, config, "heuristic")
+        );
+        let cached_selection = store
+            .read_selection_cache(&cached.cache_key)
+            .expect("selection cache read should succeed")
+            .expect("miss fallback should write selection cache metadata");
+        let replayed = cached_selection
+            .replay(&problem)
+            .expect("written cache selection should replay");
+        assert_eq!(
+            replayed.artifact_key(),
+            cached
+                .result
+                .best
+                .as_ref()
+                .expect("miss fallback should have a best candidate")
+                .artifact_key()
         );
 
         remove_test_generated_root(&root);
@@ -3920,6 +3945,7 @@ mod tests {
             .expect("cache hit should produce selected candidate");
 
         assert_eq!(cached.cache_status, SelectionCacheStatus::Hit);
+        assert!(cached.cache_write.is_none());
         assert_eq!(cached.result.explored, 0);
         assert_eq!(cached.result.rejected, 0);
         assert_eq!(cached.result.beam.len(), 1);
@@ -3970,6 +3996,23 @@ mod tests {
         ));
         assert!(cached.result.explored > 0);
         assert!(cached.result.best.is_some());
+        assert!(cached.cache_write.is_some());
+        let refreshed = store
+            .read_selection_cache(&cached.cache_key)
+            .expect("selection cache read should succeed after stale fallback")
+            .expect("stale fallback should refresh selection cache metadata");
+        let refreshed_candidate = refreshed
+            .replay(&problem)
+            .expect("refreshed cache selection should replay");
+        assert_eq!(
+            refreshed_candidate.artifact_key(),
+            cached
+                .result
+                .best
+                .as_ref()
+                .expect("stale fallback should have a best candidate")
+                .artifact_key()
+        );
 
         remove_test_generated_root(&root);
     }
