@@ -570,6 +570,46 @@ pub trait KernelActionSearchProblem: KernelMetadataSearchProblem {
     ) -> Option<KernelCandidateMetadata>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KernelActionReplayError {
+    InvalidAction {
+        index: usize,
+        action: KernelScheduleAction,
+    },
+    FamilyMismatch {
+        expected: String,
+        actual: String,
+    },
+    ArtifactKeyMismatch {
+        expected: String,
+        actual: String,
+    },
+}
+
+impl fmt::Display for KernelActionReplayError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidAction { index, action } => {
+                write!(f, "invalid schedule action at index {index}: {action:?}")
+            }
+            Self::FamilyMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "replayed candidate family {actual:?} did not match expected {expected:?}"
+                )
+            }
+            Self::ArtifactKeyMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "replayed candidate artifact key {actual} did not match expected {expected}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for KernelActionReplayError {}
+
 pub fn expand_with_schedule_actions<P>(
     problem: &P,
     candidate: &KernelCandidateMetadata,
@@ -582,6 +622,49 @@ where
         .into_iter()
         .filter_map(|action| problem.apply_schedule_action(candidate, &action))
         .collect()
+}
+
+pub fn replay_schedule_actions<P>(
+    problem: &P,
+    actions: &[KernelScheduleAction],
+) -> Result<KernelCandidateMetadata, KernelActionReplayError>
+where
+    P: KernelActionSearchProblem,
+{
+    let mut candidate = problem.seed();
+    for (index, action) in actions.iter().enumerate() {
+        candidate = problem
+            .apply_schedule_action(&candidate, action)
+            .ok_or_else(|| KernelActionReplayError::InvalidAction {
+                index,
+                action: action.clone(),
+            })?;
+    }
+    Ok(candidate)
+}
+
+pub fn replay_optimization_candidate_spec<P>(
+    problem: &P,
+    spec: &OptimizationCandidateSpec,
+) -> Result<KernelCandidateMetadata, KernelActionReplayError>
+where
+    P: KernelActionSearchProblem,
+{
+    let candidate = replay_schedule_actions(problem, &spec.action_trace)?;
+    if candidate.family != spec.family {
+        return Err(KernelActionReplayError::FamilyMismatch {
+            expected: spec.family.clone(),
+            actual: candidate.family,
+        });
+    }
+    let actual_key = candidate.artifact_key().hex();
+    if actual_key != spec.artifact_key {
+        return Err(KernelActionReplayError::ArtifactKeyMismatch {
+            expected: spec.artifact_key.clone(),
+            actual: actual_key,
+        });
+    }
+    Ok(candidate)
 }
 
 pub fn beam_search_metadata<P>(problem: &P, config: BeamSearchConfig) -> BeamSearchResult
@@ -2507,6 +2590,107 @@ mod tests {
         assert_eq!(spec.operation.kind, OperationKind::Matvec);
         assert_eq!(spec.action_trace, candidate.action_trace);
         assert_eq!(spec.score, candidate.score);
+    }
+
+    #[test]
+    fn action_trace_replay_reconstructs_generated_matvec_candidate() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let actions = vec![
+            KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+            KernelScheduleAction::unroll(1, 8),
+        ];
+
+        let candidate = replay_schedule_actions(&problem, &actions)
+            .expect("valid matvec action trace should replay into candidate metadata");
+
+        assert_eq!(candidate.family, "matvec-bf16-row-major");
+        assert_eq!(candidate.action_trace, actions);
+        assert_eq!(candidate.launch.kernel, "matvec_bf16_rows8_u8");
+        assert_eq!(schedule_rows_per_block(&candidate.schedule), Some(8));
+        assert_eq!(schedule_matvec_reduce_unroll(&candidate.schedule), Some(8));
+        assert!(!candidate.is_launchable());
+
+        let generated = MatvecRustCudaGenerator
+            .source_for(&candidate)
+            .expect("replayed generated candidate should render source on demand");
+        assert_eq!(generated.symbol, "matvec_bf16_rows8_u8");
+        assert!(generated.source.contains("const ROWS_PER_BLOCK: u32 = 8;"));
+        assert!(generated.source.contains("const REDUCE_UNROLL: u32 = 8;"));
+    }
+
+    #[test]
+    fn optimization_candidate_spec_replay_checks_artifact_key() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let candidate = replay_schedule_actions(
+            &problem,
+            &[
+                KernelScheduleAction::split(0, 8, KernelActionMaterialization::DeferredGenerated),
+                KernelScheduleAction::unroll(1, 8),
+            ],
+        )
+        .expect("valid matvec action trace should replay into candidate metadata");
+        let spec = candidate.optimization_spec();
+
+        let replayed = replay_optimization_candidate_spec(&problem, &spec)
+            .expect("matching optimization spec should replay");
+        assert_eq!(replayed.artifact_key(), candidate.artifact_key());
+
+        let mut stale_spec = spec;
+        stale_spec.artifact_key = "0000000000000000".to_string();
+        assert_eq!(
+            replay_optimization_candidate_spec(&problem, &stale_spec),
+            Err(KernelActionReplayError::ArtifactKeyMismatch {
+                expected: "0000000000000000".to_string(),
+                actual: candidate.artifact_key().hex(),
+            })
+        );
+    }
+
+    #[test]
+    fn action_trace_replay_rejects_invalid_action_sequence() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let action = KernelScheduleAction::unroll(1, 8);
+
+        assert_eq!(
+            replay_schedule_actions(&problem, std::slice::from_ref(&action)),
+            Err(KernelActionReplayError::InvalidAction { index: 0, action })
+        );
+    }
+
+    #[test]
+    fn action_trace_replay_reconstructs_generated_gemm_candidate() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let actions = vec![
+            KernelScheduleAction::tile_gemm(
+                16,
+                32,
+                16,
+                KernelActionMaterialization::DeferredGenerated,
+            ),
+            KernelScheduleAction::unroll(2, 4),
+            KernelScheduleAction::stride_order(vec![2, 1]),
+        ];
+
+        let candidate = replay_schedule_actions(&problem, &actions)
+            .expect("valid GEMM action trace should replay into candidate metadata");
+        let plan = schedule_gemm_plan(&candidate.schedule).expect("replayed GEMM should have plan");
+
+        assert_eq!(candidate.family, "gemm-f32-bf16-row-col-row");
+        assert_eq!(candidate.action_trace, actions);
+        assert_eq!(candidate.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u4_bk");
+        assert_eq!(plan.tile, GemmTileShape::new(16, 32, 16));
+        assert_eq!(plan.reduce_unroll, 4);
+        assert_eq!(plan.b_load_order, GemmBTileLoadOrder::KContiguous);
+        assert!(!candidate.is_launchable());
+
+        let generated = GemmRustCudaGenerator
+            .source_for(&candidate)
+            .expect("replayed generated GEMM candidate should render source on demand");
+        assert_eq!(generated.symbol, "gemm_f32_bf16_tile_16x32x16_u4_bk");
+        assert!(generated.source.contains("const TILE_M: usize = 16;"));
+        assert!(generated.source.contains("const TILE_N: usize = 32;"));
+        assert!(generated.source.contains("const REDUCE_UNROLL: usize = 4;"));
+        assert!(generated.source.contains("let tile_row = load % TILE_K;"));
     }
 
     #[test]
