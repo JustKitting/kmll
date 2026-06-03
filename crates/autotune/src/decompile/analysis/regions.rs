@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    super::{KernelIrFunction, KernelIrOpKind},
+    super::{ControlTarget, KernelIrFunction, KernelIrOpKind, PredicateCondition},
     types::{
         SassBasicBlock, SassCfgEdge, SassCfgEdgeKind, SassNaturalLoop, SassRegion, SassRegionKind,
         SassRegionPath,
@@ -18,8 +18,8 @@ struct RegionSeed {
     branch_block: Option<usize>,
     entry_blocks: Vec<usize>,
     blocks: BTreeSet<usize>,
-    condition: Option<String>,
-    target: Option<String>,
+    condition: Option<PredicateCondition>,
+    target: Option<ControlTarget>,
 }
 
 impl RegionSeed {

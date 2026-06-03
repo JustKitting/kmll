@@ -13,6 +13,29 @@ fn aggregate_texts(operands: &[AggregateOperand]) -> Vec<String> {
     operands.iter().map(ToString::to_string).collect()
 }
 
+fn is_predicate_register(condition: &Option<PredicateCondition>, expected: &str) -> bool {
+    matches!(
+        condition,
+        Some(PredicateCondition {
+            kind: PredicateConditionKind::Register {
+                register,
+                negated: false
+            },
+            ..
+        }) if register == &reg(expected)
+    )
+}
+
+fn is_label_target(target: &Option<ControlTarget>, expected: &str) -> bool {
+    matches!(
+        target,
+        Some(ControlTarget {
+            kind: ControlTargetKind::Label(label),
+            ..
+        }) if label == expected
+    )
+}
+
 #[test]
 fn register_refs_canonicalize_modifier_spelling_for_identity() {
     assert_eq!(reg("R13.reuse"), reg("R13"));
@@ -858,8 +881,8 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
         edge.from_block == 0
             && edge.to_block == Some(2)
             && edge.kind == SassCfgEdgeKind::Branch
-            && edge.condition.as_deref() == Some("P0")
-            && edge.target.as_deref() == Some(".L_then")
+            && is_predicate_register(&edge.condition, "P0")
+            && is_label_target(&edge.target, ".L_then")
     }));
     assert!(function.edges.iter().any(|edge| {
         edge.from_block == 0
@@ -1034,7 +1057,7 @@ fn analysis_recovers_dominators_and_natural_loops() {
     assert_eq!(natural_loop.header_block, header.id);
     assert_eq!(natural_loop.latch_block, body.id);
     assert_eq!(natural_loop.blocks.as_slice(), &[header.id, body.id]);
-    assert_eq!(natural_loop.edge_target.as_deref(), Some(".L_loop"));
+    assert!(is_label_target(&natural_loop.edge_target, ".L_loop"));
 
     let text = analysis.to_text();
     assert!(text.contains("dominators"));
@@ -1104,7 +1127,7 @@ fn analysis_keeps_fallthrough_after_predicated_exit() {
         edge.from_block == 0
             && edge.to_block.is_none()
             && edge.kind == SassCfgEdgeKind::Exit
-            && edge.condition.as_deref() == Some("P0")
+            && is_predicate_register(&edge.condition, "P0")
     }));
     assert!(function.edges.iter().any(|edge| {
         edge.from_block == 0

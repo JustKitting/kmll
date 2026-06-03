@@ -224,8 +224,8 @@ pub(super) fn build_edges(
                     from_block: block.id,
                     to_block: target_block,
                     kind: SassCfgEdgeKind::Branch,
-                    condition: condition.as_ref().map(ToString::to_string),
-                    target: target.as_ref().map(ToString::to_string),
+                    condition: condition.clone(),
+                    target: target.clone(),
                 });
                 if condition.is_some() {
                     if let Some(next_block) = next_block {
@@ -245,7 +245,7 @@ pub(super) fn build_edges(
                     to_block: None,
                     kind: SassCfgEdgeKind::Call,
                     condition: None,
-                    target: target.as_ref().map(ToString::to_string),
+                    target: target.clone(),
                 });
                 if let Some(next_block) = next_block {
                     edges.push(SassCfgEdge {
@@ -262,8 +262,8 @@ pub(super) fn build_edges(
                     from_block: block.id,
                     to_block: None,
                     kind: SassCfgEdgeKind::Return,
-                    condition: last_op.predicate.as_ref().map(ToString::to_string),
-                    target: target.as_ref().map(ToString::to_string),
+                    condition: last_op.predicate.clone(),
+                    target: target.clone(),
                 });
                 if last_op.predicate.is_some() {
                     if let Some(next_block) = next_block {
@@ -282,7 +282,7 @@ pub(super) fn build_edges(
                     from_block: block.id,
                     to_block: None,
                     kind: SassCfgEdgeKind::Exit,
-                    condition: condition.as_ref().map(ToString::to_string),
+                    condition: condition.clone(),
                     target: None,
                 });
                 if condition.is_some() {

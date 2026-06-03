@@ -1,7 +1,8 @@
 use std::fmt;
 
 use super::super::{
-    MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemorySpace, RegisterRef,
+    ControlTarget, MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemorySpace,
+    PredicateCondition, RegisterRef,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,8 +152,8 @@ pub struct SassCfgEdge {
     pub from_block: usize,
     pub to_block: Option<usize>,
     pub kind: SassCfgEdgeKind,
-    pub condition: Option<String>,
-    pub target: Option<String>,
+    pub condition: Option<PredicateCondition>,
+    pub target: Option<ControlTarget>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,8 +192,8 @@ pub struct SassNaturalLoop {
     pub latch_block: usize,
     pub reachable: bool,
     pub blocks: Vec<usize>,
-    pub edge_condition: Option<String>,
-    pub edge_target: Option<String>,
+    pub edge_condition: Option<PredicateCondition>,
+    pub edge_target: Option<ControlTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -211,8 +212,8 @@ pub struct SassRegion {
     pub blocks: Vec<usize>,
     pub op_addresses: Vec<u64>,
     pub opcode_closure: Vec<String>,
-    pub condition: Option<String>,
-    pub target: Option<String>,
+    pub condition: Option<PredicateCondition>,
+    pub target: Option<ControlTarget>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]

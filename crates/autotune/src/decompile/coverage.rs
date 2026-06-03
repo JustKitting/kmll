@@ -1025,8 +1025,8 @@ fn append_analysis(
                 from_block: edge.from_block,
                 to_block: edge.to_block,
                 kind: edge.kind.to_string(),
-                condition: edge.condition.clone(),
-                target: edge.target.clone(),
+                condition: edge.condition.as_ref().map(ToString::to_string),
+                target: edge.target.as_ref().map(ToString::to_string),
             });
         }
         for dominator in &function.dominators {
@@ -1048,8 +1048,11 @@ fn append_analysis(
                 latch_block: natural_loop.latch_block,
                 reachable: natural_loop.reachable,
                 blocks: natural_loop.blocks.clone(),
-                edge_condition: natural_loop.edge_condition.clone(),
-                edge_target: natural_loop.edge_target.clone(),
+                edge_condition: natural_loop
+                    .edge_condition
+                    .as_ref()
+                    .map(ToString::to_string),
+                edge_target: natural_loop.edge_target.as_ref().map(ToString::to_string),
             });
         }
         for region in &function.regions {
@@ -1070,8 +1073,8 @@ fn append_analysis(
                 blocks: region.blocks.clone(),
                 op_addresses: region.op_addresses.clone(),
                 opcode_closure: region.opcode_closure.clone(),
-                condition: region.condition.clone(),
-                target: region.target.clone(),
+                condition: region.condition.as_ref().map(ToString::to_string),
+                target: region.target.as_ref().map(ToString::to_string),
             });
         }
         for op in &function.dataflow {

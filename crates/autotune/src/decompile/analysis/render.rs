@@ -37,8 +37,8 @@ impl SassAnalysisModule {
                         .map(|block| format!("b{block}"))
                         .unwrap_or_else(|| "external".to_string()),
                     edge.kind,
-                    edge.condition.as_deref().unwrap_or("-"),
-                    edge.target.as_deref().unwrap_or("-")
+                    format_optional(&edge.condition),
+                    format_optional(&edge.target)
                 )
                 .expect("write to string");
             }
@@ -64,8 +64,8 @@ impl SassAnalysisModule {
                     natural_loop.latch_block,
                     natural_loop.reachable,
                     format_block_ids(&natural_loop.blocks),
-                    natural_loop.edge_condition.as_deref().unwrap_or("-"),
-                    natural_loop.edge_target.as_deref().unwrap_or("-")
+                    format_optional(&natural_loop.edge_condition),
+                    format_optional(&natural_loop.edge_target)
                 )
                 .expect("write to string");
             }
@@ -88,8 +88,8 @@ impl SassAnalysisModule {
                     format_block_id(region.latch_block),
                     format_block_id(region.branch_block),
                     format_block_ids(&region.entry_blocks),
-                    region.condition.as_deref().unwrap_or("-"),
-                    region.target.as_deref().unwrap_or("-")
+                    format_optional(&region.condition),
+                    format_optional(&region.target)
                 )
                 .expect("write to string");
             }
@@ -210,6 +210,13 @@ fn format_addresses(addresses: &[u64]) -> String {
         .map(|address| format!("{address:#06x}"))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn format_optional<T: ToString>(value: &Option<T>) -> String {
+    value
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn format_registers(registers: &[RegisterRef]) -> String {
