@@ -748,6 +748,7 @@ pub struct OptimizationCandidateSpec {
     pub launch: CudaLaunchSpec,
     pub operation: TypedOperationSpec,
     pub action_trace: Vec<OptimizationActionSpec>,
+    pub resources: Option<OptimizationResourceUsage>,
     pub score: Option<OptimizationScore>,
 }
 
@@ -767,6 +768,7 @@ impl OptimizationCandidateSpec {
             launch,
             operation,
             action_trace: Vec::new(),
+            resources: None,
             score: None,
         }
     }
@@ -781,9 +783,41 @@ impl OptimizationCandidateSpec {
         self
     }
 
+    pub fn with_resource_usage(mut self, resources: Option<OptimizationResourceUsage>) -> Self {
+        self.resources = resources;
+        self
+    }
+
     pub fn with_score(mut self, score: Option<OptimizationScore>) -> Self {
         self.score = score;
         self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptimizationResourceUsage {
+    pub threads_per_block: u32,
+    pub shared_memory_bytes: u32,
+    pub accumulator_elements_per_thread: u32,
+    pub output_elements_per_thread: u32,
+    pub load_elements_per_block: u32,
+}
+
+impl OptimizationResourceUsage {
+    pub const fn new(
+        threads_per_block: u32,
+        shared_memory_bytes: u32,
+        accumulator_elements_per_thread: u32,
+        output_elements_per_thread: u32,
+        load_elements_per_block: u32,
+    ) -> Self {
+        Self {
+            threads_per_block,
+            shared_memory_bytes,
+            accumulator_elements_per_thread,
+            output_elements_per_thread,
+            load_elements_per_block,
+        }
     }
 }
 
@@ -2264,9 +2298,65 @@ fn push_optimization_candidate_json(
     out.push('\n');
     push_indent(out, indent + 2);
     out.push_str("],\n");
+    push_optimization_resource_usage_json(out, "resources", candidate.resources, indent + 2, true);
     push_optimization_score_json(out, "score", candidate.score, indent + 2, false);
     push_indent(out, indent);
     out.push('}');
+}
+
+fn push_optimization_resource_usage_json(
+    out: &mut String,
+    name: &str,
+    resources: Option<OptimizationResourceUsage>,
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": ");
+    if let Some(resources) = resources {
+        out.push_str("{\n");
+        push_json_field_u32(
+            out,
+            "threads_per_block",
+            resources.threads_per_block,
+            indent + 2,
+            true,
+        );
+        push_json_field_u32(
+            out,
+            "shared_memory_bytes",
+            resources.shared_memory_bytes,
+            indent + 2,
+            true,
+        );
+        push_json_field_u32(
+            out,
+            "accumulator_elements_per_thread",
+            resources.accumulator_elements_per_thread,
+            indent + 2,
+            true,
+        );
+        push_json_field_u32(
+            out,
+            "output_elements_per_thread",
+            resources.output_elements_per_thread,
+            indent + 2,
+            true,
+        );
+        push_json_field_u32(
+            out,
+            "load_elements_per_block",
+            resources.load_elements_per_block,
+            indent + 2,
+            false,
+        );
+        push_indent(out, indent);
+        out.push('}');
+    } else {
+        out.push_str("null");
+    }
+    push_optional_comma(out, comma);
 }
 
 fn push_optimization_action_json(out: &mut String, action: &OptimizationActionSpec, indent: usize) {
@@ -2894,6 +2984,7 @@ mod tests {
             operation,
         )
         .with_launchable(false)
+        .with_resource_usage(Some(OptimizationResourceUsage::new(256, 0, 1, 1, 0)))
         .with_action_trace(vec![
             OptimizationActionSpec::split(
                 0,
@@ -2963,6 +3054,9 @@ mod tests {
         assert!(json.contains("\"factors\": [2, 4, 8]"));
         assert!(json.contains("\"pairs\""));
         assert!(json.contains("\"launchable\": false"));
+        assert!(json.contains("\"resources\""));
+        assert!(json.contains("\"threads_per_block\": 256"));
+        assert!(json.contains("\"accumulator_elements_per_thread\": 1"));
         assert!(json.contains("\"action_trace\""));
         assert!(json.contains("\"op\": \"split\""));
         assert!(json.contains("\"op\": \"upcast\""));

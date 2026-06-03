@@ -17,9 +17,10 @@ pub use nn_rust_profiling::{
     OptimizationActionSpaceSet as ProfilingActionSpaceSet,
     OptimizationActionSpec as KernelScheduleAction,
     OptimizationAxisFactorChoice as ProfilingAxisFactorChoice, OptimizationCandidateSpec,
-    OptimizationScore as SearchScore, OptimizationScoreSource as SearchScoreSource,
-    OptimizationSearchConfig, OptimizationSearchReport,
-    OptimizationTile3dChoice as ProfilingTile3dChoice, OptimizationTiming,
+    OptimizationResourceUsage as KernelResourceUsage, OptimizationScore as SearchScore,
+    OptimizationScoreSource as SearchScoreSource, OptimizationSearchConfig,
+    OptimizationSearchReport, OptimizationTile3dChoice as ProfilingTile3dChoice,
+    OptimizationTiming,
 };
 use nn_rust_profiling::{
     CudaLaunchSpec, MAX_OPTIMIZATION_SETUP_SEGMENTS, NumericKind, OperationKind, OperationRoute,
@@ -185,6 +186,7 @@ pub struct KernelCandidateMetadata {
     pub generated: GeneratedKernelMetadata,
     pub launch: CudaLaunchSpec,
     pub operation: TypedOperationSpec,
+    pub resources: Option<KernelResourceUsage>,
     pub score: Option<SearchScore>,
 }
 
@@ -207,6 +209,7 @@ impl KernelCandidateMetadata {
         )
         .with_launchable(self.is_launchable())
         .with_action_trace(self.action_trace.clone())
+        .with_resource_usage(self.resources)
         .with_score(self.score)
     }
 
@@ -233,6 +236,7 @@ impl KernelCandidateMetadata {
             },
             launch,
             operation,
+            resources: None,
             score: None,
         }
     }
@@ -2616,6 +2620,40 @@ impl GemmSchedulePlan {
         threads_m.saturating_mul(threads_n).max(1)
     }
 
+    fn shared_memory_bytes(self) -> u32 {
+        const F32_BYTES: u32 = 4;
+        let plan = self.normalized();
+        plan.tile
+            .m
+            .saturating_mul(plan.tile.k)
+            .saturating_add(plan.tile.k.saturating_mul(plan.tile.n))
+            .saturating_mul(F32_BYTES)
+    }
+
+    fn accumulator_elements_per_thread(self) -> u32 {
+        let plan = self.normalized();
+        plan.m_per_thread.saturating_mul(plan.n_per_thread).max(1)
+    }
+
+    fn load_elements_per_block(self) -> u32 {
+        let plan = self.normalized();
+        plan.tile
+            .m
+            .saturating_mul(plan.tile.k)
+            .saturating_add(plan.tile.k.saturating_mul(plan.tile.n))
+    }
+
+    fn resource_usage(self) -> KernelResourceUsage {
+        let accumulators = self.accumulator_elements_per_thread();
+        KernelResourceUsage::new(
+            self.thread_count(),
+            self.shared_memory_bytes(),
+            accumulators,
+            accumulators,
+            self.load_elements_per_block(),
+        )
+    }
+
     fn a_load_rounds(self) -> u32 {
         let plan = self.normalized();
         plan.tile
@@ -2813,6 +2851,9 @@ pub struct GemmSearchProblem {
 impl GemmSearchProblem {
     const EXISTING_TILE: GemmTileShape = GemmTileShape::new(16, 16, 16);
     const MAX_TILE_DIM: u32 = 32;
+    const MAX_THREADS_PER_BLOCK: u32 = 1024;
+    const MAX_SHARED_MEMORY_BYTES: u32 = 48 * 1024;
+    const MAX_ACCUMULATOR_ELEMENTS_PER_THREAD: u32 = 16;
     const MAX_REDUCE_UNROLL_FACTOR: u32 = 32;
     const MAX_LOAD_UNROLL_FACTOR: u32 = 4;
     const LOAD_THREAD_GROUP_FACTORS: [u32; 4] = [32, 64, 128, 256];
@@ -3001,7 +3042,7 @@ impl GemmSearchProblem {
             });
         }
 
-        KernelCandidateMetadata::new(
+        let mut candidate = KernelCandidateMetadata::new(
             "gemm-f32-bf16-row-col-row",
             self.axes(),
             schedule,
@@ -3009,7 +3050,9 @@ impl GemmSearchProblem {
             materialization,
             launch,
             operation,
-        )
+        );
+        candidate.resources = Some(plan.resource_usage());
+        candidate
     }
 
     fn axes(&self) -> Vec<KernelAxis> {
@@ -3041,6 +3084,27 @@ impl GemmSearchProblem {
         } else {
             KernelActionMaterialization::DeferredGenerated
         }
+    }
+
+    fn plan_within_resource_limits(plan: GemmSchedulePlan) -> bool {
+        let plan = plan.normalized();
+        let resources = plan.resource_usage();
+        plan.tile.is_launchable_shape()
+            && resources.threads_per_block <= Self::MAX_THREADS_PER_BLOCK
+            && resources.shared_memory_bytes <= Self::MAX_SHARED_MEMORY_BYTES
+            && resources.accumulator_elements_per_thread
+                <= Self::MAX_ACCUMULATOR_ELEMENTS_PER_THREAD
+    }
+
+    fn candidate_for_checked_plan(
+        &self,
+        parent: &KernelCandidateMetadata,
+        action: &KernelScheduleAction,
+        plan: GemmSchedulePlan,
+    ) -> Option<KernelCandidateMetadata> {
+        let plan = plan.normalized();
+        Self::plan_within_resource_limits(plan)
+            .then(|| candidate_with_action_trace(parent, action, self.candidate_for_plan(plan)))
     }
 
     fn reduce_unroll_factors(&self) -> Vec<u32> {
@@ -3193,6 +3257,9 @@ impl GemmSearchProblem {
                     continue;
                 }
                 let next_plan = plan.with_tile(tile);
+                if !Self::plan_within_resource_limits(next_plan) {
+                    continue;
+                }
                 variants.push(KernelAxisFactorAction::new(
                     axis,
                     factor,
@@ -3239,7 +3306,7 @@ impl GemmSearchProblem {
             for n in n_factors.iter().copied() {
                 for k in k_factors.iter().copied() {
                     let tile = GemmTileShape::new(m, n, k);
-                    if tile.is_launchable_shape() {
+                    if Self::plan_within_resource_limits(GemmSchedulePlan::new(tile)) {
                         tiles.push(tile);
                     }
                 }
@@ -3359,51 +3426,98 @@ impl KernelActionSearchProblem for GemmSearchProblem {
             });
         }
         if plan.reduce_unroll == 1 {
-            let factors = Self::reduce_unroll_factors_for_tile(plan.tile);
-            spaces.push(KernelActionSpace::Unroll { axis: 2, factors });
+            let factors = Self::reduce_unroll_factors_for_tile(plan.tile)
+                .into_iter()
+                .filter(|factor| {
+                    Self::plan_within_resource_limits(plan.with_reduce_unroll(*factor))
+                })
+                .collect::<Vec<_>>();
+            if !factors.is_empty() {
+                spaces.push(KernelActionSpace::Unroll { axis: 2, factors });
+            }
         }
         if plan.m_per_thread == 1 {
-            let factors = Self::m_per_thread_factors_for_tile(plan.tile);
+            let factors = Self::m_per_thread_factors_for_tile(plan.tile)
+                .into_iter()
+                .filter(|factor| Self::plan_within_resource_limits(plan.with_m_per_thread(*factor)))
+                .collect::<Vec<_>>();
             if !factors.is_empty() {
                 spaces.push(KernelActionSpace::Upcast { axis: 0, factors });
             }
         }
         if plan.n_per_thread == 1 {
-            let factors = Self::n_per_thread_factors_for_tile(plan.tile);
+            let factors = Self::n_per_thread_factors_for_tile(plan.tile)
+                .into_iter()
+                .filter(|factor| Self::plan_within_resource_limits(plan.with_n_per_thread(*factor)))
+                .collect::<Vec<_>>();
             if !factors.is_empty() {
                 spaces.push(KernelActionSpace::Upcast { axis: 1, factors });
             }
         }
         if plan.a_load_unroll == 1 {
-            let factors = Self::a_load_unroll_factors_for_plan(plan);
+            let factors = Self::a_load_unroll_factors_for_plan(plan)
+                .into_iter()
+                .filter(|factor| {
+                    Self::plan_within_resource_limits(plan.with_a_load_unroll(*factor))
+                })
+                .collect::<Vec<_>>();
             if !factors.is_empty() {
                 spaces.push(KernelActionSpace::Unroll { axis: 3, factors });
             }
         }
         if plan.b_load_unroll == 1 {
-            let factors = Self::b_load_unroll_factors_for_plan(plan);
+            let factors = Self::b_load_unroll_factors_for_plan(plan)
+                .into_iter()
+                .filter(|factor| {
+                    Self::plan_within_resource_limits(plan.with_b_load_unroll(*factor))
+                })
+                .collect::<Vec<_>>();
             if !factors.is_empty() {
                 spaces.push(KernelActionSpace::Unroll { axis: 4, factors });
             }
         }
         if !plan.has_custom_a_load_thread_group() {
-            let factors = Self::load_thread_group_factors_for_plan(plan);
+            let factors = Self::load_thread_group_factors_for_plan(plan)
+                .into_iter()
+                .filter(|factor| {
+                    Self::plan_within_resource_limits(plan.with_a_load_thread_group(*factor))
+                })
+                .collect::<Vec<_>>();
             if !factors.is_empty() {
                 spaces.push(KernelActionSpace::ThreadGroup { axis: 3, factors });
             }
         }
         if !plan.has_custom_b_load_thread_group() {
-            let factors = Self::load_thread_group_factors_for_plan(plan);
+            let factors = Self::load_thread_group_factors_for_plan(plan)
+                .into_iter()
+                .filter(|factor| {
+                    Self::plan_within_resource_limits(plan.with_b_load_thread_group(*factor))
+                })
+                .collect::<Vec<_>>();
             if !factors.is_empty() {
                 spaces.push(KernelActionSpace::ThreadGroup { axis: 4, factors });
             }
         }
-        if plan.thread_order == GemmThreadOrder::NThenM {
+        if plan.thread_order == GemmThreadOrder::NThenM
+            && Self::plan_within_resource_limits(plan.with_thread_order(GemmThreadOrder::MThenN))
+        {
             spaces.push(KernelActionSpace::Swap {
                 pairs: vec![(0, 1)],
             });
         }
-        let orders = Self::stride_orders_for_plan(plan);
+        let orders = Self::stride_orders_for_plan(plan)
+            .into_iter()
+            .filter(|axes| {
+                GemmATileLoadOrder::from_action_axes(axes)
+                    .map(|order| Self::plan_within_resource_limits(plan.with_a_load_order(order)))
+                    .or_else(|| {
+                        GemmBTileLoadOrder::from_action_axes(axes).map(|order| {
+                            Self::plan_within_resource_limits(plan.with_b_load_order(order))
+                        })
+                    })
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
         if !orders.is_empty() {
             spaces.push(KernelActionSpace::StrideOrder { orders });
         }
@@ -3433,11 +3547,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 if *materialization != Self::action_materialization_for_plan(plan) {
                     return None;
                 }
-                Some(candidate_with_action_trace(
-                    candidate,
-                    action,
-                    self.candidate_for_plan(plan),
-                ))
+                self.candidate_for_checked_plan(candidate, action, plan)
             }
             KernelScheduleAction {
                 op: KernelScheduleActionOp::Split,
@@ -3461,11 +3571,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                     return None;
                 }
                 let next_tile = plan.tile.with_axis(*axis, *factor)?;
-                Some(candidate_with_action_trace(
-                    candidate,
-                    action,
-                    self.candidate_for_plan(plan.with_tile(next_tile)),
-                ))
+                self.candidate_for_checked_plan(candidate, action, plan.with_tile(next_tile))
             }
             KernelScheduleAction {
                 op: KernelScheduleActionOp::Unroll,
@@ -3479,11 +3585,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 {
                     return None;
                 }
-                Some(candidate_with_action_trace(
-                    candidate,
-                    action,
-                    self.candidate_for_plan(plan.with_reduce_unroll(*factor)),
-                ))
+                self.candidate_for_checked_plan(candidate, action, plan.with_reduce_unroll(*factor))
             }
             KernelScheduleAction {
                 op: KernelScheduleActionOp::Unroll,
@@ -3497,11 +3599,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 {
                     return None;
                 }
-                Some(candidate_with_action_trace(
-                    candidate,
-                    action,
-                    self.candidate_for_plan(plan.with_a_load_unroll(*factor)),
-                ))
+                self.candidate_for_checked_plan(candidate, action, plan.with_a_load_unroll(*factor))
             }
             KernelScheduleAction {
                 op: KernelScheduleActionOp::Unroll,
@@ -3515,11 +3613,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 {
                     return None;
                 }
-                Some(candidate_with_action_trace(
-                    candidate,
-                    action,
-                    self.candidate_for_plan(plan.with_b_load_unroll(*factor)),
-                ))
+                self.candidate_for_checked_plan(candidate, action, plan.with_b_load_unroll(*factor))
             }
             KernelScheduleAction {
                 op: KernelScheduleActionOp::Upcast,
@@ -3533,11 +3627,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 {
                     return None;
                 }
-                Some(candidate_with_action_trace(
-                    candidate,
-                    action,
-                    self.candidate_for_plan(plan.with_m_per_thread(*factor)),
-                ))
+                self.candidate_for_checked_plan(candidate, action, plan.with_m_per_thread(*factor))
             }
             KernelScheduleAction {
                 op: KernelScheduleActionOp::Upcast,
@@ -3551,11 +3641,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 {
                     return None;
                 }
-                Some(candidate_with_action_trace(
-                    candidate,
-                    action,
-                    self.candidate_for_plan(plan.with_n_per_thread(*factor)),
-                ))
+                self.candidate_for_checked_plan(candidate, action, plan.with_n_per_thread(*factor))
             }
             KernelScheduleAction {
                 op: KernelScheduleActionOp::ThreadGroup,
@@ -3569,11 +3655,11 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 {
                     return None;
                 }
-                Some(candidate_with_action_trace(
+                self.candidate_for_checked_plan(
                     candidate,
                     action,
-                    self.candidate_for_plan(plan.with_a_load_thread_group(*factor)),
-                ))
+                    plan.with_a_load_thread_group(*factor),
+                )
             }
             KernelScheduleAction {
                 op: KernelScheduleActionOp::ThreadGroup,
@@ -3587,11 +3673,11 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 {
                     return None;
                 }
-                Some(candidate_with_action_trace(
+                self.candidate_for_checked_plan(
                     candidate,
                     action,
-                    self.candidate_for_plan(plan.with_b_load_thread_group(*factor)),
-                ))
+                    plan.with_b_load_thread_group(*factor),
+                )
             }
             KernelScheduleAction {
                 op: KernelScheduleActionOp::StrideOrder,
@@ -3606,11 +3692,11 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                     {
                         return None;
                     }
-                    return Some(candidate_with_action_trace(
+                    return self.candidate_for_checked_plan(
                         candidate,
                         action,
-                        self.candidate_for_plan(plan.with_a_load_order(order)),
-                    ));
+                        plan.with_a_load_order(order),
+                    );
                 }
                 let order = GemmBTileLoadOrder::from_action_axes(axes)?;
                 if plan.b_load_order != GemmBTileLoadOrder::TileLinear
@@ -3618,11 +3704,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 {
                     return None;
                 }
-                Some(candidate_with_action_trace(
-                    candidate,
-                    action,
-                    self.candidate_for_plan(plan.with_b_load_order(order)),
-                ))
+                self.candidate_for_checked_plan(candidate, action, plan.with_b_load_order(order))
             }
             KernelScheduleAction {
                 op: KernelScheduleActionOp::Swap,
@@ -3634,11 +3716,11 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 if (*axis_a, *axis_b) != (0, 1) || plan.thread_order != GemmThreadOrder::NThenM {
                     return None;
                 }
-                Some(candidate_with_action_trace(
+                self.candidate_for_checked_plan(
                     candidate,
                     action,
-                    self.candidate_for_plan(plan.with_thread_order(GemmThreadOrder::MThenN)),
-                ))
+                    plan.with_thread_order(GemmThreadOrder::MThenN),
+                )
             }
             _ => None,
         }
@@ -4021,6 +4103,7 @@ fn generated_kernel_manifest(candidate: &KernelCandidateMetadata) -> Value {
             .iter()
             .map(action_json)
             .collect::<Vec<_>>(),
+        "resources": candidate.resources.map(resource_usage_json),
         "score": candidate.score.map(score_json),
     })
 }
@@ -4456,6 +4539,16 @@ fn action_arg_json(arg: &KernelScheduleActionArg) -> Value {
             json!({"kind": "axis-pair", "axis_a": axis_a, "axis_b": axis_b})
         }
     }
+}
+
+fn resource_usage_json(resources: KernelResourceUsage) -> Value {
+    json!({
+        "threads_per_block": resources.threads_per_block,
+        "shared_memory_bytes": resources.shared_memory_bytes,
+        "accumulator_elements_per_thread": resources.accumulator_elements_per_thread,
+        "output_elements_per_thread": resources.output_elements_per_thread,
+        "load_elements_per_block": resources.load_elements_per_block,
+    })
 }
 
 fn score_json(score: SearchScore) -> Value {
@@ -7783,6 +7876,9 @@ mod tests {
         let store = KernelArtifactStore::new(&root);
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
+        let optimization_spec = candidate.optimization_spec();
+
+        assert_eq!(optimization_spec.resources, candidate.resources);
 
         let emitted = store
             .emit_metadata(&candidate)
@@ -7822,8 +7918,48 @@ mod tests {
         assert_eq!(manifest["schedule"][0]["op"].as_str(), Some("tile-gemm"));
         assert_eq!(manifest["schedule"][0]["n"].as_u64(), Some(32));
         assert_eq!(manifest["action_trace"].as_array().map(Vec::len), Some(0));
+        assert_eq!(
+            manifest["resources"]["threads_per_block"].as_u64(),
+            Some(512)
+        );
+        assert_eq!(
+            manifest["resources"]["shared_memory_bytes"].as_u64(),
+            Some(3072)
+        );
+        assert_eq!(
+            manifest["resources"]["accumulator_elements_per_thread"].as_u64(),
+            Some(1)
+        );
+        assert_eq!(
+            manifest["resources"]["load_elements_per_block"].as_u64(),
+            Some(768)
+        );
 
         remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn gemm_resource_limits_reject_overbudget_plan_metadata() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let seed = problem.seed();
+        let action = KernelScheduleAction::tile_gemm(
+            128,
+            128,
+            64,
+            KernelActionMaterialization::DeferredGenerated,
+        );
+        let overbudget_plan = GemmSchedulePlan::new(GemmTileShape::new(128, 128, 64));
+
+        assert_eq!(overbudget_plan.resource_usage().threads_per_block, 16_384);
+        assert_eq!(overbudget_plan.resource_usage().shared_memory_bytes, 65_536);
+        assert!(!GemmSearchProblem::plan_within_resource_limits(
+            overbudget_plan
+        ));
+        assert!(
+            problem
+                .candidate_for_checked_plan(&seed, &action, overbudget_plan)
+                .is_none()
+        );
     }
 
     #[test]
