@@ -2583,7 +2583,7 @@ impl GemmSchedulePlan {
             .div_ceil(plan.thread_count())
     }
 
-    fn local_tile_symbol_suffix(self) -> String {
+    fn per_thread_symbol_suffix(self) -> String {
         let plan = self.normalized();
         let mut suffix = String::new();
         if plan.m_per_thread > 1 {
@@ -2595,7 +2595,7 @@ impl GemmSchedulePlan {
         suffix
     }
 
-    fn local_tile_operation_suffix(self) -> String {
+    fn per_thread_operation_suffix(self) -> String {
         let plan = self.normalized();
         let mut suffix = String::new();
         if plan.m_per_thread > 1 {
@@ -2739,8 +2739,8 @@ impl GemmSearchProblem {
         let existing_tile = Self::is_existing_plan(plan);
         let a_order_suffix = plan.a_load_order.symbol_suffix();
         let b_order_suffix = plan.b_load_order.symbol_suffix();
-        let local_tile_symbol_suffix = plan.local_tile_symbol_suffix();
-        let local_tile_operation_suffix = plan.local_tile_operation_suffix();
+        let per_thread_symbol_suffix = plan.per_thread_symbol_suffix();
+        let per_thread_operation_suffix = plan.per_thread_operation_suffix();
         let load_unroll_symbol_suffix = plan.load_unroll_symbol_suffix();
         let load_unroll_operation_suffix = plan.load_unroll_operation_suffix();
         let thread_order_symbol_suffix = plan.thread_order_symbol_suffix();
@@ -2751,7 +2751,7 @@ impl GemmSearchProblem {
                 tile.m,
                 tile.n,
                 tile.k,
-                local_tile_symbol_suffix,
+                per_thread_symbol_suffix,
                 load_unroll_symbol_suffix,
                 a_order_suffix,
                 b_order_suffix,
@@ -2764,7 +2764,7 @@ impl GemmSearchProblem {
                 tile.n,
                 tile.k,
                 plan.reduce_unroll,
-                local_tile_symbol_suffix,
+                per_thread_symbol_suffix,
                 load_unroll_symbol_suffix,
                 a_order_suffix,
                 b_order_suffix,
@@ -2789,7 +2789,7 @@ impl GemmSearchProblem {
                     tile.m,
                     tile.n,
                     tile.k,
-                    local_tile_operation_suffix,
+                    per_thread_operation_suffix,
                     load_unroll_operation_suffix,
                     a_order_suffix,
                     b_order_suffix,
@@ -2802,7 +2802,7 @@ impl GemmSearchProblem {
                     tile.n,
                     tile.k,
                     plan.reduce_unroll,
-                    local_tile_operation_suffix,
+                    per_thread_operation_suffix,
                     load_unroll_operation_suffix,
                     a_order_suffix,
                     b_order_suffix,
@@ -2847,13 +2847,13 @@ impl GemmSearchProblem {
             });
         }
         if plan.m_per_thread > 1 {
-            schedule = schedule.with_transform(ScheduleTransform::LocalTile {
+            schedule = schedule.with_transform(ScheduleTransform::Upcast {
                 axis: 0,
                 factor: plan.m_per_thread,
             });
         }
         if plan.n_per_thread > 1 {
-            schedule = schedule.with_transform(ScheduleTransform::LocalTile {
+            schedule = schedule.with_transform(ScheduleTransform::Upcast {
                 axis: 1,
                 factor: plan.n_per_thread,
             });
@@ -2971,7 +2971,7 @@ impl GemmSearchProblem {
             .collect()
     }
 
-    fn local_tile_plans_for_tile(tile: GemmTileShape) -> Vec<GemmSchedulePlan> {
+    fn per_thread_plans_for_tile(tile: GemmTileShape) -> Vec<GemmSchedulePlan> {
         let mut m_factors = vec![1];
         m_factors.extend(Self::m_per_thread_factors_for_tile(tile));
         let mut n_factors = vec![1];
@@ -2993,7 +2993,7 @@ impl GemmSearchProblem {
     fn a_load_unroll_factors(&self) -> Vec<u32> {
         let mut factors = Vec::new();
         for tile in self.tile_shapes() {
-            for plan in Self::local_tile_plans_for_tile(tile) {
+            for plan in Self::per_thread_plans_for_tile(tile) {
                 factors.extend(Self::a_load_unroll_factors_for_plan(plan));
             }
         }
@@ -3005,7 +3005,7 @@ impl GemmSearchProblem {
     fn b_load_unroll_factors(&self) -> Vec<u32> {
         let mut factors = Vec::new();
         for tile in self.tile_shapes() {
-            for plan in Self::local_tile_plans_for_tile(tile) {
+            for plan in Self::per_thread_plans_for_tile(tile) {
                 factors.extend(Self::b_load_unroll_factors_for_plan(plan));
             }
         }
@@ -3095,11 +3095,11 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 axis: 2,
                 factors: unroll_factors,
             },
-            KernelActionSpace::LocalTile {
+            KernelActionSpace::Upcast {
                 axis: 0,
                 factors: m_per_thread_factors,
             },
-            KernelActionSpace::LocalTile {
+            KernelActionSpace::Upcast {
                 axis: 1,
                 factors: n_per_thread_factors,
             },
@@ -3140,13 +3140,13 @@ impl KernelActionSearchProblem for GemmSearchProblem {
         if plan.m_per_thread == 1 {
             let factors = Self::m_per_thread_factors_for_tile(plan.tile);
             if !factors.is_empty() {
-                spaces.push(KernelActionSpace::LocalTile { axis: 0, factors });
+                spaces.push(KernelActionSpace::Upcast { axis: 0, factors });
             }
         }
         if plan.n_per_thread == 1 {
             let factors = Self::n_per_thread_factors_for_tile(plan.tile);
             if !factors.is_empty() {
-                spaces.push(KernelActionSpace::LocalTile { axis: 1, factors });
+                spaces.push(KernelActionSpace::Upcast { axis: 1, factors });
             }
         }
         if plan.a_load_unroll == 1 {
@@ -3257,7 +3257,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 ))
             }
             KernelScheduleAction {
-                op: KernelScheduleActionOp::LocalTile,
+                op: KernelScheduleActionOp::Upcast,
                 axis: Some(0),
                 arg: KernelScheduleActionArg::Factor(factor),
                 materialization: KernelActionMaterialization::DeferredGenerated,
@@ -3275,7 +3275,7 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 ))
             }
             KernelScheduleAction {
-                op: KernelScheduleActionOp::LocalTile,
+                op: KernelScheduleActionOp::Upcast,
                 axis: Some(1),
                 arg: KernelScheduleActionArg::Factor(factor),
                 materialization: KernelActionMaterialization::DeferredGenerated,
@@ -3408,19 +3408,19 @@ impl KernelMetadataSearchProblem for GemmSearchProblem {
             .div_ceil(tile_m)
             .checked_mul(self.n.div_ceil(tile_n))? as f64;
         let unroll = f64::from(plan.reduce_unroll.max(1));
-        let local_tile = f64::from(m_per_thread * n_per_thread);
+        let per_thread_work = f64::from(m_per_thread * n_per_thread);
         let thread_count_u32 = plan.thread_count();
         let thread_count = f64::from(thread_count_u32);
         let a_load_unroll = plan.a_load_unroll.max(1);
         let b_load_unroll = plan.b_load_unroll.max(1);
         let a_load_loop_rounds = plan.a_load_rounds().div_ceil(a_load_unroll);
         let b_load_loop_rounds = plan.b_load_rounds().div_ceil(b_load_unroll);
-        let loop_overhead = block_count * 4096.0 / unroll / local_tile.sqrt();
+        let loop_overhead = block_count * 4096.0 / unroll / per_thread_work.sqrt();
         let thread_overhead = block_count * thread_count * 16.0;
         let load_loop_overhead =
             block_count * f64::from(a_load_loop_rounds + b_load_loop_rounds) * 256.0;
         let register_pressure =
-            block_count * ((unroll - 1.0) * 256.0 + (local_tile - 1.0) * 1024.0);
+            block_count * ((unroll - 1.0) * 256.0 + (per_thread_work - 1.0) * 1024.0);
         let load_unroll_pressure =
             block_count * f64::from(a_load_unroll + b_load_unroll - 2) * 128.0;
         let threads_m = tile.m.div_ceil(m_per_thread);
@@ -3579,7 +3579,7 @@ fn schedule_gemm_m_per_thread(schedule: &KernelSchedule) -> Option<u32> {
         .transforms
         .iter()
         .find_map(|transform| match transform {
-            ScheduleTransform::LocalTile { axis: 0, factor } => Some(*factor),
+            ScheduleTransform::Upcast { axis: 0, factor } => Some(*factor),
             _ => None,
         })
 }
@@ -3589,7 +3589,7 @@ fn schedule_gemm_n_per_thread(schedule: &KernelSchedule) -> Option<u32> {
         .transforms
         .iter()
         .find_map(|transform| match transform {
-            ScheduleTransform::LocalTile { axis: 1, factor } => Some(*factor),
+            ScheduleTransform::Upcast { axis: 1, factor } => Some(*factor),
             _ => None,
         })
 }
@@ -6092,7 +6092,7 @@ mod tests {
     }
 
     #[test]
-    fn action_trace_replay_reconstructs_2d_local_tiled_gemm_candidate() {
+    fn action_trace_replay_reconstructs_2d_upcast_gemm_candidate() {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let actions = vec![
             KernelScheduleAction::tile_gemm(
@@ -6101,14 +6101,13 @@ mod tests {
                 16,
                 KernelActionMaterialization::DeferredGenerated,
             ),
-            KernelScheduleAction::local_tile(0, 2),
-            KernelScheduleAction::local_tile(1, 2),
+            KernelScheduleAction::upcast(0, 2),
+            KernelScheduleAction::upcast(1, 2),
         ];
 
         let candidate = replay_schedule_actions(&problem, &actions)
-            .expect("valid GEMM 2D local-tile trace should replay into candidate metadata");
-        let plan =
-            schedule_gemm_plan(&candidate.schedule).expect("local-tiled GEMM should have plan");
+            .expect("valid GEMM 2D upcast trace should replay into candidate metadata");
+        let plan = schedule_gemm_plan(&candidate.schedule).expect("upcast GEMM should have plan");
 
         assert_eq!(candidate.family, "gemm-f32-bf16-row-col-row");
         assert_eq!(candidate.action_trace, actions);
@@ -6123,21 +6122,15 @@ mod tests {
         assert_eq!(plan.m_per_thread, 2);
         assert_eq!(plan.n_per_thread, 2);
         assert!(candidate.schedule.transforms.iter().any(|transform| {
-            matches!(
-                transform,
-                ScheduleTransform::LocalTile { axis: 0, factor: 2 }
-            )
+            matches!(transform, ScheduleTransform::Upcast { axis: 0, factor: 2 })
         }));
         assert!(candidate.schedule.transforms.iter().any(|transform| {
-            matches!(
-                transform,
-                ScheduleTransform::LocalTile { axis: 1, factor: 2 }
-            )
+            matches!(transform, ScheduleTransform::Upcast { axis: 1, factor: 2 })
         }));
 
         let generated = GemmRustCudaGenerator
             .source_for(&candidate)
-            .expect("2D local-tiled generated GEMM candidate should render source");
+            .expect("2D upcast generated GEMM candidate should render source");
         assert_eq!(generated.symbol, "gemm_f32_bf16_tile_16x32x16_mt2_nt2");
         assert!(generated.source.contains("const THREAD_TILE_M: usize = 2;"));
         assert!(generated.source.contains("const THREAD_TILE_N: usize = 2;"));
@@ -6357,7 +6350,7 @@ mod tests {
     }
 
     #[test]
-    fn gemm_action_space_exposes_tile_unroll_local_tile_and_stride_metadata() {
+    fn gemm_action_space_exposes_tile_unroll_upcast_and_stride_metadata() {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let seed = problem.seed();
         let full_space = problem.search_space();
@@ -6372,11 +6365,11 @@ mod tests {
         ));
         assert!(matches!(
             full_space.spaces[2],
-            KernelActionSpace::LocalTile { .. }
+            KernelActionSpace::Upcast { .. }
         ));
         assert!(matches!(
             full_space.spaces[3],
-            KernelActionSpace::LocalTile { .. }
+            KernelActionSpace::Upcast { .. }
         ));
         let KernelActionSpace::Unroll {
             axis: a_load_axis,
@@ -6450,21 +6443,21 @@ mod tests {
             schedule_spaces.spaces[0],
             KernelActionSpace::Unroll { .. }
         ));
-        let KernelActionSpace::LocalTile {
+        let KernelActionSpace::Upcast {
             axis: m_axis,
             factors: m_factors,
         } = &schedule_spaces.spaces[1]
         else {
-            panic!("GEMM tile should expose M-axis local-tile metadata");
+            panic!("GEMM tile should expose M-axis upcast metadata");
         };
         assert_eq!(*m_axis, 0);
         assert_eq!(m_factors, &[2, 4]);
-        let KernelActionSpace::LocalTile {
+        let KernelActionSpace::Upcast {
             axis: n_axis,
             factors: n_factors,
         } = &schedule_spaces.spaces[2]
         else {
-            panic!("GEMM tile should expose N-axis local-tile metadata");
+            panic!("GEMM tile should expose N-axis upcast metadata");
         };
         assert_eq!(*n_axis, 1);
         assert_eq!(n_factors, &[2, 4]);
@@ -6480,12 +6473,12 @@ mod tests {
         assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 7)));
         assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 16)));
         assert!(!schedule_actions.contains(&KernelScheduleAction::unroll(2, 1)));
-        assert!(schedule_actions.contains(&KernelScheduleAction::local_tile(0, 2)));
-        assert!(schedule_actions.contains(&KernelScheduleAction::local_tile(0, 4)));
-        assert!(!schedule_actions.contains(&KernelScheduleAction::local_tile(0, 3)));
-        assert!(schedule_actions.contains(&KernelScheduleAction::local_tile(1, 2)));
-        assert!(schedule_actions.contains(&KernelScheduleAction::local_tile(1, 4)));
-        assert!(!schedule_actions.contains(&KernelScheduleAction::local_tile(1, 3)));
+        assert!(schedule_actions.contains(&KernelScheduleAction::upcast(0, 2)));
+        assert!(schedule_actions.contains(&KernelScheduleAction::upcast(0, 4)));
+        assert!(!schedule_actions.contains(&KernelScheduleAction::upcast(0, 3)));
+        assert!(schedule_actions.contains(&KernelScheduleAction::upcast(1, 2)));
+        assert!(schedule_actions.contains(&KernelScheduleAction::upcast(1, 4)));
+        assert!(!schedule_actions.contains(&KernelScheduleAction::upcast(1, 3)));
         assert!(schedule_actions.contains(&KernelScheduleAction::stride_order(vec![0, 2])));
         assert!(schedule_actions.contains(&KernelScheduleAction::stride_order(vec![2, 1])));
         assert!(schedule_actions.contains(&KernelScheduleAction::swap(0, 1)));
@@ -6498,30 +6491,27 @@ mod tests {
         assert_eq!(unrolled_plan.reduce_unroll, 7);
         assert_eq!(unrolled.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u7");
 
-        let m_local_tiled = problem
-            .apply_schedule_action(&tile_candidate, &KernelScheduleAction::local_tile(0, 2))
-            .expect("M local-tile action should produce candidate metadata");
-        let m_local_tiled_plan = schedule_gemm_plan(&m_local_tiled.schedule)
-            .expect("M local-tiled candidate should have plan");
-        assert_eq!(m_local_tiled_plan.m_per_thread, 2);
-        assert_eq!(
-            m_local_tiled.launch.kernel,
-            "gemm_f32_bf16_tile_16x32x16_mt2"
-        );
-        assert_eq!(m_local_tiled.launch.block_dim.x, 32);
-        assert_eq!(m_local_tiled.launch.block_dim.y, 8);
-        assert_eq!(m_local_tiled.launch.block_dim.z, 1);
+        let m_upcast = problem
+            .apply_schedule_action(&tile_candidate, &KernelScheduleAction::upcast(0, 2))
+            .expect("M upcast action should produce candidate metadata");
+        let m_upcast_plan =
+            schedule_gemm_plan(&m_upcast.schedule).expect("M upcast candidate should have plan");
+        assert_eq!(m_upcast_plan.m_per_thread, 2);
+        assert_eq!(m_upcast.launch.kernel, "gemm_f32_bf16_tile_16x32x16_mt2");
+        assert_eq!(m_upcast.launch.block_dim.x, 32);
+        assert_eq!(m_upcast.launch.block_dim.y, 8);
+        assert_eq!(m_upcast.launch.block_dim.z, 1);
 
-        let local_tiled = problem
-            .apply_schedule_action(&tile_candidate, &KernelScheduleAction::local_tile(1, 2))
-            .expect("local-tile action should produce candidate metadata");
-        let local_tiled_plan = schedule_gemm_plan(&local_tiled.schedule)
-            .expect("local-tiled candidate should have plan");
-        assert_eq!(local_tiled_plan.n_per_thread, 2);
-        assert_eq!(local_tiled.launch.kernel, "gemm_f32_bf16_tile_16x32x16_nt2");
-        assert_eq!(local_tiled.launch.block_dim.x, 16);
-        assert_eq!(local_tiled.launch.block_dim.y, 16);
-        assert_eq!(local_tiled.launch.block_dim.z, 1);
+        let n_upcast = problem
+            .apply_schedule_action(&tile_candidate, &KernelScheduleAction::upcast(1, 2))
+            .expect("N upcast action should produce candidate metadata");
+        let n_upcast_plan =
+            schedule_gemm_plan(&n_upcast.schedule).expect("N upcast candidate should have plan");
+        assert_eq!(n_upcast_plan.n_per_thread, 2);
+        assert_eq!(n_upcast.launch.kernel, "gemm_f32_bf16_tile_16x32x16_nt2");
+        assert_eq!(n_upcast.launch.block_dim.x, 16);
+        assert_eq!(n_upcast.launch.block_dim.y, 16);
+        assert_eq!(n_upcast.launch.block_dim.z, 1);
 
         let traced_tile = problem
             .apply_schedule_action(&seed, &tile_action)
@@ -6595,12 +6585,12 @@ mod tests {
     #[test]
     fn gemm_action_space_exposes_shared_load_unroll_after_local_tiling() {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
-        let local_candidate = problem.candidate_for_plan(
+        let upcast_candidate = problem.candidate_for_plan(
             GemmSchedulePlan::new(GemmTileShape::new(16, 32, 16))
                 .with_m_per_thread(2)
                 .with_n_per_thread(2),
         );
-        let spaces = problem.action_spaces(&local_candidate);
+        let spaces = problem.action_spaces(&upcast_candidate);
         let actions = spaces.actions();
 
         assert_eq!(spaces.spaces.len(), 5);
@@ -6608,7 +6598,7 @@ mod tests {
             axis: reduce_axis, ..
         } = &spaces.spaces[0]
         else {
-            panic!("local-tiled GEMM should still expose reduce unroll metadata");
+            panic!("upcast GEMM should still expose reduce unroll metadata");
         };
         assert_eq!(*reduce_axis, 2);
         let KernelActionSpace::Unroll {
@@ -6616,7 +6606,7 @@ mod tests {
             factors: a_load_factors,
         } = &spaces.spaces[1]
         else {
-            panic!("local-tiled GEMM should expose A shared-load unroll metadata");
+            panic!("upcast GEMM should expose A shared-load unroll metadata");
         };
         assert_eq!(*a_load_axis, 3);
         assert_eq!(a_load_factors, &[2]);
@@ -6625,7 +6615,7 @@ mod tests {
             factors: b_load_factors,
         } = &spaces.spaces[2]
         else {
-            panic!("local-tiled GEMM should expose B shared-load unroll metadata");
+            panic!("upcast GEMM should expose B shared-load unroll metadata");
         };
         assert_eq!(*b_load_axis, 4);
         assert_eq!(b_load_factors, &[2, 3, 4]);
@@ -6641,7 +6631,7 @@ mod tests {
         assert!(actions.contains(&KernelScheduleAction::swap(0, 1)));
 
         let a_unrolled = problem
-            .apply_schedule_action(&local_candidate, &KernelScheduleAction::unroll(3, 2))
+            .apply_schedule_action(&upcast_candidate, &KernelScheduleAction::unroll(3, 2))
             .expect("A shared-load unroll should produce candidate metadata");
         let a_unrolled_plan = schedule_gemm_plan(&a_unrolled.schedule)
             .expect("A load-unrolled candidate should plan");
@@ -6653,7 +6643,7 @@ mod tests {
         );
 
         let b_unrolled = problem
-            .apply_schedule_action(&local_candidate, &KernelScheduleAction::unroll(4, 4))
+            .apply_schedule_action(&upcast_candidate, &KernelScheduleAction::unroll(4, 4))
             .expect("B shared-load unroll should produce candidate metadata");
         let b_unrolled_plan = schedule_gemm_plan(&b_unrolled.schedule)
             .expect("B load-unrolled candidate should plan");
@@ -6714,70 +6704,57 @@ mod tests {
     }
 
     #[test]
-    fn gemm_search_expands_tile_metadata_into_2d_local_tile_variants() {
+    fn gemm_search_expands_tile_metadata_into_2d_upcast_variants() {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
         let candidates = problem.expand(&tile_candidate);
 
-        let m_local_tiled = candidates
+        let m_upcast = candidates
             .iter()
             .find(|candidate| schedule_gemm_m_per_thread(&candidate.schedule) == Some(2))
-            .expect("GEMM search should expose a local M tile factor 2 descriptor");
+            .expect("GEMM search should expose an M upcast factor 2 descriptor");
         let m_plan =
-            schedule_gemm_plan(&m_local_tiled.schedule).expect("candidate should have GEMM plan");
+            schedule_gemm_plan(&m_upcast.schedule).expect("candidate should have GEMM plan");
         assert_eq!(m_plan.tile, GemmTileShape::new(16, 32, 16));
         assert_eq!(m_plan.m_per_thread, 2);
         assert_eq!(m_plan.n_per_thread, 1);
-        assert_ne!(tile_candidate.artifact_key(), m_local_tiled.artifact_key());
-        assert_eq!(
-            m_local_tiled.launch.kernel,
-            "gemm_f32_bf16_tile_16x32x16_mt2"
-        );
-        assert_eq!(m_local_tiled.launch.block_dim.x, 32);
-        assert_eq!(m_local_tiled.launch.block_dim.y, 8);
-        assert_eq!(m_local_tiled.launch.block_dim.z, 1);
-        assert!(m_local_tiled.schedule.transforms.iter().any(|transform| {
-            matches!(
-                transform,
-                ScheduleTransform::LocalTile { axis: 0, factor: 2 }
-            )
+        assert_ne!(tile_candidate.artifact_key(), m_upcast.artifact_key());
+        assert_eq!(m_upcast.launch.kernel, "gemm_f32_bf16_tile_16x32x16_mt2");
+        assert_eq!(m_upcast.launch.block_dim.x, 32);
+        assert_eq!(m_upcast.launch.block_dim.y, 8);
+        assert_eq!(m_upcast.launch.block_dim.z, 1);
+        assert!(m_upcast.schedule.transforms.iter().any(|transform| {
+            matches!(transform, ScheduleTransform::Upcast { axis: 0, factor: 2 })
         }));
 
-        let n_local_tiled = candidates
+        let n_upcast = candidates
             .iter()
             .find(|candidate| schedule_gemm_n_per_thread(&candidate.schedule) == Some(2))
-            .expect("GEMM search should expose a local N tile factor 2 descriptor");
-        let plan =
-            schedule_gemm_plan(&n_local_tiled.schedule).expect("candidate should have GEMM plan");
+            .expect("GEMM search should expose an N upcast factor 2 descriptor");
+        let plan = schedule_gemm_plan(&n_upcast.schedule).expect("candidate should have GEMM plan");
         assert_eq!(plan.tile, GemmTileShape::new(16, 32, 16));
         assert_eq!(plan.m_per_thread, 1);
         assert_eq!(plan.n_per_thread, 2);
         assert_eq!(plan.reduce_unroll, 1);
-        assert_ne!(tile_candidate.artifact_key(), n_local_tiled.artifact_key());
-        assert_eq!(
-            n_local_tiled.launch.kernel,
-            "gemm_f32_bf16_tile_16x32x16_nt2"
-        );
-        assert_eq!(n_local_tiled.launch.block_dim.x, 16);
-        assert_eq!(n_local_tiled.launch.block_dim.y, 16);
-        assert_eq!(n_local_tiled.launch.block_dim.z, 1);
-        assert!(n_local_tiled.schedule.transforms.iter().any(|transform| {
-            matches!(
-                transform,
-                ScheduleTransform::LocalTile { axis: 1, factor: 2 }
-            )
+        assert_ne!(tile_candidate.artifact_key(), n_upcast.artifact_key());
+        assert_eq!(n_upcast.launch.kernel, "gemm_f32_bf16_tile_16x32x16_nt2");
+        assert_eq!(n_upcast.launch.block_dim.x, 16);
+        assert_eq!(n_upcast.launch.block_dim.y, 16);
+        assert_eq!(n_upcast.launch.block_dim.z, 1);
+        assert!(n_upcast.schedule.transforms.iter().any(|transform| {
+            matches!(transform, ScheduleTransform::Upcast { axis: 1, factor: 2 })
         }));
     }
 
     #[test]
-    fn gemm_search_expands_local_tiled_metadata_into_shared_load_unroll_variants() {
+    fn gemm_search_expands_upcast_metadata_into_shared_load_unroll_variants() {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
-        let local_candidate = problem.candidate_for_plan(
+        let upcast_candidate = problem.candidate_for_plan(
             GemmSchedulePlan::new(GemmTileShape::new(16, 32, 16))
                 .with_m_per_thread(2)
                 .with_n_per_thread(2),
         );
-        let candidates = problem.expand(&local_candidate);
+        let candidates = problem.expand(&upcast_candidate);
 
         let a_load_unrolled = candidates
             .iter()
@@ -6911,8 +6888,8 @@ mod tests {
                     16,
                     KernelActionMaterialization::DeferredGenerated,
                 ),
-                KernelScheduleAction::local_tile(0, 2),
-                KernelScheduleAction::local_tile(1, 2),
+                KernelScheduleAction::upcast(0, 2),
+                KernelScheduleAction::upcast(1, 2),
                 KernelScheduleAction::unroll(3, 2),
                 KernelScheduleAction::unroll(4, 2),
             ],
