@@ -929,6 +929,20 @@ fn all_simple_kernel_fixture_kinds_matches_fixture_definitions() {
 }
 
 #[test]
+fn all_ptx_decompile_probe_kinds_matches_probe_definitions() {
+    let probe_kinds = ptx_decompile_probes()
+        .into_iter()
+        .map(|probe| probe.kind)
+        .collect::<Vec<_>>();
+    let all_kinds = all_ptx_decompile_probe_kinds();
+
+    assert_eq!(all_kinds.len(), probe_kinds.len());
+    for kind in &all_kinds {
+        assert!(probe_kinds.contains(kind));
+    }
+}
+
+#[test]
 fn fixture_coverage_default_runs_all_fixtures_under_managed_artifact_root() {
     let options = DecompileFixtureCoverageOptions::sm120_all_default();
 
@@ -942,6 +956,26 @@ fn fixture_coverage_default_runs_all_fixtures_under_managed_artifact_root() {
             .coverage_output_dir
             .starts_with(&options.fixture_options.artifact_root)
     );
+}
+
+#[test]
+fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
+    let options = DecompilePtxProbeOptions::sm120_default();
+    let probe = ptx_decompile_probes()
+        .into_iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreHmma)
+        .expect("HMMA PTX probe should exist");
+
+    assert_eq!(options.compile_arch, "sm_120");
+    assert_eq!(options.probes, vec![PtxDecompileProbeKind::TensorCoreHmma]);
+    assert!(
+        options
+            .artifact_root
+            .ends_with("target/cuda-oxide/inference/decompile-probes")
+    );
+    assert_eq!(probe.symbol, "tensor_core_hmma_probe");
+    assert!(probe.source.contains("mma.sync.aligned"));
+    assert!(probe.source.contains("st.global.f32"));
 }
 
 #[test]

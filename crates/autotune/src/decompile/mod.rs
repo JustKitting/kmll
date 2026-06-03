@@ -21,6 +21,7 @@ mod ir;
 mod known_opcodes;
 mod lifted;
 mod patterns;
+mod ptx_probes;
 mod sass;
 
 pub use self::{
@@ -59,6 +60,10 @@ pub use self::{
     patterns::{
         SassPatternConfidence, SassPatternFunction, SassPatternModule, SassSemanticPattern,
         SassSemanticPatternKind, recover_sass_patterns,
+    },
+    ptx_probes::{
+        PtxDecompileProbe, PtxDecompileProbeKind, all_ptx_decompile_probe_kinds,
+        ptx_decompile_probes,
     },
     sass::{
         RegisterClass, SassFunction, SassInstruction, SassModule, SassOperand, SassOperandKind,
@@ -141,6 +146,36 @@ pub struct DecompileFixtureCoverageReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecompilePtxProbeOptions {
+    pub artifact_root: PathBuf,
+    pub compile_arch: String,
+    pub probes: Vec<PtxDecompileProbeKind>,
+}
+
+impl DecompilePtxProbeOptions {
+    pub fn sm120_default() -> Self {
+        Self {
+            artifact_root: runtime::default_artifact_dir().join("decompile-probes"),
+            compile_arch: "sm_120".to_string(),
+            probes: vec![PtxDecompileProbeKind::TensorCoreHmma],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecompilePtxProbeReport {
+    pub probe: PtxDecompileProbeKind,
+    pub symbol: String,
+    pub probe_dir: PathBuf,
+    pub ptx_path: PathBuf,
+    pub cubin_path: PathBuf,
+    pub nvdisasm_sass_path: PathBuf,
+    pub cuobjdump_sass_path: PathBuf,
+    pub parsed_instruction_count: usize,
+    pub unsupported_instruction_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassFileDecompileOptions {
     pub sass_path: PathBuf,
     pub source_path: Option<PathBuf>,
@@ -205,6 +240,26 @@ pub fn run_decompile_fixture_coverage(
         fixture_reports,
         coverage_report,
     })
+}
+
+pub fn run_decompile_ptx_probes(
+    options: &DecompilePtxProbeOptions,
+) -> Result<Vec<DecompilePtxProbeReport>, Box<dyn Error>> {
+    let mut reports = Vec::new();
+    let probes = ptx_decompile_probes();
+    for requested in &options.probes {
+        let probe = probes
+            .iter()
+            .find(|probe| probe.kind == *requested)
+            .ok_or_else(|| {
+                io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("unknown PTX decompile probe {}", requested.name()),
+                )
+            })?;
+        reports.push(run_decompile_ptx_probe(options, probe)?);
+    }
+    Ok(reports)
 }
 
 pub fn run_sass_file_decompile(
@@ -275,6 +330,65 @@ pub fn run_sass_file_decompile(
         memory_access_count: analysis.memory_access_count(),
         semantic_pattern_count: patterns.pattern_count(),
         unsupported_instruction_count: project_ir.unsupported_instruction_count(),
+    })
+}
+
+fn run_decompile_ptx_probe(
+    options: &DecompilePtxProbeOptions,
+    probe: &PtxDecompileProbe,
+) -> Result<DecompilePtxProbeReport, Box<dyn Error>> {
+    let probe_dir = options.artifact_root.join(probe.kind.name());
+    fs::create_dir_all(&probe_dir)?;
+    let ptx_path = probe_dir.join(format!("{}.ptx", probe.symbol));
+    fs::write(&ptx_path, probe.source.as_bytes())?;
+
+    let cubin_path = probe_dir.join(format!("{}.{}.cubin", probe.symbol, options.compile_arch));
+    run_checked(
+        "ptxas",
+        &[
+            format!("-arch={}", options.compile_arch),
+            "-o".to_string(),
+            cubin_path.display().to_string(),
+            ptx_path.display().to_string(),
+        ],
+        &probe_dir,
+    )?;
+
+    let nvdisasm_sass_path = probe_dir.join(format!(
+        "{}.{}.nvdisasm.sass",
+        probe.symbol, options.compile_arch
+    ));
+    let nvdisasm_sass = run_capture("nvdisasm", &[cubin_path.display().to_string()], &probe_dir)?;
+    fs::write(&nvdisasm_sass_path, nvdisasm_sass.as_bytes())?;
+
+    let cuobjdump_sass_path = probe_dir.join(format!(
+        "{}.{}.cuobjdump.sass",
+        probe.symbol, options.compile_arch
+    ));
+    let cuobjdump_sass = run_capture(
+        "cuobjdump",
+        &["--dump-sass".to_string(), cubin_path.display().to_string()],
+        &probe_dir,
+    )?;
+    fs::write(&cuobjdump_sass_path, cuobjdump_sass.as_bytes())?;
+
+    let nvdisasm_module = parse_nvidia_sass(&nvdisasm_sass)?;
+    let cuobjdump_module = parse_nvidia_sass(&cuobjdump_sass)?;
+    let nvdisasm_ir = lift_sass_module(&nvdisasm_module);
+    let cuobjdump_ir = lift_sass_module(&cuobjdump_module);
+
+    Ok(DecompilePtxProbeReport {
+        probe: probe.kind,
+        symbol: probe.symbol.to_string(),
+        probe_dir,
+        ptx_path,
+        cubin_path,
+        nvdisasm_sass_path,
+        cuobjdump_sass_path,
+        parsed_instruction_count: nvdisasm_module.instruction_count()
+            + cuobjdump_module.instruction_count(),
+        unsupported_instruction_count: nvdisasm_ir.unsupported_instruction_count()
+            + cuobjdump_ir.unsupported_instruction_count(),
     })
 }
 

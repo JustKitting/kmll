@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
 use nn_rust_autotune::decompile::{
-    DecompileFixtureCoverageOptions, DecompileFixtureOptions, SassCoverageComparisonOptions,
-    SassCoverageOptions, SassFileDecompileOptions, SimpleKernelFixtureKind,
+    DecompileFixtureCoverageOptions, DecompileFixtureOptions, DecompilePtxProbeOptions,
+    PtxDecompileProbeKind, SassCoverageComparisonOptions, SassCoverageOptions,
+    SassFileDecompileOptions, SimpleKernelFixtureKind, all_ptx_decompile_probe_kinds,
     all_simple_kernel_fixture_kinds, run_decompile_fixture_coverage, run_decompile_fixtures,
-    run_sass_coverage_comparison, run_sass_coverage_scan, run_sass_file_decompile,
+    run_decompile_ptx_probes, run_sass_coverage_comparison, run_sass_coverage_scan,
+    run_sass_file_decompile,
 };
 use nn_rust_inference::runtime;
 
@@ -12,6 +14,8 @@ use crate::{AppResult, invalid_input, parse_required_flag_value};
 
 const DECOMPILE_FIXTURES_USAGE: &str =
     "kernel-decompile-fixtures [--fixture NAME|all] [--artifact-root PATH] [--compile-arch sm_120]";
+const DECOMPILE_PTX_PROBES_USAGE: &str =
+    "kernel-decompile-ptx-probes [--probe NAME|all] [--artifact-root PATH] [--compile-arch sm_120]";
 const DECOMPILE_FIXTURE_COVERAGE_USAGE: &str = "kernel-decompile-fixture-coverage [--fixture NAME|all] [--artifact-root PATH] [--compile-arch sm_120] [--out-dir PATH]";
 const DECOMPILE_SASS_USAGE: &str =
     "kernel-decompile-sass SASS_PATH [--source PATH] [--out-dir PATH]";
@@ -330,6 +334,69 @@ pub(crate) fn run_kernel_decompile_fixtures(args: &[String]) -> AppResult<()> {
     Ok(())
 }
 
+pub(crate) fn run_kernel_decompile_ptx_probes(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let mut options = DecompilePtxProbeOptions::sm120_default();
+    let mut saw_probe_arg = false;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--artifact-root" => {
+                options.artifact_root = PathBuf::from(parse_required_flag_value(
+                    args,
+                    &mut index,
+                    "--artifact-root",
+                )?);
+            }
+            "--compile-arch" => {
+                options.compile_arch =
+                    parse_required_flag_value(args, &mut index, "--compile-arch")?.to_string();
+            }
+            "--probe" => {
+                let value = parse_required_flag_value(args, &mut index, "--probe")?;
+                if !saw_probe_arg {
+                    options.probes.clear();
+                    saw_probe_arg = true;
+                }
+                push_ptx_probe_arg(value, &mut options.probes)?;
+            }
+            flag if flag.starts_with("--") => {
+                return Err(invalid_input(format!(
+                    "kernel-decompile-ptx-probes unknown argument {flag:?}; usage: {DECOMPILE_PTX_PROBES_USAGE}"
+                )));
+            }
+            value => {
+                if !saw_probe_arg {
+                    options.probes.clear();
+                    saw_probe_arg = true;
+                }
+                push_ptx_probe_arg(value, &mut options.probes)?;
+                index += 1;
+            }
+        }
+    }
+
+    if options.probes.is_empty() {
+        options.probes = all_ptx_decompile_probe_kinds();
+    }
+
+    let reports = run_decompile_ptx_probes(&options)?;
+    for report in reports {
+        println!(
+            "kernel_decompile_ptx_probe probe={} symbol={} parsed_instructions={} unsupported_instructions={} ptx_path={} cubin_path={} nvdisasm_sass_path={} cuobjdump_sass_path={}",
+            report.probe.name(),
+            report.symbol,
+            report.parsed_instruction_count,
+            report.unsupported_instruction_count,
+            report.ptx_path.display(),
+            report.cubin_path.display(),
+            report.nvdisasm_sass_path.display(),
+            report.cuobjdump_sass_path.display(),
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn run_kernel_decompile_fixture_coverage(args: &[String]) -> AppResult<()> {
     let mut index = 0;
     let mut options = DecompileFixtureCoverageOptions::sm120_all_default();
@@ -436,11 +503,33 @@ fn push_fixture_arg(value: &str, fixtures: &mut Vec<SimpleKernelFixtureKind>) ->
     Ok(())
 }
 
+fn push_ptx_probe_arg(value: &str, probes: &mut Vec<PtxDecompileProbeKind>) -> AppResult<()> {
+    if value == "all" {
+        for probe in all_ptx_decompile_probe_kinds() {
+            push_unique_ptx_probe(probes, probe);
+        }
+        return Ok(());
+    }
+    let probe = PtxDecompileProbeKind::parse(value).ok_or_else(|| {
+        invalid_input(format!(
+            "unknown PTX decompile probe {value:?}; usage: {DECOMPILE_PTX_PROBES_USAGE}"
+        ))
+    })?;
+    push_unique_ptx_probe(probes, probe);
+    Ok(())
+}
+
 fn push_unique_fixture(
     fixtures: &mut Vec<SimpleKernelFixtureKind>,
     fixture: SimpleKernelFixtureKind,
 ) {
     if !fixtures.contains(&fixture) {
         fixtures.push(fixture);
+    }
+}
+
+fn push_unique_ptx_probe(probes: &mut Vec<PtxDecompileProbeKind>, probe: PtxDecompileProbeKind) {
+    if !probes.contains(&probe) {
+        probes.push(probe);
     }
 }
