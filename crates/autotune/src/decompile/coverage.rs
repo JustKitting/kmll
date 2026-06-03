@@ -90,7 +90,9 @@ pub struct SassCoverageReport {
     pub memory_access_count: usize,
     pub semantic_pattern_count: usize,
     pub known_opcode_count: usize,
+    pub locally_mapped_opcode_count: usize,
     pub known_unobserved_opcode_count: usize,
+    pub known_unmapped_opcode_count: usize,
     pub observed_unregistered_opcode_count: usize,
     pub observed_unmapped_opcode_count: usize,
     pub unsupported_instruction_count: usize,
@@ -132,6 +134,7 @@ pub struct SassOpcodeCatalogEntry {
     pub opcode: String,
     pub known: bool,
     pub observed: bool,
+    pub locally_mapped: bool,
     pub instruction_count: usize,
     pub signature_count: usize,
     pub signatures: Vec<String>,
@@ -148,6 +151,7 @@ pub struct SassOpcodeCatalogEntry {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct OpcodeCatalogBuilder {
     known: bool,
+    locally_mapped: bool,
     instruction_count: usize,
     signatures: BTreeSet<String>,
     source_formats: BTreeSet<String>,
@@ -161,24 +165,25 @@ struct OpcodeCatalogBuilder {
 impl OpcodeCatalogBuilder {
     fn into_entry(self, opcode: String) -> SassOpcodeCatalogEntry {
         let observed = self.instruction_count > 0;
-        let support = if !observed {
-            "unobserved"
-        } else if self.unsupported_count == 0 {
+        let support = if self.locally_mapped && self.unsupported_count == 0 {
             "mapped"
-        } else if self.unsupported_count == self.instruction_count {
+        } else if observed && self.unsupported_count == self.instruction_count {
             "unsupported"
-        } else {
+        } else if observed && self.unsupported_count > 0 {
             "mixed"
+        } else {
+            "unmapped"
         }
         .to_string();
         let coverage = match (self.known, observed, support.as_str()) {
             (true, true, "mapped") => "known-observed-mapped",
             (true, true, "mixed") => "known-observed-partial",
             (true, true, _) => "known-observed-unmapped",
-            (true, false, _) => "known-unobserved",
+            (true, false, "mapped") => "known-unobserved-mapped",
+            (true, false, _) => "known-unobserved-unmapped",
             (false, true, "mapped") => "observed-mapped",
             (false, true, "mixed") => "observed-partial",
-            (false, true, _) => "observed-unmapped",
+            (false, true, _) => "observed-unregistered-unmapped",
             (false, false, _) => "empty",
         }
         .to_string();
@@ -187,6 +192,7 @@ impl OpcodeCatalogBuilder {
             opcode,
             known: self.known,
             observed,
+            locally_mapped: self.locally_mapped,
             instruction_count: self.instruction_count,
             signature_count: signatures.len(),
             signatures,
@@ -567,9 +573,17 @@ pub fn run_sass_coverage_scan(
     let memory_access_count = memory_accesses.len();
     let semantic_pattern_count = semantic_patterns.len();
     let known_opcode_count = opcode_catalog.iter().filter(|entry| entry.known).count();
+    let locally_mapped_opcode_count = opcode_catalog
+        .iter()
+        .filter(|entry| entry.locally_mapped)
+        .count();
     let known_unobserved_opcode_count = opcode_catalog
         .iter()
         .filter(|entry| entry.known && entry.instruction_count == 0)
+        .count();
+    let known_unmapped_opcode_count = opcode_catalog
+        .iter()
+        .filter(|entry| entry.known && !entry.locally_mapped)
         .count();
     let observed_unregistered_opcode_count = opcode_catalog
         .iter()
@@ -577,9 +591,7 @@ pub fn run_sass_coverage_scan(
         .count();
     let observed_unmapped_opcode_count = opcode_catalog
         .iter()
-        .filter(|entry| {
-            entry.instruction_count > 0 && entry.unsupported_count == entry.instruction_count
-        })
+        .filter(|entry| entry.instruction_count > 0 && !entry.locally_mapped)
         .count();
     let unsupported_instruction_count = unsupported_instructions.len();
 
@@ -663,7 +675,9 @@ pub fn run_sass_coverage_scan(
         memory_access_count,
         semantic_pattern_count,
         known_opcode_count,
+        locally_mapped_opcode_count,
         known_unobserved_opcode_count,
+        known_unmapped_opcode_count,
         observed_unregistered_opcode_count,
         observed_unmapped_opcode_count,
         unsupported_instruction_count,
@@ -752,6 +766,7 @@ fn append_known_opcode(
 ) {
     let entry = opcode_catalog.entry(known.opcode.to_string()).or_default();
     entry.known = true;
+    entry.locally_mapped |= known.locally_mapped;
     entry.classes.insert(known.class.to_string());
     entry.kinds.insert(known.kind.to_string());
     entry.known_sources.insert(known.source.to_string());
@@ -767,6 +782,9 @@ fn append_opcode_catalog_lifted_ops(
     for function in &lifted.functions {
         for op in &function.ops {
             let entry = opcode_catalog.entry(op.opcode.clone()).or_default();
+            if op.class.to_string() != "unsupported" {
+                entry.locally_mapped = true;
+            }
             entry.classes.insert(op.class.to_string());
             entry.kinds.insert(op.kind.to_string());
         }
@@ -1141,8 +1159,20 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
     writeln!(out, "known_opcodes={}", report.known_opcode_count).expect("write to string");
     writeln!(
         out,
+        "locally_mapped_opcodes={}",
+        report.locally_mapped_opcode_count
+    )
+    .expect("write to string");
+    writeln!(
+        out,
         "known_unobserved_opcodes={}",
         report.known_unobserved_opcode_count
+    )
+    .expect("write to string");
+    writeln!(
+        out,
+        "known_unmapped_opcodes={}",
+        report.known_unmapped_opcode_count
     )
     .expect("write to string");
     writeln!(
@@ -1206,16 +1236,17 @@ fn render_opcode_catalog_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "opcode\tknown\tobserved\tinstruction_count\tsignature_count\tsignatures\tsource_formats\tarchitectures\tknown_sources\tclasses\tkinds\tsupport\tcoverage\tunsupported_count"
+        "opcode\tknown\tobserved\tlocally_mapped\tinstruction_count\tsignature_count\tsignatures\tsource_formats\tarchitectures\tknown_sources\tclasses\tkinds\tsupport\tcoverage\tunsupported_count"
     )
     .expect("write to string");
     for entry in &report.opcode_catalog {
         writeln!(
             out,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&entry.opcode),
             entry.known,
             entry.observed,
+            entry.locally_mapped,
             entry.instruction_count,
             entry.signature_count,
             tsv(&entry.signatures.join(",")),

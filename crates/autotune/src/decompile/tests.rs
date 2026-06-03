@@ -853,8 +853,11 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert_eq!(report.parsed_file_count, 3);
     assert_eq!(report.parse_error_count, 0);
     assert!(report.known_opcode_count > 0);
+    assert!(report.locally_mapped_opcode_count > 0);
     assert!(report.known_unobserved_opcode_count > 0);
+    assert_eq!(report.known_unmapped_opcode_count, 0);
     assert!(report.observed_unregistered_opcode_count > 0);
+    assert!(report.observed_unmapped_opcode_count > 0);
     assert_eq!(report.unsupported_instruction_count, 1);
     assert!(
         report
@@ -868,9 +871,10 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         .find(|entry| entry.opcode == "MYSTERY")
         .expect("unsupported opcode should be catalogued");
     assert_eq!(mystery_catalog.support, "unsupported");
-    assert_eq!(mystery_catalog.coverage, "observed-unmapped");
+    assert_eq!(mystery_catalog.coverage, "observed-unregistered-unmapped");
     assert!(!mystery_catalog.known);
     assert!(mystery_catalog.observed);
+    assert!(!mystery_catalog.locally_mapped);
     assert_eq!(mystery_catalog.unsupported_count, 1);
     assert!(
         mystery_catalog
@@ -884,6 +888,10 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         .find(|entry| entry.opcode == "IADD")
         .expect("IADD should be catalogued");
     assert_eq!(iadd_catalog.support, "mapped");
+    assert!(iadd_catalog.known);
+    assert!(iadd_catalog.observed);
+    assert!(iadd_catalog.locally_mapped);
+    assert_eq!(iadd_catalog.coverage, "known-observed-mapped");
     assert!(
         iadd_catalog
             .source_formats
@@ -903,8 +911,9 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         .expect("known tensor-core opcode should be catalogued without local observation");
     assert!(hmma_catalog.known);
     assert!(!hmma_catalog.observed);
-    assert_eq!(hmma_catalog.support, "unobserved");
-    assert_eq!(hmma_catalog.coverage, "known-unobserved");
+    assert!(hmma_catalog.locally_mapped);
+    assert_eq!(hmma_catalog.support, "mapped");
+    assert_eq!(hmma_catalog.coverage, "known-unobserved-mapped");
     assert!(
         hmma_catalog
             .architectures
@@ -999,7 +1008,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     let opcode_catalog_tsv =
         fs::read_to_string(&report.opcode_catalog_path).expect("opcode catalog TSV should read");
     assert!(opcode_catalog_tsv.starts_with(
-        "opcode\tknown\tobserved\tinstruction_count\tsignature_count\tsignatures\tsource_formats\tarchitectures\tknown_sources\tclasses\tkinds\tsupport\tcoverage\tunsupported_count"
+        "opcode\tknown\tobserved\tlocally_mapped\tinstruction_count\tsignature_count\tsignatures\tsource_formats\tarchitectures\tknown_sources\tclasses\tkinds\tsupport\tcoverage\tunsupported_count"
     ));
     assert!(opcode_catalog_tsv.contains("MYSTERY"));
     assert!(opcode_catalog_tsv.contains("HMMA"));
