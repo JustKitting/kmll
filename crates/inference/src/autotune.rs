@@ -698,6 +698,39 @@ impl Default for BeamSearchConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AutoOptimizeConfig {
+    pub beam_width: usize,
+    pub max_steps: usize,
+    pub require_launchable: bool,
+    pub min_score_improvement: f64,
+}
+
+impl AutoOptimizeConfig {
+    pub const fn from_beam_search_config(config: BeamSearchConfig) -> Self {
+        Self {
+            beam_width: config.beam_width,
+            max_steps: config.max_depth,
+            require_launchable: config.require_launchable,
+            min_score_improvement: 0.0,
+        }
+    }
+
+    pub const fn as_beam_search_config(self) -> BeamSearchConfig {
+        BeamSearchConfig {
+            beam_width: self.beam_width,
+            max_depth: self.max_steps,
+            require_launchable: self.require_launchable,
+        }
+    }
+}
+
+impl Default for AutoOptimizeConfig {
+    fn default() -> Self {
+        Self::from_beam_search_config(BeamSearchConfig::default())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct BeamSearchResult {
     pub best: Option<KernelCandidateMetadata>,
@@ -732,6 +765,67 @@ impl BeamSearchResult {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AutoOptimizeExitReason {
+    CacheHit,
+    MaxSteps,
+    NoCandidates,
+    NoImprovement { best_delta: f64 },
+}
+
+impl AutoOptimizeExitReason {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::CacheHit => "cache-hit",
+            Self::MaxSteps => "max-steps",
+            Self::NoCandidates => "no-candidates",
+            Self::NoImprovement { .. } => "no-improvement",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoOptimizeStep {
+    pub depth: usize,
+    pub input_beam_len: usize,
+    pub generated: usize,
+    pub accepted: usize,
+    pub rejected: usize,
+    pub best_before: Option<SearchScore>,
+    pub best_after: Option<SearchScore>,
+    pub improvement: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoOptimizeResult {
+    pub best: Option<KernelCandidateMetadata>,
+    pub beam: Vec<KernelCandidateMetadata>,
+    pub explored: usize,
+    pub rejected: usize,
+    pub steps: Vec<AutoOptimizeStep>,
+    pub exit_reason: AutoOptimizeExitReason,
+}
+
+impl AutoOptimizeResult {
+    pub fn as_beam_search_result(&self) -> BeamSearchResult {
+        BeamSearchResult {
+            best: self.best.clone(),
+            beam: self.beam.clone(),
+            explored: self.explored,
+            rejected: self.rejected,
+        }
+    }
+
+    pub fn optimization_report(
+        &self,
+        family: impl Into<String>,
+        config: AutoOptimizeConfig,
+    ) -> OptimizationSearchReport {
+        self.as_beam_search_result()
+            .optimization_report(family, config.as_beam_search_config())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectionCacheStatus {
     Hit,
@@ -752,6 +846,14 @@ impl SelectionCacheStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CachedBeamSearchResult {
     pub result: BeamSearchResult,
+    pub cache_key: KernelOptimizationCacheKey,
+    pub cache_status: SelectionCacheStatus,
+    pub cache_write: Option<EmittedKernelOptimizationSelection>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CachedAutoOptimizeResult {
+    pub result: AutoOptimizeResult,
     pub cache_key: KernelOptimizationCacheKey,
     pub cache_status: SelectionCacheStatus,
     pub cache_write: Option<EmittedKernelOptimizationSelection>,
@@ -1085,6 +1187,135 @@ where
     }
 }
 
+pub fn auto_optimize_metadata<P>(problem: &P, config: AutoOptimizeConfig) -> AutoOptimizeResult
+where
+    P: KernelMetadataSearchProblem,
+{
+    auto_optimize_metadata_with_scorer(problem, config, |candidate| problem.score(candidate))
+}
+
+pub fn auto_optimize_metadata_with_scorer<P, F>(
+    problem: &P,
+    config: AutoOptimizeConfig,
+    mut score_candidate: F,
+) -> AutoOptimizeResult
+where
+    P: KernelMetadataSearchProblem,
+    F: FnMut(&KernelCandidateMetadata) -> Option<SearchScore>,
+{
+    assert!(config.beam_width > 0, "beam width must be nonzero");
+    assert!(
+        config.min_score_improvement.is_finite() && config.min_score_improvement >= 0.0,
+        "minimum score improvement must be finite and nonnegative"
+    );
+
+    let mut seed = problem.seed();
+    seed.score = score_candidate(&seed);
+    let mut seen = HashSet::new();
+    seen.insert(seed.artifact_key());
+    let mut beam = vec![seed];
+    let mut explored = 0;
+    let mut rejected = 0;
+    let mut steps = Vec::new();
+    let mut exit_reason = AutoOptimizeExitReason::MaxSteps;
+
+    for depth in 0..config.max_steps {
+        let input_beam_len = beam.len();
+        let best_before = beam.first().and_then(|candidate| candidate.score);
+        let mut candidates = Vec::new();
+        let mut generated = 0;
+        let mut step_rejected = 0;
+
+        for candidate in &beam {
+            for mut next in problem.expand(candidate) {
+                if !seen.insert(next.artifact_key()) {
+                    continue;
+                }
+                explored += 1;
+                generated += 1;
+                if config.require_launchable && !next.is_launchable() {
+                    rejected += 1;
+                    step_rejected += 1;
+                    continue;
+                }
+                match score_candidate(&next) {
+                    Some(score) => {
+                        next.score = Some(score);
+                        candidates.push(next);
+                    }
+                    None => {
+                        rejected += 1;
+                        step_rejected += 1;
+                    }
+                }
+            }
+        }
+
+        if candidates.is_empty() {
+            steps.push(AutoOptimizeStep {
+                depth,
+                input_beam_len,
+                generated,
+                accepted: 0,
+                rejected: step_rejected,
+                best_before,
+                best_after: None,
+                improvement: None,
+            });
+            exit_reason = AutoOptimizeExitReason::NoCandidates;
+            break;
+        }
+
+        candidates.sort_by(compare_candidates);
+        let accepted = candidates.len().min(config.beam_width);
+        let next_beam = candidates
+            .into_iter()
+            .take(config.beam_width)
+            .collect::<Vec<_>>();
+        let best_after = next_beam.first().and_then(|candidate| candidate.score);
+        let improvement =
+            best_before.and_then(|before| best_after.map(|after| before.value - after.value));
+        let stop_for_no_improvement = improvement
+            .map(|delta| delta <= config.min_score_improvement)
+            .unwrap_or(false);
+
+        steps.push(AutoOptimizeStep {
+            depth,
+            input_beam_len,
+            generated,
+            accepted,
+            rejected: step_rejected,
+            best_before,
+            best_after,
+            improvement,
+        });
+
+        if stop_for_no_improvement {
+            if improvement.is_some_and(|delta| delta > 0.0)
+                && let Some(best_next) = next_beam.first()
+            {
+                beam = vec![best_next.clone()];
+            }
+            exit_reason = AutoOptimizeExitReason::NoImprovement {
+                best_delta: improvement.unwrap_or(0.0),
+            };
+            break;
+        }
+
+        beam = next_beam;
+    }
+
+    let best = beam.first().cloned();
+    AutoOptimizeResult {
+        best,
+        beam,
+        explored,
+        rejected,
+        steps,
+        exit_reason,
+    }
+}
+
 pub fn beam_search_metadata_with_selection_cache<P, F>(
     store: &KernelArtifactStore,
     problem: &P,
@@ -1134,6 +1365,57 @@ where
     })
 }
 
+pub fn auto_optimize_metadata_with_selection_cache<P, F>(
+    store: &KernelArtifactStore,
+    problem: &P,
+    config: AutoOptimizeConfig,
+    score_namespace: &str,
+    mut score_candidate: F,
+) -> Result<CachedAutoOptimizeResult, KernelGenerationError>
+where
+    P: KernelActionSearchProblem,
+    F: FnMut(&KernelCandidateMetadata) -> Option<SearchScore>,
+{
+    let cache_key = auto_optimization_selection_cache_key(problem, config, score_namespace);
+    let cache_status = match store.read_selection_cache(&cache_key)? {
+        Some(selection) => match selection.replay(problem) {
+            Ok(mut candidate) => {
+                candidate.score = selection.score;
+                return Ok(CachedAutoOptimizeResult {
+                    result: AutoOptimizeResult {
+                        best: Some(candidate.clone()),
+                        beam: vec![candidate],
+                        explored: 0,
+                        rejected: 0,
+                        steps: Vec::new(),
+                        exit_reason: AutoOptimizeExitReason::CacheHit,
+                    },
+                    cache_key,
+                    cache_status: SelectionCacheStatus::Hit,
+                    cache_write: None,
+                });
+            }
+            Err(error) => SelectionCacheStatus::Stale {
+                reason: error.to_string(),
+            },
+        },
+        None => SelectionCacheStatus::Miss,
+    };
+    let result =
+        auto_optimize_metadata_with_scorer(problem, config, |candidate| score_candidate(candidate));
+    let cache_write = result
+        .best
+        .as_ref()
+        .map(|candidate| store.emit_selection_cache_for_candidate(&cache_key, candidate))
+        .transpose()?;
+    Ok(CachedAutoOptimizeResult {
+        result,
+        cache_key,
+        cache_status,
+        cache_write,
+    })
+}
+
 pub fn optimization_selection_cache_key<P>(
     problem: &P,
     config: BeamSearchConfig,
@@ -1149,6 +1431,30 @@ where
     state = hash_u64(state, config.beam_width as u64);
     state = hash_u64(state, config.max_depth as u64);
     state = hash_u64(state, u64::from(config.require_launchable));
+    state = hash_optimization_candidate(state, &seed.optimization_spec());
+    state = hash_action_space_set(state, &problem.search_space());
+    KernelOptimizationCacheKey {
+        family: seed.family,
+        key: KernelMetadataKey(state),
+    }
+}
+
+pub fn auto_optimization_selection_cache_key<P>(
+    problem: &P,
+    config: AutoOptimizeConfig,
+    score_namespace: &str,
+) -> KernelOptimizationCacheKey
+where
+    P: KernelActionSearchProblem,
+{
+    let seed = problem.seed();
+    let mut state = FNV_OFFSET;
+    state = hash_str(state, "auto-optimization-selection-cache");
+    state = hash_str(state, score_namespace);
+    state = hash_u64(state, config.beam_width as u64);
+    state = hash_u64(state, config.max_steps as u64);
+    state = hash_u64(state, u64::from(config.require_launchable));
+    state = hash_u64(state, config.min_score_improvement.to_bits());
     state = hash_optimization_candidate(state, &seed.optimization_spec());
     state = hash_action_space_set(state, &problem.search_space());
     KernelOptimizationCacheKey {
@@ -3446,6 +3752,77 @@ mod tests {
     }
 
     #[test]
+    fn auto_optimize_preserves_parent_when_children_do_not_improve() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let result = auto_optimize_metadata_with_scorer(
+            &problem,
+            AutoOptimizeConfig {
+                beam_width: 8,
+                max_steps: 2,
+                require_launchable: false,
+                min_score_improvement: 0.0,
+            },
+            |candidate| {
+                let plan = schedule_matvec_plan(&candidate.schedule)?;
+                if plan.reduce_unroll == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
+                    SearchScore::measured(1.0)
+                } else {
+                    SearchScore::measured(10.0)
+                }
+            },
+        );
+        let best = result
+            .best
+            .expect("auto optimize should keep the best parent candidate");
+        let best_plan = schedule_matvec_plan(&best.schedule).expect("best candidate should plan");
+
+        assert_eq!(
+            result.exit_reason,
+            AutoOptimizeExitReason::NoImprovement { best_delta: -9.0 }
+        );
+        assert_eq!(result.steps.len(), 2);
+        assert_eq!(
+            best_plan.reduce_unroll,
+            MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL
+        );
+        assert_eq!(best.score.and_then(|score| Some(score.value)), Some(1.0));
+    }
+
+    #[test]
+    fn auto_optimize_accepts_improving_generated_action() {
+        let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+        let result = auto_optimize_metadata_with_scorer(
+            &problem,
+            AutoOptimizeConfig {
+                beam_width: 8,
+                max_steps: 2,
+                require_launchable: false,
+                min_score_improvement: 0.0,
+            },
+            |candidate| {
+                let plan = schedule_matvec_plan(&candidate.schedule)?;
+                match plan.reduce_unroll {
+                    8 => SearchScore::measured(1.0),
+                    factor if factor == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL => {
+                        SearchScore::measured(10.0)
+                    }
+                    _ => SearchScore::measured(5.0),
+                }
+            },
+        );
+        let best = result
+            .best
+            .expect("auto optimize should accept the improving generated candidate");
+        let best_plan = schedule_matvec_plan(&best.schedule).expect("best candidate should plan");
+
+        assert_eq!(result.exit_reason, AutoOptimizeExitReason::MaxSteps);
+        assert_eq!(result.steps.len(), 2);
+        assert_eq!(result.steps[1].improvement, Some(9.0));
+        assert_eq!(best_plan.reduce_unroll, 8);
+        assert_eq!(best.score.and_then(|score| Some(score.value)), Some(1.0));
+    }
+
+    #[test]
     fn candidate_projects_to_profiling_optimization_spec() {
         let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
         let seed = problem.seed();
@@ -4172,6 +4549,113 @@ mod tests {
         );
         assert_eq!(key.family, "matvec-bf16-row-major");
         assert_eq!(key.hex().len(), 16);
+    }
+
+    #[test]
+    fn auto_selection_cache_key_tracks_auto_config_and_action_space() {
+        let problem = MatvecSearchProblem::bf16_row_major(128, 256);
+        let config = AutoOptimizeConfig {
+            beam_width: 4,
+            max_steps: 2,
+            require_launchable: false,
+            min_score_improvement: 0.0,
+        };
+
+        let key = auto_optimization_selection_cache_key(&problem, config, "heuristic");
+
+        assert_eq!(
+            key,
+            auto_optimization_selection_cache_key(&problem, config, "heuristic")
+        );
+        assert_ne!(
+            key,
+            auto_optimization_selection_cache_key(
+                &problem,
+                AutoOptimizeConfig {
+                    min_score_improvement: 0.5,
+                    ..config
+                },
+                "heuristic"
+            )
+        );
+        assert_ne!(
+            key,
+            auto_optimization_selection_cache_key(
+                &problem,
+                AutoOptimizeConfig {
+                    max_steps: 3,
+                    ..config
+                },
+                "heuristic"
+            )
+        );
+        assert_ne!(
+            key,
+            auto_optimization_selection_cache_key(
+                &MatvecWithoutUnrollSpace(problem),
+                config,
+                "heuristic"
+            )
+        );
+        assert_eq!(key.family, "matvec-bf16-row-major");
+        assert_eq!(key.hex().len(), 16);
+    }
+
+    #[test]
+    fn cached_auto_optimize_replays_hit_without_expanding_beam() {
+        let root = test_generated_root();
+        fs::create_dir_all(&root).expect("test-generated root should be creatable");
+        let store = KernelArtifactStore::new(&root);
+        let problem = MatvecSearchProblem::bf16_row_major(128, 256);
+        let config = AutoOptimizeConfig {
+            beam_width: 4,
+            max_steps: 2,
+            require_launchable: false,
+            min_score_improvement: 0.0,
+        };
+
+        let first = auto_optimize_metadata_with_selection_cache(
+            &store,
+            &problem,
+            config,
+            "heuristic",
+            |candidate| problem.score(candidate),
+        )
+        .expect("cache miss should run auto optimize");
+        assert_eq!(first.cache_status, SelectionCacheStatus::Miss);
+        assert!(first.cache_write.is_some());
+        assert!(first.result.explored > 0);
+        let first_best = first
+            .result
+            .best
+            .as_ref()
+            .expect("auto optimize should find a best candidate")
+            .artifact_key();
+
+        let second = auto_optimize_metadata_with_selection_cache(
+            &store,
+            &problem,
+            config,
+            "heuristic",
+            |candidate| problem.score(candidate),
+        )
+        .expect("cache hit should replay selected auto-optimized candidate");
+        let second_best = second
+            .result
+            .best
+            .as_ref()
+            .expect("cache hit should have selected candidate");
+
+        assert_eq!(second.cache_status, SelectionCacheStatus::Hit);
+        assert!(second.cache_write.is_none());
+        assert_eq!(second.result.exit_reason, AutoOptimizeExitReason::CacheHit);
+        assert_eq!(second.result.explored, 0);
+        assert_eq!(second.result.rejected, 0);
+        assert!(second.result.steps.is_empty());
+        assert_eq!(second.result.beam.len(), 1);
+        assert_eq!(second_best.artifact_key(), first_best);
+
+        remove_test_generated_root(&root);
     }
 
     #[test]

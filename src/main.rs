@@ -16,12 +16,12 @@ use cuda_core::{CudaContext, CudaFunction, CudaModule, CudaStream, DeviceBuffer}
 use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
     autotune::{
-        BeamSearchConfig, EmittedKernelOptimizationSelection, GemmRustCudaGenerator,
-        GemmSearchProblem, KernelArtifactStore, KernelCandidateMetadata, KernelMaterialization,
-        KernelMetadataSearchProblem, KernelOptimizationCacheKey, KernelScheduleAction,
-        KernelScheduleActionArg, MatvecRustCudaGenerator, MatvecSearchProblem, ScheduleTransform,
-        SearchScore, SearchScoreSource, SelectionCacheStatus,
-        beam_search_metadata_with_selection_cache,
+        AutoOptimizeConfig, BeamSearchConfig, EmittedKernelOptimizationSelection,
+        GemmRustCudaGenerator, GemmSearchProblem, KernelArtifactStore, KernelCandidateMetadata,
+        KernelMaterialization, KernelMetadataSearchProblem, KernelOptimizationCacheKey,
+        KernelScheduleAction, KernelScheduleActionArg, MatvecRustCudaGenerator,
+        MatvecSearchProblem, ScheduleTransform, SearchScore, SearchScoreSource,
+        SelectionCacheStatus, auto_optimize_metadata_with_selection_cache,
     },
     chat,
     dtypes::{Bf16, DType},
@@ -451,11 +451,11 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
     }
 
     let problem = GemmSearchProblem::f32_bf16_row_col_row(m, n, k);
-    let config = BeamSearchConfig {
+    let config = AutoOptimizeConfig::from_beam_search_config(BeamSearchConfig {
         beam_width,
         max_depth,
         require_launchable: !allow_generated,
-    };
+    });
     let store = artifact_root
         .as_ref()
         .map(|root| KernelArtifactStore::new(root.clone()))
@@ -475,7 +475,7 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         let mut bench =
             GemmAutotuneBench::new(&stream, &module, m, n, k, options, generated_store)?;
         let mut first_measure_error = None;
-        let cached = beam_search_metadata_with_selection_cache(
+        let cached = auto_optimize_metadata_with_selection_cache(
             &store,
             &problem,
             config,
@@ -499,7 +499,7 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         }
         cached
     } else {
-        beam_search_metadata_with_selection_cache(
+        auto_optimize_metadata_with_selection_cache(
             &store,
             &problem,
             config,
@@ -525,10 +525,12 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         );
     }
     println!(
-        "search explored={} rejected={} beam_len={}",
+        "search explored={} rejected={} beam_len={} steps={} exit={}",
         result.explored,
         result.rejected,
-        result.beam.len()
+        result.beam.len(),
+        result.steps.len(),
+        result.exit_reason.label()
     );
     print_selection_cache_status(&selection_cache_key, &selection_cache_status);
     if let Some(emitted) = &selection_cache_write {
@@ -711,11 +713,11 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
     }
 
     let problem = MatvecSearchProblem::bf16_row_major(rows, cols);
-    let config = BeamSearchConfig {
+    let config = AutoOptimizeConfig::from_beam_search_config(BeamSearchConfig {
         beam_width,
         max_depth,
         require_launchable: !allow_generated,
-    };
+    });
     let store = artifact_root
         .as_ref()
         .map(|root| KernelArtifactStore::new(root.clone()))
@@ -735,7 +737,7 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         let mut bench =
             MatvecAutotuneBench::new(&stream, &module, rows, cols, options, generated_store)?;
         let mut first_measure_error = None;
-        let cached = beam_search_metadata_with_selection_cache(
+        let cached = auto_optimize_metadata_with_selection_cache(
             &store,
             &problem,
             config,
@@ -759,7 +761,7 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         }
         cached
     } else {
-        beam_search_metadata_with_selection_cache(
+        auto_optimize_metadata_with_selection_cache(
             &store,
             &problem,
             config,
@@ -785,10 +787,12 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         );
     }
     println!(
-        "search explored={} rejected={} beam_len={}",
+        "search explored={} rejected={} beam_len={} steps={} exit={}",
         result.explored,
         result.rejected,
-        result.beam.len()
+        result.beam.len(),
+        result.steps.len(),
+        result.exit_reason.label()
     );
     print_selection_cache_status(&selection_cache_key, &selection_cache_status);
     if let Some(emitted) = &selection_cache_write {
