@@ -131,12 +131,48 @@ impl fmt::Display for SassModifier {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SassTensorMmaShape {
+    pub m: u32,
+    pub n: u32,
+    pub k: u32,
+}
+
+impl SassTensorMmaShape {
+    pub fn new(m: u32, n: u32, k: u32) -> Self {
+        Self { m, n, k }
+    }
+
+    pub fn parse_compact(raw: &str) -> Option<Self> {
+        if !raw.chars().all(|ch| ch.is_ascii_digit()) {
+            return None;
+        }
+        for m in [64, 32, 16, 8] {
+            for n in [32, 16, 8] {
+                for k in [256, 128, 64, 32, 16, 8, 4] {
+                    if raw == format!("{m}{n}{k}") {
+                        return Some(Self::new(m, n, k));
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+impl fmt::Display for SassTensorMmaShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "m{}n{}k{}", self.m, self.n, self.k)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SassModifierKind {
     E,
     UnsignedWidth(u32),
     SignedWidth(u32),
     Width(u32),
+    TensorShape(SassTensorMmaShape),
     F16,
     Bf16,
     F32,
@@ -185,6 +221,9 @@ impl SassModifierKind {
             "IDX" => return Self::Index,
             _ => {}
         }
+        if let Some(shape) = SassTensorMmaShape::parse_compact(raw.as_str()) {
+            return Self::TensorShape(shape);
+        }
         if let Some(bits) = raw.strip_prefix('U').and_then(|bits| bits.parse().ok()) {
             return Self::UnsignedWidth(bits);
         }
@@ -200,6 +239,7 @@ impl SassModifierKind {
         match self {
             Self::UnsignedWidth(bits) | Self::SignedWidth(bits) | Self::Width(bits) => Some(*bits),
             Self::E
+            | Self::TensorShape(_)
             | Self::F16
             | Self::Bf16
             | Self::F32
@@ -455,6 +495,7 @@ pub enum KernelIrOpKind {
         opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
         element_type: Option<SassTensorElementType>,
+        signature: Option<SassTensorMmaSignature>,
         scope: Option<SassTensorScope>,
     },
     TensorCoreMemory {
@@ -653,6 +694,45 @@ impl fmt::Display for SassTensorElementType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct SassTensorMmaSignature {
+    pub shape: Option<SassTensorMmaShape>,
+    pub output_type: Option<SassTensorElementType>,
+    pub lhs_type: Option<SassTensorElementType>,
+    pub rhs_type: Option<SassTensorElementType>,
+    pub accumulator_type: Option<SassTensorElementType>,
+}
+
+impl SassTensorMmaSignature {
+    pub fn primary_element_type(&self) -> Option<SassTensorElementType> {
+        self.lhs_type
+            .clone()
+            .or_else(|| self.rhs_type.clone())
+            .or_else(|| self.accumulator_type.clone())
+            .or_else(|| self.output_type.clone())
+    }
+}
+
+impl fmt::Display for SassTensorMmaSignature {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "shape={},output={},lhs={},rhs={},accumulator={}",
+            option_display(self.shape.as_ref()),
+            option_display(self.output_type.as_ref()),
+            option_display(self.lhs_type.as_ref()),
+            option_display(self.rhs_type.as_ref()),
+            option_display(self.accumulator_type.as_ref())
+        )
+    }
+}
+
+fn option_display(value: Option<&impl fmt::Display>) -> String {
+    value
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

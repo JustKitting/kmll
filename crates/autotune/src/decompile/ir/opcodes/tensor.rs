@@ -1,7 +1,7 @@
 use super::super::super::sass::SassInstruction;
 use super::super::types::{
     AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassModifier, SassModifierKind,
-    SassOpcode, SassOpcodeKind, SassTensorElementType, SassTensorScope,
+    SassOpcode, SassOpcodeKind, SassTensorElementType, SassTensorMmaSignature, SassTensorScope,
 };
 use super::LiftResult;
 
@@ -12,6 +12,7 @@ pub(super) fn lift(
 ) -> Option<LiftResult> {
     let operands = operands.to_vec();
     let modifiers = source_modifiers(instruction);
+    let signature = tensor_core_signature(opcode.kind(), &modifiers);
     Some(match opcode.kind() {
         SassOpcodeKind::Bgmma
         | SassOpcodeKind::Bmma
@@ -30,7 +31,8 @@ pub(super) fn lift(
             KernelIrOpKind::TensorCoreMma {
                 opcode: opcode.clone(),
                 operands,
-                element_type: tensor_core_element_type(opcode.kind(), &modifiers),
+                element_type: tensor_core_element_type(opcode.kind(), signature.as_ref()),
+                signature,
                 scope: tensor_core_scope(opcode.kind()),
             },
             SassMappingConfidence::OpcodeHeuristic,
@@ -78,9 +80,9 @@ fn source_modifiers(instruction: &SassInstruction) -> Vec<SassModifier> {
 
 fn tensor_core_element_type(
     opcode: &SassOpcodeKind,
-    modifiers: &[SassModifier],
+    signature: Option<&SassTensorMmaSignature>,
 ) -> Option<SassTensorElementType> {
-    if let Some(dtype) = tensor_core_modifier_element_type(modifiers) {
+    if let Some(dtype) = signature.and_then(SassTensorMmaSignature::primary_element_type) {
         return Some(dtype);
     }
 
@@ -101,22 +103,53 @@ fn tensor_core_element_type(
     }
 }
 
-fn tensor_core_modifier_element_type(modifiers: &[SassModifier]) -> Option<SassTensorElementType> {
-    [
-        SassTensorElementType::Bf16,
-        SassTensorElementType::F16,
-        SassTensorElementType::Tf32,
-        SassTensorElementType::Fp4,
-        SassTensorElementType::Fp8,
-        SassTensorElementType::Fp64,
-        SassTensorElementType::Fp32,
-    ]
-    .into_iter()
-    .find(|candidate| {
-        modifiers.iter().any(|modifier| {
-            modifier_tensor_element_type(modifier.kind()).as_ref() == Some(candidate)
-        })
-    })
+fn tensor_core_signature(
+    _opcode: &SassOpcodeKind,
+    modifiers: &[SassModifier],
+) -> Option<SassTensorMmaSignature> {
+    let shape = modifiers.iter().find_map(|modifier| match modifier.kind() {
+        SassModifierKind::TensorShape(shape) => Some(*shape),
+        _ => None,
+    });
+    let dtypes = modifiers
+        .iter()
+        .filter_map(|modifier| modifier_tensor_element_type(modifier.kind()))
+        .collect::<Vec<_>>();
+
+    if shape.is_none() && dtypes.is_empty() {
+        return None;
+    }
+
+    let mut signature = SassTensorMmaSignature {
+        shape,
+        ..Default::default()
+    };
+    match dtypes.as_slice() {
+        [] => {}
+        [dtype] => {
+            signature.lhs_type = Some(dtype.clone());
+            signature.rhs_type = Some(dtype.clone());
+        }
+        [compute, element] => {
+            signature.output_type = Some(compute.clone());
+            signature.lhs_type = Some(element.clone());
+            signature.rhs_type = Some(element.clone());
+            signature.accumulator_type = Some(compute.clone());
+        }
+        [output, lhs, rhs] => {
+            signature.output_type = Some(output.clone());
+            signature.lhs_type = Some(lhs.clone());
+            signature.rhs_type = Some(rhs.clone());
+            signature.accumulator_type = Some(output.clone());
+        }
+        [output, lhs, rhs, accumulator, ..] => {
+            signature.output_type = Some(output.clone());
+            signature.lhs_type = Some(lhs.clone());
+            signature.rhs_type = Some(rhs.clone());
+            signature.accumulator_type = Some(accumulator.clone());
+        }
+    }
+    Some(signature)
 }
 
 fn modifier_tensor_element_type(modifier: &SassModifierKind) -> Option<SassTensorElementType> {

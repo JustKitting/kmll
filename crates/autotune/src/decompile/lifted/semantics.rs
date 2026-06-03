@@ -3,8 +3,8 @@ use std::fmt;
 use super::super::{
     AggregateOperand, ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace,
     PredicateCondition, RegisterRef, SassCompareDType, SassComparisonKind, SassMemoryModifier,
-    SassOpcode, SassSyncKind, SassTensorElementType, SassTensorScope, SassWarpShuffleMode,
-    ScalarOperand,
+    SassOpcode, SassSyncKind, SassTensorElementType, SassTensorMmaSignature, SassTensorScope,
+    SassWarpShuffleMode, ScalarOperand,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +78,7 @@ pub enum SassLiftedSemantics {
         opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
         element_type: Option<SassTensorElementType>,
+        signature: Option<SassTensorMmaSignature>,
         scope: Option<SassTensorScope>,
     },
     TensorCoreMemory {
@@ -227,11 +228,13 @@ impl fmt::Display for SassLiftedSemantics {
                 opcode,
                 operands,
                 element_type,
+                signature,
                 scope,
             } => write!(
                 f,
-                "tensor-core-mma(opcode={opcode},element-type={},scope={},operands=[{}])",
+                "tensor-core-mma(opcode={opcode},element-type={},signature={},scope={},operands=[{}])",
                 option_display(element_type.as_ref()),
+                option_display(signature.as_ref()),
                 option_display(scope.as_ref()),
                 format_display_list(operands)
             ),
@@ -435,11 +438,13 @@ pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
             opcode,
             operands,
             element_type,
+            signature,
             scope,
         } => SassLiftedSemantics::TensorCoreMma {
             opcode: opcode.clone(),
             operands: operands.clone(),
             element_type: element_type.clone(),
+            signature: signature.clone(),
             scope: scope.clone(),
         },
         KernelIrOpKind::TensorCoreMemory { opcode, operands } => {

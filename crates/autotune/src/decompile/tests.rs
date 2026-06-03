@@ -757,6 +757,7 @@ fn lift_tensor_core_sass_keeps_known_op_families_typed() {
         KernelIrOpKind::TensorCoreMma {
             opcode,
             element_type: Some(SassTensorElementType::Half),
+            signature: None,
             scope: Some(SassTensorScope::Warp),
             operands,
         } if opcode == &SassOpcode::new("HMMA")
@@ -829,10 +830,21 @@ fn lift_tensor_core_sass_refines_mma_element_type_from_modifiers() {
         &function.ops[0].kind,
         KernelIrOpKind::TensorCoreMma {
             element_type: Some(SassTensorElementType::Bf16),
+            signature: Some(SassTensorMmaSignature {
+                shape: Some(SassTensorMmaShape { m: 16, n: 8, k: 16 }),
+                output_type: Some(SassTensorElementType::Fp32),
+                lhs_type: Some(SassTensorElementType::Bf16),
+                rhs_type: Some(SassTensorElementType::Bf16),
+                accumulator_type: Some(SassTensorElementType::Fp32),
+            }),
             scope: Some(SassTensorScope::Warp),
             ..
         }
     ));
+    assert_eq!(
+        function.ops[0].source_modifiers[0].kind(),
+        &SassModifierKind::TensorShape(SassTensorMmaShape { m: 16, n: 8, k: 16 })
+    );
     assert_eq!(
         function.ops[0].source_modifiers[2].kind(),
         &SassModifierKind::Bf16
@@ -841,6 +853,13 @@ fn lift_tensor_core_sass_refines_mma_element_type_from_modifiers() {
         &function.ops[1].kind,
         KernelIrOpKind::TensorCoreMma {
             element_type: Some(SassTensorElementType::F16),
+            signature: Some(SassTensorMmaSignature {
+                shape: Some(SassTensorMmaShape { m: 16, n: 8, k: 16 }),
+                output_type: Some(SassTensorElementType::Fp32),
+                lhs_type: Some(SassTensorElementType::F16),
+                rhs_type: Some(SassTensorElementType::F16),
+                accumulator_type: Some(SassTensorElementType::Fp32),
+            }),
             scope: Some(SassTensorScope::Warp),
             ..
         }
@@ -849,6 +868,13 @@ fn lift_tensor_core_sass_refines_mma_element_type_from_modifiers() {
         &function.ops[2].kind,
         KernelIrOpKind::TensorCoreMma {
             element_type: Some(SassTensorElementType::Tf32),
+            signature: Some(SassTensorMmaSignature {
+                shape: Some(SassTensorMmaShape { m: 16, n: 8, k: 8 }),
+                output_type: Some(SassTensorElementType::Fp32),
+                lhs_type: Some(SassTensorElementType::Tf32),
+                rhs_type: Some(SassTensorElementType::Tf32),
+                accumulator_type: Some(SassTensorElementType::Fp32),
+            }),
             scope: Some(SassTensorScope::Warp),
             ..
         }
@@ -857,6 +883,13 @@ fn lift_tensor_core_sass_refines_mma_element_type_from_modifiers() {
         &function.ops[3].kind,
         KernelIrOpKind::TensorCoreMma {
             element_type: Some(SassTensorElementType::Fp4),
+            signature: Some(SassTensorMmaSignature {
+                shape: None,
+                output_type: None,
+                lhs_type: Some(SassTensorElementType::Fp4),
+                rhs_type: Some(SassTensorElementType::Fp4),
+                accumulator_type: None,
+            }),
             scope: Some(SassTensorScope::Warp),
             ..
         }
@@ -865,10 +898,26 @@ fn lift_tensor_core_sass_refines_mma_element_type_from_modifiers() {
         &function.ops[4].kind,
         KernelIrOpKind::TensorCoreMma {
             element_type: Some(SassTensorElementType::Fp8),
+            signature: Some(SassTensorMmaSignature {
+                shape: None,
+                output_type: None,
+                lhs_type: Some(SassTensorElementType::Fp8),
+                rhs_type: Some(SassTensorElementType::Fp8),
+                accumulator_type: None,
+            }),
             scope: Some(SassTensorScope::WarpGroup),
             ..
         }
     ));
+
+    let analysis = analyze_sass_ir(&ir);
+    let lifted = lift_sass_value_ir(&ir, &analysis);
+    assert!(
+        lifted.functions[0].ops[0]
+            .semantics
+            .to_string()
+            .contains("signature=shape=m16n8k16,output=fp32,lhs=bf16,rhs=bf16,accumulator=fp32")
+    );
 }
 
 #[test]
