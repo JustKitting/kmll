@@ -25,7 +25,7 @@ pub(super) fn lift_kind(instruction: &SassInstruction) -> LiftResult {
     let opcode = SassOpcode::new(instruction.opcode.clone());
     control::lift(&opcode, instruction, &aggregate_operands)
         .or_else(|| warp::lift(&opcode, instruction))
-        .or_else(|| tensor::lift(&opcode, &aggregate_operands))
+        .or_else(|| tensor::lift(&opcode, instruction, &aggregate_operands))
         .or_else(|| movement::lift(&opcode, instruction, &operands))
         .or_else(|| memory::lift(&opcode, instruction))
         .or_else(|| math::lift(&opcode, instruction, &operands))

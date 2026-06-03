@@ -131,6 +131,21 @@ tensor_core_fixture:
         /*0040*/                   EXIT ;                                        /* 0x0 */
 "#;
 
+const TENSOR_CORE_DTYPE_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.tensor_core_dtype_fixture,"ax",@progbits
+        .global tensor_core_dtype_fixture
+tensor_core_dtype_fixture:
+.text.tensor_core_dtype_fixture:
+        /*0000*/                   HMMA.16816.F32.BF16 R8, R12, R16, R20 ;       /* 0x0 */
+        /*0010*/                   HMMA.16816.F32.F16 R8, R12, R16, R20 ;        /* 0x0 */
+        /*0020*/                   HMMA.1688.F32.TF32 R8, R12, R16, R20 ;        /* 0x0 */
+        /*0030*/                   OMMA.E2M1 R8, R12, R16, R20 ;                 /* 0x0 */
+        /*0040*/                   QGMMA.E4M3 R8, R12, R16, R20 ;                /* 0x0 */
+        /*0050*/                   EXIT ;                                        /* 0x0 */
+"#;
+
 const UNSUPPORTED_SASS: &str = r#"
         .target sm_120
 
@@ -802,6 +817,58 @@ fn lift_tensor_core_sass_keeps_known_op_families_typed() {
             if opcode == &SassOpcode::new("HMMA")
     ));
     assert!(hmma.semantics.to_string().contains("tensor-core-mma"));
+}
+
+#[test]
+fn lift_tensor_core_sass_refines_mma_element_type_from_modifiers() {
+    let module = parse_nvidia_sass(TENSOR_CORE_DTYPE_SASS).expect("tensor dtype SASS should parse");
+    let ir = lift_sass_module(&module);
+    let function = &ir.functions[0];
+
+    assert!(matches!(
+        &function.ops[0].kind,
+        KernelIrOpKind::TensorCoreMma {
+            element_type: Some(SassTensorElementType::Bf16),
+            scope: Some(SassTensorScope::Warp),
+            ..
+        }
+    ));
+    assert_eq!(
+        function.ops[0].source_modifiers[2].kind(),
+        &SassModifierKind::Bf16
+    );
+    assert!(matches!(
+        &function.ops[1].kind,
+        KernelIrOpKind::TensorCoreMma {
+            element_type: Some(SassTensorElementType::F16),
+            scope: Some(SassTensorScope::Warp),
+            ..
+        }
+    ));
+    assert!(matches!(
+        &function.ops[2].kind,
+        KernelIrOpKind::TensorCoreMma {
+            element_type: Some(SassTensorElementType::Tf32),
+            scope: Some(SassTensorScope::Warp),
+            ..
+        }
+    ));
+    assert!(matches!(
+        &function.ops[3].kind,
+        KernelIrOpKind::TensorCoreMma {
+            element_type: Some(SassTensorElementType::Fp4),
+            scope: Some(SassTensorScope::Warp),
+            ..
+        }
+    ));
+    assert!(matches!(
+        &function.ops[4].kind,
+        KernelIrOpKind::TensorCoreMma {
+            element_type: Some(SassTensorElementType::Fp8),
+            scope: Some(SassTensorScope::WarpGroup),
+            ..
+        }
+    ));
 }
 
 #[test]

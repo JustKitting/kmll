@@ -137,6 +137,16 @@ pub enum SassModifierKind {
     UnsignedWidth(u32),
     SignedWidth(u32),
     Width(u32),
+    F16,
+    Bf16,
+    F32,
+    F64,
+    Tf32,
+    Fp4,
+    Fp8,
+    E2M1,
+    E4M3,
+    E5M2,
     High,
     Low,
     Carry,
@@ -154,6 +164,16 @@ impl SassModifierKind {
         let raw = raw.into();
         match raw.as_str() {
             "E" => return Self::E,
+            "F16" | "FP16" => return Self::F16,
+            "BF16" => return Self::Bf16,
+            "F32" | "FP32" => return Self::F32,
+            "F64" | "FP64" => return Self::F64,
+            "TF32" => return Self::Tf32,
+            "F4" | "FP4" => return Self::Fp4,
+            "F8" | "FP8" => return Self::Fp8,
+            "E2M1" => return Self::E2M1,
+            "E4M3" => return Self::E4M3,
+            "E5M2" => return Self::E5M2,
             "HI" => return Self::High,
             "LO" | "LOW" => return Self::Low,
             "X" => return Self::Carry,
@@ -180,6 +200,16 @@ impl SassModifierKind {
         match self {
             Self::UnsignedWidth(bits) | Self::SignedWidth(bits) | Self::Width(bits) => Some(*bits),
             Self::E
+            | Self::F16
+            | Self::Bf16
+            | Self::F32
+            | Self::F64
+            | Self::Tf32
+            | Self::Fp4
+            | Self::Fp8
+            | Self::E2M1
+            | Self::E4M3
+            | Self::E5M2
             | Self::High
             | Self::Low
             | Self::Carry
@@ -573,6 +603,10 @@ impl fmt::Display for SassWarpShuffleMode {
 pub enum SassTensorElementType {
     Bit,
     Fp64,
+    Fp32,
+    Tf32,
+    F16,
+    Bf16,
     Half,
     Integer,
     Fp4,
@@ -586,6 +620,10 @@ impl SassTensorElementType {
         match raw.as_str() {
             "bit" => Self::Bit,
             "fp64" => Self::Fp64,
+            "fp32" => Self::Fp32,
+            "tf32" => Self::Tf32,
+            "f16" => Self::F16,
+            "bf16" => Self::Bf16,
             "half" => Self::Half,
             "integer" => Self::Integer,
             "fp4" => Self::Fp4,
@@ -598,6 +636,10 @@ impl SassTensorElementType {
         match self {
             Self::Bit => "bit",
             Self::Fp64 => "fp64",
+            Self::Fp32 => "fp32",
+            Self::Tf32 => "tf32",
+            Self::F16 => "f16",
+            Self::Bf16 => "bf16",
             Self::Half => "half",
             Self::Integer => "integer",
             Self::Fp4 => "fp4",

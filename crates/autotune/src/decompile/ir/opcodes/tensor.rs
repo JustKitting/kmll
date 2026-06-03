@@ -1,11 +1,17 @@
+use super::super::super::sass::SassInstruction;
 use super::super::types::{
-    AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassOpcode, SassOpcodeKind,
-    SassTensorElementType, SassTensorScope,
+    AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassModifier, SassModifierKind,
+    SassOpcode, SassOpcodeKind, SassTensorElementType, SassTensorScope,
 };
 use super::LiftResult;
 
-pub(super) fn lift(opcode: &SassOpcode, operands: &[AggregateOperand]) -> Option<LiftResult> {
+pub(super) fn lift(
+    opcode: &SassOpcode,
+    instruction: &SassInstruction,
+    operands: &[AggregateOperand],
+) -> Option<LiftResult> {
     let operands = operands.to_vec();
+    let modifiers = source_modifiers(instruction);
     Some(match opcode.kind() {
         SassOpcodeKind::Bgmma
         | SassOpcodeKind::Bmma
@@ -24,7 +30,7 @@ pub(super) fn lift(opcode: &SassOpcode, operands: &[AggregateOperand]) -> Option
             KernelIrOpKind::TensorCoreMma {
                 opcode: opcode.clone(),
                 operands,
-                element_type: tensor_core_element_type(opcode.kind()),
+                element_type: tensor_core_element_type(opcode.kind(), &modifiers),
                 scope: tensor_core_scope(opcode.kind()),
             },
             SassMappingConfidence::OpcodeHeuristic,
@@ -62,7 +68,22 @@ pub(super) fn lift(opcode: &SassOpcode, operands: &[AggregateOperand]) -> Option
     })
 }
 
-fn tensor_core_element_type(opcode: &SassOpcodeKind) -> Option<SassTensorElementType> {
+fn source_modifiers(instruction: &SassInstruction) -> Vec<SassModifier> {
+    instruction
+        .modifiers
+        .iter()
+        .map(|modifier| SassModifier::parse(modifier.as_str()))
+        .collect()
+}
+
+fn tensor_core_element_type(
+    opcode: &SassOpcodeKind,
+    modifiers: &[SassModifier],
+) -> Option<SassTensorElementType> {
+    if let Some(dtype) = tensor_core_modifier_element_type(modifiers) {
+        return Some(dtype);
+    }
+
     match opcode {
         SassOpcodeKind::Bmma | SassOpcodeKind::Bgmma => Some(SassTensorElementType::Bit),
         SassOpcodeKind::Dmma => Some(SassTensorElementType::Fp64),
@@ -74,6 +95,39 @@ fn tensor_core_element_type(opcode: &SassOpcodeKind) -> Option<SassTensorElement
         }
         SassOpcodeKind::Omma | SassOpcodeKind::Utcomma => Some(SassTensorElementType::Fp4),
         SassOpcodeKind::Qgmma | SassOpcodeKind::Qmma | SassOpcodeKind::Utcqmma => {
+            Some(SassTensorElementType::Fp8)
+        }
+        _ => None,
+    }
+}
+
+fn tensor_core_modifier_element_type(modifiers: &[SassModifier]) -> Option<SassTensorElementType> {
+    [
+        SassTensorElementType::Bf16,
+        SassTensorElementType::F16,
+        SassTensorElementType::Tf32,
+        SassTensorElementType::Fp4,
+        SassTensorElementType::Fp8,
+        SassTensorElementType::Fp64,
+        SassTensorElementType::Fp32,
+    ]
+    .into_iter()
+    .find(|candidate| {
+        modifiers.iter().any(|modifier| {
+            modifier_tensor_element_type(modifier.kind()).as_ref() == Some(candidate)
+        })
+    })
+}
+
+fn modifier_tensor_element_type(modifier: &SassModifierKind) -> Option<SassTensorElementType> {
+    match modifier {
+        SassModifierKind::Bf16 => Some(SassTensorElementType::Bf16),
+        SassModifierKind::F16 => Some(SassTensorElementType::F16),
+        SassModifierKind::F32 => Some(SassTensorElementType::Fp32),
+        SassModifierKind::F64 => Some(SassTensorElementType::Fp64),
+        SassModifierKind::Tf32 => Some(SassTensorElementType::Tf32),
+        SassModifierKind::Fp4 | SassModifierKind::E2M1 => Some(SassTensorElementType::Fp4),
+        SassModifierKind::Fp8 | SassModifierKind::E4M3 | SassModifierKind::E5M2 => {
             Some(SassTensorElementType::Fp8)
         }
         _ => None,
