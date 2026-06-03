@@ -11,12 +11,12 @@ mod tensor;
 mod warp;
 
 use super::super::sass::{SassInstruction, SassPredicate};
-use super::types::{KernelIrOpKind, SassMappingConfidence};
+use super::types::{KernelIrOpKind, PredicateCondition, SassMappingConfidence};
 
 pub(super) type LiftResult = (KernelIrOpKind, SassMappingConfidence);
 
-pub(super) fn predicate_text(predicate: &SassPredicate) -> String {
-    operands::predicate_text(predicate)
+pub(super) fn predicate_condition(predicate: &SassPredicate) -> PredicateCondition {
+    operands::predicate_condition(predicate)
 }
 
 pub(super) fn lift_kind(instruction: &SassInstruction) -> LiftResult {

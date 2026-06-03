@@ -55,7 +55,7 @@ pub(super) fn build_value_ops(
             SassValueOp {
                 address: op.address,
                 block_id: block_id_for_op_index(blocks, op_index),
-                predicate: op.predicate.clone(),
+                predicate: op.predicate.as_ref().map(ToString::to_string),
                 opcode: op.source_opcode.clone(),
                 kind: format!("{:?}", op.kind),
                 input_registers: dataflow.uses.clone(),
@@ -347,7 +347,7 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
     let mut defines = Vec::new();
     let mut uses = Vec::new();
     if let Some(predicate) = &op.predicate {
-        push_registers(predicate, &mut uses);
+        push_predicate_registers(predicate.registers(), &mut uses);
     }
     match &op.kind {
         KernelIrOpKind::ReadSpecialRegister { dst, special } => {
@@ -407,7 +407,7 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
         }
         KernelIrOpKind::Branch { condition, .. } | KernelIrOpKind::Exit { condition } => {
             if let Some(condition) = condition {
-                push_registers(condition, &mut uses);
+                push_predicate_registers(condition.registers(), &mut uses);
             }
         }
         KernelIrOpKind::Call { operands, .. }
@@ -439,9 +439,15 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
     }
     SassDataflowOp {
         address: op.address,
-        predicate: op.predicate.clone(),
+        predicate: op.predicate.as_ref().map(ToString::to_string),
         defines,
         uses,
         source: op.source.clone(),
+    }
+}
+
+fn push_predicate_registers(registers: Vec<String>, out: &mut Vec<String>) {
+    for register in registers {
+        push_registers(&register, out);
     }
 }

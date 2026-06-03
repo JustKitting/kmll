@@ -7,6 +7,6 @@ pub use self::{
     types::{
         ControlTarget, ControlTargetKind, KernelIrFunction, KernelIrModule, KernelIrOp,
         KernelIrOpKind, MemoryAccessInfo, MemoryAddress, MemoryAddressKind, MemorySpace,
-        SassMappingConfidence,
+        PredicateCondition, PredicateConditionKind, SassMappingConfidence,
     },
 };

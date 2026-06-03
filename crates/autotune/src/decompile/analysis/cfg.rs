@@ -224,7 +224,7 @@ pub(super) fn build_edges(
                     from_block: block.id,
                     to_block: target_block,
                     kind: SassCfgEdgeKind::Branch,
-                    condition: condition.clone(),
+                    condition: condition.as_ref().map(ToString::to_string),
                     target: target.as_ref().map(ToString::to_string),
                 });
                 if condition.is_some() {
@@ -262,7 +262,7 @@ pub(super) fn build_edges(
                     from_block: block.id,
                     to_block: None,
                     kind: SassCfgEdgeKind::Return,
-                    condition: last_op.predicate.clone(),
+                    condition: last_op.predicate.as_ref().map(ToString::to_string),
                     target: target.as_ref().map(ToString::to_string),
                 });
                 if last_op.predicate.is_some() {
@@ -282,7 +282,7 @@ pub(super) fn build_edges(
                     from_block: block.id,
                     to_block: None,
                     kind: SassCfgEdgeKind::Exit,
-                    condition: condition.clone(),
+                    condition: condition.as_ref().map(ToString::to_string),
                     target: None,
                 });
                 if condition.is_some() {

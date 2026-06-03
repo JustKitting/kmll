@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::super::{ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace};
+use super::super::{ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace, PredicateCondition};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SassLiftedSemantics {
@@ -96,7 +96,7 @@ pub enum SassLiftedSemantics {
     },
     Branch {
         target: Option<ControlTarget>,
-        condition: Option<String>,
+        condition: Option<PredicateCondition>,
     },
     Call {
         target: Option<ControlTarget>,
@@ -107,7 +107,7 @@ pub enum SassLiftedSemantics {
         operands: Vec<String>,
     },
     Exit {
-        condition: Option<String>,
+        condition: Option<PredicateCondition>,
     },
     WarpShuffle {
         mode: Option<String>,
@@ -263,7 +263,7 @@ impl fmt::Display for SassLiftedSemantics {
                 f,
                 "branch(target={},condition={})",
                 option_display(target.as_ref()),
-                option_str(condition.as_deref())
+                option_display(condition.as_ref())
             ),
             Self::Call { target, operands } => write!(
                 f,
@@ -278,7 +278,7 @@ impl fmt::Display for SassLiftedSemantics {
                 operands.join(",")
             ),
             Self::Exit { condition } => {
-                write!(f, "exit(condition={})", option_str(condition.as_deref()))
+                write!(f, "exit(condition={})", option_display(condition.as_ref()))
             }
             Self::WarpShuffle {
                 mode,

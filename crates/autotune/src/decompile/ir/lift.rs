@@ -1,6 +1,6 @@
 use super::super::sass::{SassInstruction, SassModule};
 use super::{
-    opcodes::{lift_kind, predicate_text},
+    opcodes::{lift_kind, predicate_condition},
     types::{KernelIrFunction, KernelIrModule, KernelIrOp},
 };
 
@@ -29,7 +29,7 @@ fn lift_instruction(instruction: &SassInstruction) -> KernelIrOp {
         address: instruction.address,
         source_position: instruction.source_position,
         label: instruction.label.clone(),
-        predicate: instruction.predicate.as_ref().map(predicate_text),
+        predicate: instruction.predicate.as_ref().map(predicate_condition),
         kind,
         confidence,
         source_opcode: instruction.opcode.clone(),

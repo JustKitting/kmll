@@ -2,7 +2,7 @@ use super::super::super::sass::SassInstruction;
 use super::super::types::{KernelIrOpKind, SassMappingConfidence};
 use super::{
     LiftResult,
-    operands::{branch_condition_operand, predicate_text, target_operand},
+    operands::{branch_condition_operand, predicate_condition, target_operand},
 };
 
 pub(super) fn lift(
@@ -14,7 +14,7 @@ pub(super) fn lift(
         "NOP" => (KernelIrOpKind::NoOp, SassMappingConfidence::LocallyParsed),
         "EXIT" => (
             KernelIrOpKind::Exit {
-                condition: instruction.predicate.as_ref().map(predicate_text),
+                condition: instruction.predicate.as_ref().map(predicate_condition),
             },
             SassMappingConfidence::LocallyParsed,
         ),
@@ -24,7 +24,7 @@ pub(super) fn lift(
                 condition: instruction
                     .predicate
                     .as_ref()
-                    .map(predicate_text)
+                    .map(predicate_condition)
                     .or_else(|| branch_condition_operand(instruction)),
             },
             SassMappingConfidence::OpcodeHeuristic,

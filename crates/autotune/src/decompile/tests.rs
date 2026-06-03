@@ -573,7 +573,13 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
         op.kind,
         KernelIrOpKind::Exit {
             condition: Some(ref condition)
-        } if condition == "P0"
+        } if matches!(
+            &condition.kind,
+            PredicateConditionKind::Register {
+                register,
+                negated: false,
+            } if register == "P0"
+        )
     )));
     assert!(ops.iter().any(|op| matches!(
         op.kind,
@@ -604,7 +610,13 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
             target: Some(ref target),
             condition: Some(ref condition)
         } if matches!(&target.kind, ControlTargetKind::Label(label) if label == ".L_x_1")
-            && condition == "P0"
+            && matches!(
+                &condition.kind,
+                PredicateConditionKind::Register {
+                    register,
+                    negated: false,
+                } if register == "P0"
+            )
     )));
     assert!(ops.iter().any(|op| matches!(
         op.kind,

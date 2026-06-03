@@ -49,7 +49,7 @@ pub struct KernelIrOp {
     pub address: u64,
     pub source_position: SassSourcePosition,
     pub label: Option<String>,
-    pub predicate: Option<String>,
+    pub predicate: Option<PredicateCondition>,
     pub kind: KernelIrOpKind,
     pub confidence: SassMappingConfidence,
     pub source_opcode: String,
@@ -150,7 +150,7 @@ pub enum KernelIrOpKind {
     },
     Branch {
         target: Option<ControlTarget>,
-        condition: Option<String>,
+        condition: Option<PredicateCondition>,
     },
     Call {
         target: Option<ControlTarget>,
@@ -161,7 +161,7 @@ pub enum KernelIrOpKind {
         operands: Vec<String>,
     },
     Exit {
-        condition: Option<String>,
+        condition: Option<PredicateCondition>,
     },
     WarpShuffle {
         mode: Option<String>,
@@ -206,6 +206,47 @@ pub enum MemorySpace {
     Constant,
     Descriptor,
     Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PredicateCondition {
+    pub kind: PredicateConditionKind,
+    pub raw: String,
+}
+
+impl PredicateCondition {
+    pub fn register(raw: String, register: String, negated: bool) -> Self {
+        Self {
+            kind: PredicateConditionKind::Register { register, negated },
+            raw,
+        }
+    }
+
+    pub fn raw(raw: String) -> Self {
+        Self {
+            kind: PredicateConditionKind::Raw,
+            raw,
+        }
+    }
+
+    pub fn registers(&self) -> Vec<String> {
+        match &self.kind {
+            PredicateConditionKind::Register { register, .. } => vec![register.clone()],
+            PredicateConditionKind::Raw => Vec::new(),
+        }
+    }
+}
+
+impl fmt::Display for PredicateCondition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PredicateConditionKind {
+    Register { register: String, negated: bool },
+    Raw,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

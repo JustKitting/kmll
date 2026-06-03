@@ -1,7 +1,9 @@
 use super::super::super::sass::{
     RegisterClass, SassInstruction, SassOperandKind, SassPredicate, SassRegister, label_in_text,
 };
-use super::super::types::{ControlTarget, KernelIrOpKind, SassMappingConfidence};
+use super::super::types::{
+    ControlTarget, KernelIrOpKind, PredicateCondition, SassMappingConfidence,
+};
 use super::LiftResult;
 
 pub(super) fn raw_operands(instruction: &SassInstruction) -> Vec<String> {
@@ -99,11 +101,19 @@ fn unsupported_arity(instruction: &SassInstruction, expected: usize) -> LiftResu
     )
 }
 
-pub(super) fn predicate_text(predicate: &SassPredicate) -> String {
+pub(super) fn predicate_condition(predicate: &SassPredicate) -> PredicateCondition {
     if predicate.negated {
-        format!("!{}", predicate.register)
+        PredicateCondition::register(
+            format!("!{}", predicate.register),
+            predicate.register.clone(),
+            true,
+        )
     } else {
-        predicate.register.clone()
+        PredicateCondition::register(
+            predicate.register.clone(),
+            predicate.register.clone(),
+            false,
+        )
     }
 }
 
@@ -133,23 +143,41 @@ fn parse_address_target(target: &str) -> Option<u64> {
         .or_else(|| target.parse::<u64>().ok())
 }
 
-pub(super) fn branch_condition_operand(instruction: &SassInstruction) -> Option<String> {
-    instruction
-        .operands
-        .iter()
-        .find(|operand| {
-            matches!(
-                operand.kind,
-                SassOperandKind::Register(SassRegister {
-                    class: RegisterClass::Predicate
-                        | RegisterClass::UniformPredicate
-                        | RegisterClass::PredicateTrue
-                        | RegisterClass::UniformPredicateTrue,
-                    ..
-                })
-            )
-        })
-        .map(|operand| operand.raw.clone())
+pub(super) fn branch_condition_operand(
+    instruction: &SassInstruction,
+) -> Option<PredicateCondition> {
+    instruction.operands.iter().find_map(|operand| {
+        let SassOperandKind::Register(
+            register @ SassRegister {
+                class:
+                    RegisterClass::Predicate
+                    | RegisterClass::UniformPredicate
+                    | RegisterClass::PredicateTrue
+                    | RegisterClass::UniformPredicateTrue,
+                ..
+            },
+        ) = &operand.kind
+        else {
+            return None;
+        };
+        let register_text = predicate_register_text(register)
+            .unwrap_or_else(|| operand.raw.trim_start_matches('!').to_string());
+        Some(PredicateCondition::register(
+            operand.raw.clone(),
+            register_text,
+            register.negated,
+        ))
+    })
+}
+
+fn predicate_register_text(register: &SassRegister) -> Option<String> {
+    match register.class {
+        RegisterClass::Predicate => register.index.map(|index| format!("P{index}")),
+        RegisterClass::UniformPredicate => register.index.map(|index| format!("UP{index}")),
+        RegisterClass::PredicateTrue => Some("PT".to_string()),
+        RegisterClass::UniformPredicateTrue => Some("UPT".to_string()),
+        _ => None,
+    }
 }
 
 pub(super) fn has_modifier(modifiers: &[String], expected: &str) -> bool {

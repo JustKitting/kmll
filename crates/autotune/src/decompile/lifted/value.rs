@@ -104,7 +104,7 @@ fn lift_op(
     SassLiftedOp {
         address: op.address,
         block_id,
-        predicate: op.predicate.clone(),
+        predicate: op.predicate.as_ref().map(ToString::to_string),
         opcode: op.source_opcode.clone(),
         class,
         kind,
