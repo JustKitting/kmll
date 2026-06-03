@@ -12,6 +12,7 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
         let unroll_factors = self.reduce_unroll_factors();
         let reduce_group_top_factors = self.reduce_group_top_factors();
         let group_factors = self.group_factors();
+        let thread_group_factors = self.thread_group_only_factors();
         let stride_orders = vec![MatvecLoopOrder::ReductionThenRow.action_axes().to_vec()];
         let mut spaces = vec![
             KernelActionSpace::Split {
@@ -44,6 +45,12 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
             axis: 1,
             factors: group_factors,
         });
+        if !thread_group_factors.is_empty() {
+            spaces.push(KernelActionSpace::ThreadGroup {
+                axis: 1,
+                factors: thread_group_factors,
+            });
+        }
         if !stride_orders.is_empty() {
             spaces.push(KernelActionSpace::StrideOrder {
                 orders: stride_orders,
@@ -104,6 +111,10 @@ impl KernelActionSearchProblem for MatvecSearchProblem {
                 axis: 1,
                 factors: self.group_factors(),
             });
+            let factors = self.thread_group_only_factors();
+            if !factors.is_empty() {
+                spaces.push(KernelActionSpace::ThreadGroup { axis: 1, factors });
+            }
         }
         let orders = Self::stride_orders_for_plan(plan);
         if !orders.is_empty() {

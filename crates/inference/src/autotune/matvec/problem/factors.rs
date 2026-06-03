@@ -44,6 +44,14 @@ impl MatvecSearchProblem {
             .collect()
     }
 
+    pub(in crate::autotune::matvec::problem) fn thread_group_only_factors(&self) -> Vec<u32> {
+        let group_factors = self.group_factors();
+        self.thread_group_factors()
+            .into_iter()
+            .filter(|factor| !group_factors.contains(factor))
+            .collect()
+    }
+
     pub(in crate::autotune::matvec::problem) fn row_upcast_factors(&self) -> Vec<u32> {
         KernelScheduleActionTemplate::INFERENCE_DEFAULT
             .legal_upcast_factors(|factor| MatvecRowUpcast::SEARCH_FACTORS.contains(&factor))

@@ -31,7 +31,7 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
     assert_eq!(factors.first().copied(), Some(1));
     assert_eq!(factors.last().copied(), Some(32));
     let complete_space = problem.search_space();
-    assert_eq!(complete_space.spaces.len(), 8);
+    assert_eq!(complete_space.spaces.len(), 9);
     assert!(matches!(
         complete_space.spaces[0],
         KernelActionSpace::Split { .. }
@@ -61,8 +61,17 @@ fn matvec_action_space_exposes_existing_and_generated_row_splits() {
         complete_space.spaces[6],
         KernelActionSpace::Group { .. }
     ));
+    let KernelActionSpace::ThreadGroup {
+        axis: thread_axis,
+        factors: thread_factors,
+    } = &complete_space.spaces[7]
+    else {
+        panic!("matvec global action space should expose non-duplicate thread-group metadata");
+    };
+    assert_eq!(*thread_axis, 1);
+    assert_eq!(thread_factors.as_slice(), &[2]);
     assert!(matches!(
-        complete_space.spaces[7],
+        complete_space.spaces[8],
         KernelActionSpace::StrideOrder { .. }
     ));
     assert_eq!(actions.len(), 36);
@@ -145,7 +154,7 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
     let spaces = problem.action_spaces(&rows8);
     let actions = problem.schedule_actions(&rows8);
 
-    assert_eq!(spaces.spaces.len(), 5);
+    assert_eq!(spaces.spaces.len(), 6);
     assert_eq!(spaces.actions(), actions);
     let KernelActionSpace::LocalTile { axis, factors } = &spaces.spaces[0] else {
         panic!("generated matvec split should expose local-tile action-space metadata");
@@ -192,6 +201,14 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
     assert_eq!(*axis, 1);
     assert_eq!(factors.as_slice(), &[4, 8, 16]);
     assert!(actions.contains(&KernelScheduleAction::group(1, 16)));
+    assert!(!actions.contains(&KernelScheduleAction::group(1, 2)));
+
+    let KernelActionSpace::ThreadGroup { axis, factors } = &spaces.spaces[5] else {
+        panic!("generated matvec split should expose non-duplicate thread-group metadata");
+    };
+    assert_eq!(*axis, 1);
+    assert_eq!(factors.as_slice(), &[2]);
+    assert!(actions.contains(&KernelScheduleAction::thread_group(1, 2)));
 
     let unrolled = problem
         .apply_schedule_action(&rows8, &KernelScheduleAction::unroll(1, 7))
@@ -336,9 +353,43 @@ fn matvec_generated_row_split_exposes_reduce_unroll_actions() {
     );
     assert_ne!(rows8.artifact_key(), grouped.artifact_key());
 
+    let two_lane_thread_grouped = problem
+        .apply_schedule_action(&rows8, &KernelScheduleAction::thread_group(1, 2))
+        .expect("thread-group action should produce two-lane matvec metadata");
+    assert_eq!(
+        two_lane_thread_grouped.launch.kernel,
+        "matvec_bf16_rows8_tg2"
+    );
+    assert_eq!(two_lane_thread_grouped.launch.block_dim.x, 16);
+    assert_eq!(
+        schedule_matvec_thread_group(&two_lane_thread_grouped.schedule)
+            .map(MatvecThreadGroup::lanes_per_row),
+        Some(2)
+    );
+    assert!(
+        two_lane_thread_grouped
+            .schedule
+            .transforms
+            .iter()
+            .any(|transform| {
+                matches!(
+                    transform,
+                    ScheduleTransform::ThreadGroup { axis: 1, factor: 2 }
+                )
+            })
+    );
+    assert_eq!(
+        two_lane_thread_grouped.action_trace,
+        vec![
+            KernelScheduleAction::group_top(0, 8),
+            KernelScheduleAction::thread_group(1, 2),
+        ]
+    );
+    assert_ne!(rows8.artifact_key(), two_lane_thread_grouped.artifact_key());
+
     let legacy_thread_grouped = problem
         .apply_schedule_action(&rows8, &KernelScheduleAction::thread_group(1, 16))
-        .expect("legacy thread-group action should remain replay-compatible");
+        .expect("legacy duplicate thread-group factor should remain replay-compatible");
     assert_eq!(
         schedule_matvec_thread_group(&legacy_thread_grouped.schedule)
             .map(MatvecThreadGroup::lanes_per_row),

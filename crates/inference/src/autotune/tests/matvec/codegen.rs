@@ -195,3 +195,25 @@ fn matvec_generator_renders_thread_group_source_on_demand() {
     assert!(generated.source.contains("col += 128;"));
     assert!(generated.source.contains("col += LANES_PER_ROW as usize;"));
 }
+
+#[test]
+fn matvec_generator_renders_two_lane_thread_group_source_on_demand() {
+    let problem = MatvecSearchProblem::bf16_row_major(4096, 4096);
+    let candidate = problem.generated_candidate_for_plan(
+        MatvecSchedulePlan::new(RowMajorWarpRows::Rows8)
+            .with_thread_group(MatvecThreadGroup::new(2).expect("2 lanes should be supported")),
+    );
+    let generated = MatvecRustCudaGenerator
+        .source_for(&candidate)
+        .expect("matvec generator should render two-lane thread-grouped source");
+
+    assert_eq!(generated.symbol, "matvec_bf16_rows8_tg2");
+    assert_eq!(candidate.launch.block_dim.x, 16);
+    assert!(generated.source.contains("const LANES_PER_ROW: u32 = 2;"));
+    assert!(generated.source.contains("const ROWS_PER_BLOCK: u32 = 8;"));
+    assert!(generated.source.contains("warp::shuffle_down_f32(acc, 1)"));
+    assert!(!generated.source.contains("warp::shuffle_down_f32(acc, 2)"));
+    assert!(generated.source.contains("while col + 6 < cols"));
+    assert!(generated.source.contains("let col3 = col + 6;"));
+    assert!(generated.source.contains("col += 8;"));
+}
