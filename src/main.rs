@@ -454,7 +454,7 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
     };
     let result = if measure {
         let (stream, module) = cuda_handles()?;
-        let options = GemmAutotuneMeasureOptions {
+        let options = KernelAutotuneMeasureOptions {
             repeat_count: measure_repeat_count,
             warmup_count: measure_warmup_count,
         };
@@ -576,6 +576,9 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
     let mut emit_crate = false;
     let mut compile = false;
     let mut compile_arch = None;
+    let mut measure = false;
+    let mut measure_repeat_count = 5usize;
+    let mut measure_warmup_count = 2usize;
     let mut artifact_root = None;
     while index < args.len() {
         match args[index].as_str() {
@@ -595,6 +598,26 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
                 compile = true;
                 emit_crate = true;
                 index += 1;
+            }
+            "--measure" => {
+                measure = true;
+                index += 1;
+            }
+            "--measure-repeat" => {
+                let value = parse_required_flag_value(args, &mut index, "--measure-repeat")?;
+                measure_repeat_count = value.parse::<usize>().map_err(|error| {
+                    invalid_input(format!(
+                        "kernel-autotune-matvec --measure-repeat must be a positive integer, got {value:?}: {error}"
+                    ))
+                })?;
+            }
+            "--measure-warmup" => {
+                let value = parse_required_flag_value(args, &mut index, "--measure-warmup")?;
+                measure_warmup_count = value.parse::<usize>().map_err(|error| {
+                    invalid_input(format!(
+                        "kernel-autotune-matvec --measure-warmup must be a nonnegative integer, got {value:?}: {error}"
+                    ))
+                })?;
             }
             "--beam-width" => {
                 let value = parse_required_flag_value(args, &mut index, "--beam-width")?;
@@ -622,7 +645,7 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
             }
             other => {
                 return Err(invalid_input(format!(
-                    "kernel-autotune-matvec unknown argument {other:?}; usage: kernel-autotune-matvec ROWS COLS [--allow-generated] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--artifact-root PATH]"
+                    "kernel-autotune-matvec unknown argument {other:?}; usage: kernel-autotune-matvec ROWS COLS [--allow-generated] [--measure] [--measure-repeat N] [--measure-warmup N] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--artifact-root PATH]"
                 )));
             }
         }
@@ -632,6 +655,11 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
             "kernel-autotune-matvec --beam-width must be nonzero",
         ));
     }
+    if measure && measure_repeat_count == 0 {
+        return Err(invalid_input(
+            "kernel-autotune-matvec --measure-repeat must be nonzero",
+        ));
+    }
 
     let problem = MatvecSearchProblem::bf16_row_major(rows, cols);
     let config = BeamSearchConfig {
@@ -639,15 +667,54 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         max_depth,
         require_launchable: !allow_generated,
     };
-    let result = beam_search_metadata(&problem, config);
+    let result = if measure {
+        let (stream, module) = cuda_handles()?;
+        let options = KernelAutotuneMeasureOptions {
+            repeat_count: measure_repeat_count,
+            warmup_count: measure_warmup_count,
+        };
+        let generated_store = artifact_root
+            .as_ref()
+            .map(|root| KernelArtifactStore::new(root.clone()))
+            .unwrap_or_else(KernelArtifactStore::managed);
+        let mut bench =
+            MatvecAutotuneBench::new(&stream, &module, rows, cols, options, generated_store)?;
+        let mut first_measure_error = None;
+        let result = beam_search_metadata_with_scorer(&problem, config, |candidate| {
+            match bench.score_candidate(candidate) {
+                Ok(score) => score,
+                Err(error) => {
+                    if first_measure_error.is_none() {
+                        first_measure_error = Some(error.to_string());
+                    }
+                    None
+                }
+            }
+        });
+        if result.best.is_none()
+            && let Some(error) = first_measure_error
+        {
+            return Err(invalid_input(format!(
+                "kernel-autotune-matvec measured search did not produce a candidate; first measurement error: {error}"
+            )));
+        }
+        result
+    } else {
+        beam_search_metadata(&problem, config)
+    };
     let best = result
         .best
         .as_ref()
         .ok_or_else(|| invalid_input("kernel-autotune-matvec did not produce any candidates"))?;
 
     println!(
-        "kernel_autotune_matvec rows={rows} cols={cols} beam_width={beam_width} max_depth={max_depth} allow_generated={allow_generated}"
+        "kernel_autotune_matvec rows={rows} cols={cols} beam_width={beam_width} max_depth={max_depth} allow_generated={allow_generated} measure={measure}"
     );
+    if measure {
+        println!(
+            "measurement time_source=cuda-event warmup_count={measure_warmup_count} repeat_count={measure_repeat_count}"
+        );
+    }
     println!(
         "search explored={} rejected={} beam_len={}",
         result.explored,
@@ -708,9 +775,242 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct GemmAutotuneMeasureOptions {
+struct KernelAutotuneMeasureOptions {
     repeat_count: usize,
     warmup_count: usize,
+}
+
+struct MatvecAutotuneBench<'a> {
+    stream: &'a Arc<CudaStream>,
+    generated_store: KernelArtifactStore,
+    generated_functions: HashMap<String, CudaFunction>,
+    existing_function: CudaFunction,
+    dev_input: DeviceBuffer<f32>,
+    dev_weight: DeviceBuffer<Bf16>,
+    dev_output: DeviceBuffer<f32>,
+    expected: Vec<f32>,
+    rows: usize,
+    cols: usize,
+    options: KernelAutotuneMeasureOptions,
+}
+
+impl<'a> MatvecAutotuneBench<'a> {
+    fn new(
+        stream: &'a Arc<CudaStream>,
+        module: &'a Arc<CudaModule>,
+        rows: usize,
+        cols: usize,
+        options: KernelAutotuneMeasureOptions,
+        generated_store: KernelArtifactStore,
+    ) -> AppResult<Self> {
+        let weight_layout = MatrixLayout::<RowMajor>::packed(rows, cols);
+        let mut seed = 0x4d41_5456_4543_4155_u64 ^ ((rows as u64) << 32) ^ (cols as u64);
+        let mut input = vec![0.0_f32; cols];
+        let mut weight = vec![Bf16::from_bits(0); weight_layout.capacity()];
+        let output = vec![0.0_f32; rows];
+        fill_stress_slice(&mut input, &mut seed, 1.0);
+        fill_bf16_matrix::<RowMajor>(&mut weight, &weight_layout, rows, cols, &mut seed);
+        let expected = cpu_matvec_bf16_reference(&input, &weight, &weight_layout, rows, cols);
+        let existing_function = module.load_function("matvec_bf16_kernel")?;
+
+        Ok(Self {
+            stream,
+            generated_store,
+            generated_functions: HashMap::new(),
+            existing_function,
+            dev_input: DeviceBuffer::from_host(stream, &input)?,
+            dev_weight: DeviceBuffer::from_host(stream, &weight)?,
+            dev_output: DeviceBuffer::from_host(stream, &output)?,
+            expected,
+            rows,
+            cols,
+            options,
+        })
+    }
+
+    fn score_candidate(
+        &mut self,
+        candidate: &KernelCandidateMetadata,
+    ) -> AppResult<Option<SearchScore>> {
+        if candidate.family != "matvec-bf16-row-major" {
+            return Ok(None);
+        }
+        for _ in 0..self.options.warmup_count {
+            self.launch_candidate(candidate)?;
+        }
+        self.stream.synchronize()?;
+
+        let mut samples = Vec::with_capacity(self.options.repeat_count);
+        for _ in 0..self.options.repeat_count {
+            let start = self
+                .stream
+                .record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            self.launch_candidate(candidate)?;
+            let end = self
+                .stream
+                .record_event(Some(cuda_core::sys::CUevent_flags_enum_CU_EVENT_DEFAULT))?;
+            let seconds = start.elapsed_ms(&end)? as f64 / 1_000.0;
+            if seconds.is_finite() {
+                samples.push(seconds);
+            }
+        }
+
+        let median = nn_rust_profiling::median_f64(&samples).ok_or_else(|| {
+            invalid_data("kernel-autotune-matvec measurement produced no finite samples")
+        })?;
+        let actual = self.dev_output.to_host_vec(self.stream)?;
+        compare_matvec_output(
+            &format!("kernel-autotune-matvec {}", candidate.launch.kernel),
+            &actual,
+            &self.expected,
+            self.rows,
+            self.cols,
+        )?;
+        Ok(SearchScore::measured(median))
+    }
+
+    fn launch_candidate(&mut self, candidate: &KernelCandidateMetadata) -> AppResult<()> {
+        match &candidate.generated.materialization {
+            KernelMaterialization::Existing { symbol } => {
+                if *symbol != "matvec_bf16_kernel" {
+                    return Err(invalid_input(format!(
+                        "kernel-autotune-matvec cannot measure existing matvec symbol {symbol:?}"
+                    )));
+                }
+                launch_matvec_symbol(
+                    self.stream,
+                    &self.existing_function,
+                    candidate,
+                    &self.dev_input,
+                    &self.dev_weight,
+                    &mut self.dev_output,
+                    self.rows,
+                    self.cols,
+                )
+            }
+            KernelMaterialization::DeferredGenerated { .. } => {
+                self.launch_generated_bf16_matvec(candidate)
+            }
+        }
+    }
+
+    fn launch_generated_bf16_matvec(
+        &mut self,
+        candidate: &KernelCandidateMetadata,
+    ) -> AppResult<()> {
+        let artifact_key = candidate.artifact_key().hex();
+        if !self.generated_functions.contains_key(&artifact_key) {
+            let emitted = self
+                .generated_store
+                .emit_standalone_crate(candidate, &MatvecRustCudaGenerator)?;
+            let output_dir = self.generated_store.paths_for(candidate).directory;
+            let compiled = compile_standalone_kernel_crate(
+                &emitted.paths.crate_dir,
+                &output_dir,
+                &emitted.package_name,
+                None,
+            )?;
+            let ptx_path = compiled
+                .ptx_path
+                .to_str()
+                .ok_or_else(|| invalid_input("generated PTX path is not valid UTF-8"))?;
+            let module = self.stream.context().load_module_from_file(ptx_path)?;
+            let function = module.load_function(&emitted.symbol)?;
+            self.generated_functions
+                .insert(artifact_key.clone(), function);
+        }
+        let Some(function) = self.generated_functions.get(&artifact_key) else {
+            return Err(invalid_input(format!(
+                "generated matvec function cache miss for artifact {artifact_key}"
+            )));
+        };
+        launch_matvec_symbol(
+            self.stream,
+            function,
+            candidate,
+            &self.dev_input,
+            &self.dev_weight,
+            &mut self.dev_output,
+            self.rows,
+            self.cols,
+        )
+    }
+}
+
+fn launch_matvec_symbol(
+    stream: &Arc<CudaStream>,
+    function: &CudaFunction,
+    candidate: &KernelCandidateMetadata,
+    input: &DeviceBuffer<f32>,
+    weight: &DeviceBuffer<Bf16>,
+    output: &mut DeviceBuffer<f32>,
+    rows: usize,
+    cols: usize,
+) -> AppResult<()> {
+    let weight_layout = MatrixLayout::<RowMajor>::packed(rows, cols);
+    let stride = weight_layout.stride();
+    let rows_per_block = matvec_rows_per_block(candidate)?;
+
+    let mut input_ptr = input.cu_deviceptr();
+    let mut input_len = input.len() as u64;
+    let mut weight_ptr = weight.cu_deviceptr();
+    let mut weight_len = weight.len() as u64;
+    let mut rows_arg = rows as u32;
+    let mut cols_arg = cols as u32;
+    let mut row_stride = stride.row as u32;
+    let mut col_stride = stride.col as u32;
+    let mut rows_per_block_arg = rows_per_block;
+    let mut output_ptr = output.cu_deviceptr();
+    let mut output_len = output.len() as u64;
+    let mut args = vec![
+        &mut input_ptr as *mut _ as *mut std::ffi::c_void,
+        &mut input_len as *mut _ as *mut std::ffi::c_void,
+        &mut weight_ptr as *mut _ as *mut std::ffi::c_void,
+        &mut weight_len as *mut _ as *mut std::ffi::c_void,
+        &mut rows_arg as *mut _ as *mut std::ffi::c_void,
+        &mut cols_arg as *mut _ as *mut std::ffi::c_void,
+        &mut row_stride as *mut _ as *mut std::ffi::c_void,
+        &mut col_stride as *mut _ as *mut std::ffi::c_void,
+        &mut rows_per_block_arg as *mut _ as *mut std::ffi::c_void,
+        &mut output_ptr as *mut _ as *mut std::ffi::c_void,
+        &mut output_len as *mut _ as *mut std::ffi::c_void,
+    ];
+    unsafe {
+        cuda_core::launch_kernel_on_stream(
+            function,
+            (
+                candidate.launch.grid_dim.x,
+                candidate.launch.grid_dim.y,
+                candidate.launch.grid_dim.z,
+            ),
+            (
+                candidate.launch.block_dim.x,
+                candidate.launch.block_dim.y,
+                candidate.launch.block_dim.z,
+            ),
+            candidate.launch.shared_mem_bytes,
+            stream.as_ref(),
+            &mut args,
+        )?;
+    }
+    Ok(())
+}
+
+fn matvec_rows_per_block(candidate: &KernelCandidateMetadata) -> AppResult<u32> {
+    candidate
+        .schedule
+        .transforms
+        .iter()
+        .find_map(|transform| match transform {
+            ScheduleTransform::Split { axis: 0, factor } => Some(*factor),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            invalid_input(format!(
+                "matvec candidate {} is missing row split schedule",
+                candidate.artifact_key().hex()
+            ))
+        })
 }
 
 struct GemmAutotuneBench<'a> {
@@ -726,7 +1026,7 @@ struct GemmAutotuneBench<'a> {
     m: usize,
     n: usize,
     k: usize,
-    options: GemmAutotuneMeasureOptions,
+    options: KernelAutotuneMeasureOptions,
 }
 
 impl<'a> GemmAutotuneBench<'a> {
@@ -736,7 +1036,7 @@ impl<'a> GemmAutotuneBench<'a> {
         m: usize,
         n: usize,
         k: usize,
-        options: GemmAutotuneMeasureOptions,
+        options: KernelAutotuneMeasureOptions,
         generated_store: KernelArtifactStore,
     ) -> AppResult<Self> {
         let a_layout = MatrixLayout::<RowMajor>::packed(m, k);
@@ -4949,6 +5249,43 @@ fn compare_gemm_output<L: Layout2D>(
     })
 }
 
+fn compare_matvec_output(
+    label: &str,
+    actual: &[f32],
+    expected: &[f32],
+    rows: usize,
+    cols: usize,
+) -> AppResult<GemmStressStats> {
+    if actual.len() != expected.len() {
+        return Err(invalid_data(format!(
+            "matvec output length mismatch for {label}: actual={} expected={}",
+            actual.len(),
+            expected.len()
+        )));
+    }
+
+    let mut max_abs_diff = 0.0_f32;
+    let mut sum_abs_diff = 0.0_f64;
+    for row in 0..rows {
+        let diff = (actual[row] - expected[row]).abs();
+        max_abs_diff = max_abs_diff.max(diff);
+        sum_abs_diff += diff as f64;
+    }
+
+    let tolerance = 1.0e-4_f32 * (cols.max(1) as f32).sqrt();
+    if max_abs_diff > tolerance {
+        return Err(invalid_data(format!(
+            "matvec stress {label} rows={rows} cols={cols} failed: max_abs_diff={max_abs_diff:.8}, tolerance={tolerance:.8}"
+        )));
+    }
+
+    Ok(GemmStressStats {
+        element_count: rows,
+        max_abs_diff,
+        sum_abs_diff,
+    })
+}
+
 fn compare_attention_output(
     split: &[f32],
     fused: &[f32],
@@ -5151,6 +5488,24 @@ fn cpu_gemm_bf16_reference<ALayout, BLayout, CLayout>(
             let c_offset = c_layout.offset(row, col);
             out[c_offset] = alpha * acc + beta * c_initial[c_offset];
         }
+    }
+    out
+}
+
+fn cpu_matvec_bf16_reference(
+    input: &[f32],
+    weight: &[Bf16],
+    weight_layout: &MatrixLayout<RowMajor>,
+    rows: usize,
+    cols: usize,
+) -> Vec<f32> {
+    let mut out = vec![0.0_f32; rows];
+    for row in 0..rows {
+        let mut acc = 0.0_f32;
+        for col in 0..cols {
+            acc += input[col] * weight[weight_layout.offset(row, col)].to_f32();
+        }
+        out[row] = acc;
     }
     out
 }
