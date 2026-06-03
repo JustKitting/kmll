@@ -174,7 +174,7 @@ struct OpcodeCatalogBuilder {
     known: bool,
     locally_mapped: bool,
     instruction_count: usize,
-    signatures: BTreeSet<String>,
+    signatures: BTreeSet<SassOpcodeSignature>,
     source_formats: BTreeSet<String>,
     architectures: BTreeSet<String>,
     known_sources: BTreeSet<String>,
@@ -208,7 +208,11 @@ impl OpcodeCatalogBuilder {
             (false, false, _) => "empty",
         }
         .to_string();
-        let signatures = self.signatures.into_iter().collect::<Vec<_>>();
+        let signatures = self
+            .signatures
+            .into_iter()
+            .map(|signature| signature.to_string())
+            .collect::<Vec<_>>();
         SassOpcodeCatalogEntry {
             opcode,
             known: self.known,
@@ -498,7 +502,7 @@ pub fn run_sass_coverage_scan(
                             .or_default() += 1;
                         let catalog_entry = opcode_catalog.entry(opcode).or_default();
                         catalog_entry.instruction_count += 1;
-                        catalog_entry.signatures.insert(signature.to_string());
+                        catalog_entry.signatures.insert(signature);
                         catalog_entry
                             .source_formats
                             .insert(source_format.to_string());
