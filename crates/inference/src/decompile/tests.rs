@@ -34,16 +34,21 @@ matvec_bf16_rows17:
         /*0050*/                   BSSY.RECONVERGENT B0, `(.L_x_0) ;             /* 0x0 */
         /*0060*/                   LD.E.U16 R23, desc[UR10][R24.64] ;            /* 0x0 */
         /*0070*/                   HFMA2 R3, -RZ, RZ, 0, 0 ;                     /* 0x0 */
-        /*0080*/                   FMUL R23, R23, R32 ;                          /* 0x0 */
-        /*0090*/                   HADD2 R5, R6.H0_H0, R5.H0_H0 ;                /* 0x0 */
-        /*00a0*/                   HMUL2 R5, R5.H0_H0, 0.5, 0.5 ;                /* 0x0 */
-        /*00b0*/               @P0 BRA `(.L_x_1) ;                               /* 0x0 */
+        /*0080*/                   IMAD.U32 R23, R23, 0x10000, RZ ;              /* 0x0 */
+        /*0090*/                   FMUL R23, R23, R32 ;                          /* 0x0 */
+        /*00a0*/                   FADD R22, R23, R22 ;                          /* 0x0 */
+        /*00b0*/                   HADD2 R5, R6.H0_H0, R5.H0_H0 ;                /* 0x0 */
+        /*00c0*/                   HMUL2 R5, R5.H0_H0, 0.5, 0.5 ;                /* 0x0 */
+        /*00d0*/               @P0 BRA `(.L_x_1) ;                               /* 0x0 */
 .L_x_0:
-        /*00c0*/                   BSYNC B0 ;                                    /* 0x0 */
-        /*00d0*/                   CALL.REL.NOINC `($helper) ;                   /* 0x0 */
+        /*00e0*/                   BSYNC B0 ;                                    /* 0x0 */
+        /*00f0*/                   CALL.REL.NOINC `($helper) ;                   /* 0x0 */
 $helper:
-        /*00e0*/                   SHFL.DOWN PT, R5, R22, 0x10, 0x1f ;           /* 0x0 */
-        /*00f0*/                   RET.REL.NODEC R4 `(matvec_bf16_rows17) ;       /* 0x0 */
+        /*0100*/                   SHFL.DOWN PT, R5, R22, 0x10, 0x1f ;           /* 0x0 */
+        /*0110*/                   FADD R6, R5, R22 ;                            /* 0x0 */
+        /*0120*/                   SHFL.DOWN PT, R5, R6, 0x8, 0x1f ;             /* 0x0 */
+        /*0130*/                   FADD R7, R6, R5 ;                             /* 0x0 */
+        /*0140*/                   RET.REL.NODEC R4 `(matvec_bf16_rows17) ;       /* 0x0 */
 "#;
 
 const UNSUPPORTED_SASS: &str = r#"
@@ -180,6 +185,47 @@ fn lower_rows17_slice_keeps_predicates_and_half_fma_visible() {
 }
 
 #[test]
+fn semantic_patterns_recover_bf16_widen_and_warp_reduce() {
+    let module = parse_nvdisasm_sass(ROWS17_SLICE).expect("rows17 slice should parse");
+    let ir = lower_sass_module(&module);
+    let patterns = recover_sass_patterns(&ir);
+    let flat = patterns
+        .functions
+        .iter()
+        .flat_map(|function| function.patterns.iter())
+        .collect::<Vec<_>>();
+
+    assert!(flat.iter().any(|pattern| matches!(
+        pattern.kind,
+        SassSemanticPatternKind::Bf16WidenBits {
+            ref src,
+            ref dst,
+            ..
+        } if src == "R23" && dst == "R23"
+    )));
+    assert!(flat.iter().any(|pattern| matches!(
+        pattern.kind,
+        SassSemanticPatternKind::F32MulAddPair {
+            ref mul_dst,
+            ref add_dst,
+            ..
+        } if mul_dst == "R23" && add_dst == "R22"
+    )));
+    assert!(flat.iter().any(|pattern| matches!(
+        pattern.kind,
+        SassSemanticPatternKind::WarpReduceSum {
+            ref input,
+            ref output,
+            ref offsets,
+            ..
+        } if input == "R22" && output == "R7" && offsets == &vec!["0x10".to_string(), "0x8".to_string()]
+    )));
+    let text = patterns.to_text();
+    assert!(text.contains("bf16-widen-bits"));
+    assert!(text.contains("warp-reduce-sum"));
+}
+
+#[test]
 fn side_by_side_dump_contains_source_sass_and_ir_sections() {
     let fixture = simple_kernel_fixtures()
         .into_iter()
@@ -233,12 +279,21 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.files_path.exists());
     assert!(report.opcode_frequency_path.exists());
     assert!(report.opcode_signature_frequency_path.exists());
+    assert!(report.semantic_patterns_path.exists());
+    assert!(report.semantic_pattern_frequency_path.exists());
     assert!(report.unsupported_instructions_path.exists());
     assert!(
         report
             .files
             .iter()
             .filter_map(|file| file.ir_path.as_ref())
+            .all(|path| path.exists())
+    );
+    assert!(
+        report
+            .files
+            .iter()
+            .filter_map(|file| file.pattern_path.as_ref())
             .all(|path| path.exists())
     );
 }

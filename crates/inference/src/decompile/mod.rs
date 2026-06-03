@@ -15,6 +15,7 @@ use crate::{
 mod coverage;
 mod fixtures;
 mod ir;
+mod patterns;
 mod sass;
 
 pub use self::{
@@ -26,6 +27,10 @@ pub use self::{
     ir::{
         KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, SassMappingConfidence,
         lower_sass_module,
+    },
+    patterns::{
+        SassPatternConfidence, SassPatternFunction, SassPatternModule, SassSemanticPattern,
+        SassSemanticPatternKind, recover_sass_patterns,
     },
     sass::{
         RegisterClass, SassFunction, SassInstruction, SassModule, SassOperand, SassOperandKind,
@@ -60,8 +65,10 @@ pub struct DecompileFixtureReport {
     pub cubin_path: PathBuf,
     pub sass_path: PathBuf,
     pub ir_path: PathBuf,
+    pub pattern_path: PathBuf,
     pub side_by_side_path: PathBuf,
     pub parsed_instruction_count: usize,
+    pub semantic_pattern_count: usize,
     pub unsupported_instruction_count: usize,
 }
 
@@ -77,8 +84,10 @@ pub struct SassFileDecompileReport {
     pub sass_path: PathBuf,
     pub source_path: Option<PathBuf>,
     pub ir_path: PathBuf,
+    pub pattern_path: PathBuf,
     pub side_by_side_path: PathBuf,
     pub parsed_instruction_count: usize,
+    pub semantic_pattern_count: usize,
     pub unsupported_instruction_count: usize,
 }
 
@@ -112,6 +121,7 @@ pub fn run_sass_file_decompile(
     };
     let parsed = parse_nvdisasm_sass(&sass)?;
     let lowered = lower_sass_module(&parsed);
+    let patterns = recover_sass_patterns(&lowered);
     let output_dir = options.output_dir.clone().unwrap_or_else(|| {
         options
             .sass_path
@@ -127,6 +137,8 @@ pub fn run_sass_file_decompile(
         .unwrap_or("sass");
     let ir_path = output_dir.join(format!("{stem}.lifted.ir.txt"));
     fs::write(&ir_path, lowered.to_text().as_bytes())?;
+    let pattern_path = output_dir.join(format!("{stem}.patterns.txt"));
+    fs::write(&pattern_path, patterns.to_text().as_bytes())?;
     let side_by_side_path = output_dir.join(format!("{stem}.source-sass-ir.txt"));
     let side_by_side = render_sass_file_side_by_side(
         options.sass_path.as_path(),
@@ -142,8 +154,10 @@ pub fn run_sass_file_decompile(
         sass_path: options.sass_path.clone(),
         source_path: options.source_path.clone(),
         ir_path,
+        pattern_path,
         side_by_side_path,
         parsed_instruction_count: parsed.instruction_count(),
+        semantic_pattern_count: patterns.pattern_count(),
         unsupported_instruction_count: lowered.unsupported_instruction_count(),
     })
 }
@@ -203,9 +217,12 @@ fn run_decompile_fixture(
 
     let parsed = parse_nvdisasm_sass(&sass)?;
     let lowered = lower_sass_module(&parsed);
+    let patterns = recover_sass_patterns(&lowered);
     let ir_text = lowered.to_text();
     let ir_path = fixture_dir.join("lifted.ir.txt");
     fs::write(&ir_path, ir_text.as_bytes())?;
+    let pattern_path = fixture_dir.join("patterns.txt");
+    fs::write(&pattern_path, patterns.to_text().as_bytes())?;
 
     let side_by_side = render_side_by_side(fixture, &sass, &lowered);
     let side_by_side_path = fixture_dir.join("source-sass-ir.txt");
@@ -220,8 +237,10 @@ fn run_decompile_fixture(
         cubin_path,
         sass_path,
         ir_path,
+        pattern_path,
         side_by_side_path,
         parsed_instruction_count: parsed.instruction_count(),
+        semantic_pattern_count: patterns.pattern_count(),
         unsupported_instruction_count: lowered.unsupported_instruction_count(),
     })
 }
