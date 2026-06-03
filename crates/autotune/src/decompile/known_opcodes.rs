@@ -47,6 +47,7 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     local!("BSSY", "synchronization", "sync"),
     local!("BSYNC", "synchronization", "sync"),
     local!("CALL", "control-flow", "call"),
+    local!("CS2R", "data-movement", "special-read"),
     local!("EXIT", "control-flow", "exit"),
     local!("FADD", "float-math", "float-add"),
     local!("FFMA", "float-math", "fused-multiply-add"),

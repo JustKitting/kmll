@@ -8,7 +8,7 @@ pub(super) fn lift(
     operands: &[String],
 ) -> Option<LiftResult> {
     Some(match opcode {
-        "S2R" | "S2UR" => map_two_operands(instruction, |dst, special| {
+        "CS2R" | "S2R" | "S2UR" => map_two_operands(instruction, |dst, special| {
             KernelIrOpKind::ReadSpecialRegister { dst, special }
         }),
         "MOV" | "UMOV" => {

@@ -218,6 +218,28 @@ fn parse_nvidia_sass_captures_cuobjdump_function_header() {
 }
 
 #[test]
+fn lift_maps_control_special_register_read() {
+    let sass = r#"
+	code for sm_120
+	.target	sm_120
+
+		Function : cs2r_fixture
+	.headerflags	@"EF_CUDA_SM120"
+        /*0000*/                   CS2R R6, SRZ ;                                /* 0x0 */
+        /*0010*/                   EXIT ;                                        /* 0x0 */
+"#;
+    let module = parse_nvidia_sass(sass).expect("CS2R fixture should parse");
+    let ir = lift_sass_module(&module);
+    let op = &ir.functions[0].ops[0];
+
+    assert!(matches!(
+        &op.kind,
+        KernelIrOpKind::ReadSpecialRegister { dst, special }
+            if dst == "R6" && special == "SRZ"
+    ));
+}
+
+#[test]
 fn analysis_resolves_cuobjdump_numeric_branch_targets() {
     let module = parse_nvidia_sass(CUOBJDUMP_BRANCH_SASS).expect("cuobjdump SASS should parse");
     let ir = lift_sass_module(&module);
