@@ -2429,6 +2429,36 @@ impl GemmTileShape {
         Self { m, n, k }
     }
 
+    pub fn with_axis(self, axis: u8, factor: u32) -> Option<Self> {
+        match axis {
+            0 => Some(Self {
+                m: factor,
+                n: self.n,
+                k: self.k,
+            }),
+            1 => Some(Self {
+                m: self.m,
+                n: factor,
+                k: self.k,
+            }),
+            2 => Some(Self {
+                m: self.m,
+                n: self.n,
+                k: factor,
+            }),
+            _ => None,
+        }
+    }
+
+    pub const fn axis_factor(self, axis: u8) -> Option<u32> {
+        match axis {
+            0 => Some(self.m),
+            1 => Some(self.n),
+            2 => Some(self.k),
+            _ => None,
+        }
+    }
+
     pub const fn thread_count(self) -> u32 {
         self.m * self.n
     }
@@ -2538,6 +2568,11 @@ impl GemmSchedulePlan {
 
     pub const fn with_b_load_thread_group(mut self, factor: u32) -> Self {
         self.b_load_thread_group = factor;
+        self
+    }
+
+    pub const fn with_tile(mut self, tile: GemmTileShape) -> Self {
+        self.tile = tile;
         self
     }
 
@@ -3115,6 +3150,59 @@ impl GemmSearchProblem {
         )
     }
 
+    fn split_factors_for_axis(&self, axis: u8) -> Vec<u32> {
+        match axis {
+            0 => bounded_tile_factors(self.m, Self::MAX_TILE_DIM, None),
+            1 => bounded_tile_factors(self.n, Self::MAX_TILE_DIM, None),
+            2 => bounded_tile_factors(self.k, Self::MAX_TILE_DIM, None),
+            _ => Vec::new(),
+        }
+    }
+
+    fn split_action_variants(&self) -> Vec<KernelAxisFactorAction> {
+        let mut variants = Vec::new();
+        for axis in 0..=2 {
+            variants.extend(self.split_factors_for_axis(axis).into_iter().map(|factor| {
+                KernelAxisFactorAction::new(
+                    axis,
+                    factor,
+                    KernelActionMaterialization::DeferredGenerated,
+                )
+            }));
+        }
+        variants
+    }
+
+    fn split_action_variants_for_plan(
+        &self,
+        plan: GemmSchedulePlan,
+    ) -> Vec<KernelAxisFactorAction> {
+        let mut variants = Vec::new();
+        for axis in 0..=2 {
+            let Some(current_factor) = plan.tile.axis_factor(axis) else {
+                continue;
+            };
+            for factor in self.split_factors_for_axis(axis) {
+                if factor == current_factor {
+                    continue;
+                }
+                let Some(tile) = plan.tile.with_axis(axis, factor) else {
+                    continue;
+                };
+                if !tile.is_launchable_shape() {
+                    continue;
+                }
+                let next_plan = plan.with_tile(tile);
+                variants.push(KernelAxisFactorAction::new(
+                    axis,
+                    factor,
+                    Self::action_materialization_for_plan(next_plan),
+                ));
+            }
+        }
+        variants
+    }
+
     fn a_load_thread_group_factors(&self) -> Vec<u32> {
         let mut factors = Vec::new();
         for tile in self.tile_shapes() {
@@ -3189,6 +3277,7 @@ impl GemmSearchProblem {
 impl KernelActionSearchProblem for GemmSearchProblem {
     fn search_space(&self) -> KernelActionSpaceSet {
         let tile_variants = self.tile_action_variants();
+        let split_variants = self.split_action_variants();
         let unroll_factors = self.reduce_unroll_factors();
         let m_per_thread_factors = self.m_per_thread_factors();
         let n_per_thread_factors = self.n_per_thread_factors();
@@ -3201,6 +3290,9 @@ impl KernelActionSearchProblem for GemmSearchProblem {
         let mut spaces = vec![
             KernelActionSpace::TileGemm {
                 variants: tile_variants,
+            },
+            KernelActionSpace::Split {
+                variants: split_variants,
             },
             KernelActionSpace::Unroll {
                 axis: 2,
@@ -3256,6 +3348,12 @@ impl KernelActionSearchProblem for GemmSearchProblem {
         };
 
         let mut spaces = Vec::new();
+        let split_variants = self.split_action_variants_for_plan(plan);
+        if !split_variants.is_empty() {
+            spaces.push(KernelActionSpace::Split {
+                variants: split_variants,
+            });
+        }
         if plan.reduce_unroll == 1 {
             let factors = Self::reduce_unroll_factors_for_tile(plan.tile);
             spaces.push(KernelActionSpace::Unroll { axis: 2, factors });
@@ -3335,6 +3433,28 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                     candidate,
                     action,
                     self.candidate_for_plan(plan),
+                ))
+            }
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::Split,
+                axis: Some(axis @ 0..=2),
+                arg: KernelScheduleActionArg::Factor(factor),
+                materialization,
+            } => {
+                let plan = schedule_gemm_plan(&candidate.schedule)?;
+                let variants = self.split_action_variants_for_plan(plan);
+                if !variants.contains(&KernelAxisFactorAction::new(
+                    *axis,
+                    *factor,
+                    *materialization,
+                )) {
+                    return None;
+                }
+                let next_tile = plan.tile.with_axis(*axis, *factor)?;
+                Some(candidate_with_action_trace(
+                    candidate,
+                    action,
+                    self.candidate_for_plan(plan.with_tile(next_tile)),
                 ))
             }
             KernelScheduleAction {
@@ -6594,27 +6714,46 @@ mod tests {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let seed = problem.seed();
         let full_space = problem.search_space();
-        assert_eq!(full_space.spaces.len(), 10);
+        assert_eq!(full_space.spaces.len(), 11);
         assert!(matches!(
             full_space.spaces[0],
             KernelActionSpace::TileGemm { .. }
         ));
-        assert!(matches!(
-            full_space.spaces[1],
-            KernelActionSpace::Unroll { .. }
-        ));
+        let KernelActionSpace::Split { variants } = &full_space.spaces[1] else {
+            panic!("GEMM global action space should expose per-axis split metadata");
+        };
+        assert_eq!(variants.len(), 15);
+        assert!(variants.contains(&KernelAxisFactorAction::new(
+            0,
+            13,
+            KernelActionMaterialization::DeferredGenerated
+        )));
+        assert!(variants.contains(&KernelAxisFactorAction::new(
+            1,
+            24,
+            KernelActionMaterialization::DeferredGenerated
+        )));
+        assert!(variants.contains(&KernelAxisFactorAction::new(
+            2,
+            32,
+            KernelActionMaterialization::DeferredGenerated
+        )));
         assert!(matches!(
             full_space.spaces[2],
-            KernelActionSpace::Upcast { .. }
+            KernelActionSpace::Unroll { .. }
         ));
         assert!(matches!(
             full_space.spaces[3],
             KernelActionSpace::Upcast { .. }
         ));
+        assert!(matches!(
+            full_space.spaces[4],
+            KernelActionSpace::Upcast { .. }
+        ));
         let KernelActionSpace::Unroll {
             axis: a_load_axis,
             factors: a_load_factors,
-        } = &full_space.spaces[4]
+        } = &full_space.spaces[5]
         else {
             panic!("GEMM global action space should expose A shared-load unroll metadata");
         };
@@ -6623,7 +6762,7 @@ mod tests {
         let KernelActionSpace::Unroll {
             axis: b_load_axis,
             factors: b_load_factors,
-        } = &full_space.spaces[5]
+        } = &full_space.spaces[6]
         else {
             panic!("GEMM global action space should expose B shared-load unroll metadata");
         };
@@ -6632,7 +6771,7 @@ mod tests {
         let KernelActionSpace::ThreadGroup {
             axis: a_load_thread_axis,
             factors: a_load_thread_factors,
-        } = &full_space.spaces[6]
+        } = &full_space.spaces[7]
         else {
             panic!("GEMM global action space should expose A shared-load thread-group metadata");
         };
@@ -6641,18 +6780,18 @@ mod tests {
         let KernelActionSpace::ThreadGroup {
             axis: b_load_thread_axis,
             factors: b_load_thread_factors,
-        } = &full_space.spaces[7]
+        } = &full_space.spaces[8]
         else {
             panic!("GEMM global action space should expose B shared-load thread-group metadata");
         };
         assert_eq!(*b_load_thread_axis, 4);
         assert_eq!(b_load_thread_factors, &[32, 64, 128, 256]);
         assert!(matches!(
-            full_space.spaces[8],
+            full_space.spaces[9],
             KernelActionSpace::Swap { .. }
         ));
         assert!(matches!(
-            full_space.spaces[9],
+            full_space.spaces[10],
             KernelActionSpace::StrideOrder { .. }
         ));
 
@@ -6695,16 +6834,40 @@ mod tests {
         let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
         let schedule_spaces = problem.action_spaces(&tile_candidate);
         let schedule_actions = problem.schedule_actions(&tile_candidate);
-        assert_eq!(schedule_spaces.spaces.len(), 7);
+        assert_eq!(schedule_spaces.spaces.len(), 8);
         assert_eq!(schedule_spaces.actions(), schedule_actions);
+        let KernelActionSpace::Split { variants } = &schedule_spaces.spaces[0] else {
+            panic!("GEMM tile should expose one-axis retile split metadata");
+        };
+        assert_eq!(variants.len(), 12);
+        assert!(variants.contains(&KernelAxisFactorAction::new(
+            0,
+            24,
+            KernelActionMaterialization::DeferredGenerated
+        )));
+        assert!(variants.contains(&KernelAxisFactorAction::new(
+            1,
+            16,
+            KernelActionMaterialization::Existing
+        )));
+        assert!(variants.contains(&KernelAxisFactorAction::new(
+            2,
+            32,
+            KernelActionMaterialization::DeferredGenerated
+        )));
+        assert!(!variants.contains(&KernelAxisFactorAction::new(
+            0,
+            16,
+            KernelActionMaterialization::DeferredGenerated
+        )));
         assert!(matches!(
-            schedule_spaces.spaces[0],
+            schedule_spaces.spaces[1],
             KernelActionSpace::Unroll { .. }
         ));
         let KernelActionSpace::Upcast {
             axis: m_axis,
             factors: m_factors,
-        } = &schedule_spaces.spaces[1]
+        } = &schedule_spaces.spaces[2]
         else {
             panic!("GEMM tile should expose M-axis upcast metadata");
         };
@@ -6713,7 +6876,7 @@ mod tests {
         let KernelActionSpace::Upcast {
             axis: n_axis,
             factors: n_factors,
-        } = &schedule_spaces.spaces[2]
+        } = &schedule_spaces.spaces[3]
         else {
             panic!("GEMM tile should expose N-axis upcast metadata");
         };
@@ -6722,7 +6885,7 @@ mod tests {
         let KernelActionSpace::ThreadGroup {
             axis: a_load_thread_axis,
             factors: a_load_thread_factors,
-        } = &schedule_spaces.spaces[3]
+        } = &schedule_spaces.spaces[4]
         else {
             panic!("GEMM tile should expose A shared-load thread-group metadata");
         };
@@ -6731,21 +6894,36 @@ mod tests {
         let KernelActionSpace::ThreadGroup {
             axis: b_load_thread_axis,
             factors: b_load_thread_factors,
-        } = &schedule_spaces.spaces[4]
+        } = &schedule_spaces.spaces[5]
         else {
             panic!("GEMM tile should expose B shared-load thread-group metadata");
         };
         assert_eq!(*b_load_thread_axis, 4);
         assert_eq!(b_load_thread_factors, &[32, 64, 128, 256]);
         assert!(matches!(
-            schedule_spaces.spaces[5],
+            schedule_spaces.spaces[6],
             KernelActionSpace::Swap { .. }
         ));
         assert!(matches!(
-            schedule_spaces.spaces[6],
+            schedule_spaces.spaces[7],
             KernelActionSpace::StrideOrder { .. }
         ));
-        assert_eq!(schedule_actions.len(), 30);
+        assert_eq!(schedule_actions.len(), 42);
+        assert!(schedule_actions.contains(&KernelScheduleAction::split(
+            0,
+            24,
+            KernelActionMaterialization::DeferredGenerated
+        )));
+        assert!(schedule_actions.contains(&KernelScheduleAction::split(
+            1,
+            16,
+            KernelActionMaterialization::Existing
+        )));
+        assert!(schedule_actions.contains(&KernelScheduleAction::split(
+            2,
+            32,
+            KernelActionMaterialization::DeferredGenerated
+        )));
         assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 7)));
         assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 16)));
         assert!(!schedule_actions.contains(&KernelScheduleAction::unroll(2, 1)));
@@ -6761,6 +6939,53 @@ mod tests {
         assert!(schedule_actions.contains(&KernelScheduleAction::thread_group(3, 64)));
         assert!(schedule_actions.contains(&KernelScheduleAction::thread_group(4, 64)));
         assert!(!schedule_actions.contains(&KernelScheduleAction::thread_group(3, 16)));
+
+        let m_split = problem
+            .apply_schedule_action(
+                &tile_candidate,
+                &KernelScheduleAction::split(0, 24, KernelActionMaterialization::DeferredGenerated),
+            )
+            .expect("M-axis split action should retile candidate metadata");
+        let m_split_plan =
+            schedule_gemm_plan(&m_split.schedule).expect("M split candidate should have plan");
+        assert_eq!(m_split_plan.tile, GemmTileShape::new(24, 32, 16));
+        assert_eq!(m_split.launch.kernel, "gemm_f32_bf16_tile_24x32x16");
+        assert_eq!(
+            m_split.action_trace,
+            vec![KernelScheduleAction::split(
+                0,
+                24,
+                KernelActionMaterialization::DeferredGenerated
+            )]
+        );
+
+        let existing_split = problem
+            .apply_schedule_action(
+                &tile_candidate,
+                &KernelScheduleAction::split(1, 16, KernelActionMaterialization::Existing),
+            )
+            .expect("N-axis split to the existing tile should produce existing candidate metadata");
+        let existing_split_plan = schedule_gemm_plan(&existing_split.schedule)
+            .expect("existing split candidate should have plan");
+        assert_eq!(existing_split_plan.tile, GemmTileShape::new(16, 16, 16));
+        assert_eq!(existing_split.launch.kernel, "gemm_f32_bf16_tiled_kernel");
+        assert!(existing_split.is_launchable());
+        assert!(matches!(
+            existing_split.generated.materialization,
+            KernelMaterialization::Existing { .. }
+        ));
+        assert!(
+            problem
+                .apply_schedule_action(
+                    &tile_candidate,
+                    &KernelScheduleAction::split(
+                        1,
+                        16,
+                        KernelActionMaterialization::DeferredGenerated,
+                    ),
+                )
+                .is_none()
+        );
 
         let unrolled = problem
             .apply_schedule_action(&tile_candidate, &KernelScheduleAction::unroll(2, 7))
@@ -6926,10 +7151,19 @@ mod tests {
         let spaces = problem.action_spaces(&upcast_candidate);
         let actions = spaces.actions();
 
-        assert_eq!(spaces.spaces.len(), 7);
+        assert_eq!(spaces.spaces.len(), 8);
+        let KernelActionSpace::Split { variants } = &spaces.spaces[0] else {
+            panic!("upcast GEMM should still expose one-axis retile split metadata");
+        };
+        assert_eq!(variants.len(), 12);
+        assert!(variants.contains(&KernelAxisFactorAction::new(
+            0,
+            24,
+            KernelActionMaterialization::DeferredGenerated
+        )));
         let KernelActionSpace::Unroll {
             axis: reduce_axis, ..
-        } = &spaces.spaces[0]
+        } = &spaces.spaces[1]
         else {
             panic!("upcast GEMM should still expose reduce unroll metadata");
         };
@@ -6937,7 +7171,7 @@ mod tests {
         let KernelActionSpace::Unroll {
             axis: a_load_axis,
             factors: a_load_factors,
-        } = &spaces.spaces[1]
+        } = &spaces.spaces[2]
         else {
             panic!("upcast GEMM should expose A shared-load unroll metadata");
         };
@@ -6946,7 +7180,7 @@ mod tests {
         let KernelActionSpace::Unroll {
             axis: b_load_axis,
             factors: b_load_factors,
-        } = &spaces.spaces[2]
+        } = &spaces.spaces[3]
         else {
             panic!("upcast GEMM should expose B shared-load unroll metadata");
         };
@@ -6955,7 +7189,7 @@ mod tests {
         let KernelActionSpace::ThreadGroup {
             axis: a_load_thread_axis,
             factors: a_load_thread_factors,
-        } = &spaces.spaces[3]
+        } = &spaces.spaces[4]
         else {
             panic!("upcast GEMM should expose A shared-load thread-group metadata");
         };
@@ -6964,18 +7198,23 @@ mod tests {
         let KernelActionSpace::ThreadGroup {
             axis: b_load_thread_axis,
             factors: b_load_thread_factors,
-        } = &spaces.spaces[4]
+        } = &spaces.spaces[5]
         else {
             panic!("upcast GEMM should expose B shared-load thread-group metadata");
         };
         assert_eq!(*b_load_thread_axis, 4);
         assert_eq!(b_load_thread_factors, &[32, 64]);
-        assert!(matches!(spaces.spaces[5], KernelActionSpace::Swap { .. }));
+        assert!(matches!(spaces.spaces[6], KernelActionSpace::Swap { .. }));
         assert!(matches!(
-            spaces.spaces[6],
+            spaces.spaces[7],
             KernelActionSpace::StrideOrder { .. }
         ));
 
+        assert!(actions.contains(&KernelScheduleAction::split(
+            0,
+            24,
+            KernelActionMaterialization::DeferredGenerated
+        )));
         assert!(actions.contains(&KernelScheduleAction::unroll(3, 2)));
         assert!(!actions.contains(&KernelScheduleAction::unroll(3, 3)));
         assert!(actions.contains(&KernelScheduleAction::unroll(4, 4)));
@@ -7068,7 +7307,23 @@ mod tests {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
         let candidates = problem.expand(&tile_candidate);
-        assert_eq!(candidates.len(), 30);
+        assert_eq!(candidates.len(), 42);
+
+        let m_split = candidates
+            .iter()
+            .find(|candidate| {
+                schedule_gemm_tile(&candidate.schedule) == Some(GemmTileShape::new(24, 32, 16))
+            })
+            .expect("GEMM search should expose an M-axis split descriptor");
+        assert_eq!(m_split.launch.kernel, "gemm_f32_bf16_tile_24x32x16");
+        assert_eq!(
+            m_split.action_trace,
+            vec![KernelScheduleAction::split(
+                0,
+                24,
+                KernelActionMaterialization::DeferredGenerated
+            )]
+        );
 
         let unroll7 = candidates
             .iter()
