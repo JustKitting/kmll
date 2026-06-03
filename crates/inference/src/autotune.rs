@@ -44,11 +44,12 @@ mod core;
 mod gemm;
 mod hashing;
 mod matvec;
+mod measurement;
 mod metadata;
 mod problem;
 mod search;
 
-pub use self::{artifacts::*, core::*, gemm::*, matvec::*, problem::*, search::*};
+pub use self::{artifacts::*, core::*, gemm::*, matvec::*, measurement::*, problem::*, search::*};
 
 #[cfg(test)]
 mod tests;
