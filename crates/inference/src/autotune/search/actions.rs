@@ -473,7 +473,7 @@ pub fn expand_metadata_candidates<P>(
     problem: &P,
     candidate: &KernelCandidateMetadata,
     policy: KernelExpansionPolicy,
-    seen: &mut HashSet<KernelMetadataKey>,
+    seen: &mut HashSet<KernelImplementationKey>,
 ) -> KernelCandidateExpansion
 where
     P: KernelMetadataSearchProblem,
@@ -484,7 +484,7 @@ where
     let mut last_reject_reason = None;
 
     for next in problem.expand(candidate) {
-        if !seen.insert(next.artifact_key()) {
+        if !seen.insert(next.implementation_key()) {
             duplicates += 1;
             continue;
         }

@@ -77,6 +77,37 @@ pub(super) fn metadata_key(
     KernelMetadataKey(state)
 }
 
+pub(super) fn implementation_key(
+    family: &str,
+    schedule: &KernelSchedule,
+    launch: &CudaLaunchSpec,
+    generated: &GeneratedKernelMetadata,
+) -> KernelImplementationKey {
+    let mut state = FNV_OFFSET;
+    state = hash_str(state, "implementation-key-v1");
+    state = hash_str(state, family);
+    state = hash_str(state, generated.generator);
+    state = match &generated.materialization {
+        KernelMaterialization::Existing { symbol } => {
+            let state = hash_str(state, "existing");
+            hash_str(state, symbol)
+        }
+        KernelMaterialization::DeferredGenerated { symbol_hint, .. } => {
+            let state = hash_str(state, "deferred-generated");
+            hash_str(state, symbol_hint)
+        }
+    };
+    for transform in &schedule.transforms {
+        state = hash_transform(state, transform);
+    }
+    state = hash_str(state, &launch.kernel);
+    state = hash_u64(state, launch.block_dim.x as u64);
+    state = hash_u64(state, launch.block_dim.y as u64);
+    state = hash_u64(state, launch.block_dim.z as u64);
+    state = hash_u64(state, launch.shared_mem_bytes as u64);
+    KernelImplementationKey(state)
+}
+
 pub(super) fn search_report_key(report: &OptimizationSearchReport) -> KernelMetadataKey {
     let mut state = FNV_OFFSET;
     state = hash_str(state, "optimization-search-report");

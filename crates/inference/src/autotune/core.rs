@@ -1,4 +1,7 @@
-use super::{hashing::metadata_key, *};
+use super::{
+    hashing::{implementation_key, metadata_key},
+    *,
+};
 
 pub(super) const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 pub(super) const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -199,6 +202,19 @@ impl KernelMetadataKey {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct KernelImplementationKey(pub(super) u64);
+
+impl KernelImplementationKey {
+    pub const fn raw(self) -> u64 {
+        self.0
+    }
+
+    pub fn hex(self) -> String {
+        format!("{:016x}", self.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KernelMaterialization {
     Existing { symbol: &'static str },
@@ -238,6 +254,10 @@ impl KernelCandidateMetadata {
 
     pub fn artifact_key(&self) -> KernelMetadataKey {
         self.generated.artifact_key
+    }
+
+    pub fn implementation_key(&self) -> KernelImplementationKey {
+        implementation_key(&self.family, &self.schedule, &self.launch, &self.generated)
     }
 
     pub fn optimization_spec(&self) -> OptimizationCandidateSpec {

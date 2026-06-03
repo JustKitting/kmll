@@ -52,7 +52,7 @@ where
     let mut seed = problem.seed();
     seed.score = score_candidate(&seed);
     let mut seen = HashSet::new();
-    seen.insert(seed.artifact_key());
+    seen.insert(seed.implementation_key());
     let mut beam = vec![seed];
     let mut explored = 0;
     let mut rejected = 0;
@@ -150,7 +150,7 @@ where
     let mut seed = problem.seed();
     seed.score = score_candidate(&seed);
     let mut seen = HashSet::new();
-    seen.insert(seed.artifact_key());
+    seen.insert(seed.implementation_key());
     let mut beam = vec![seed];
     let mut explored = 0;
     let mut rejected = 0;
@@ -437,6 +437,7 @@ where
     let seed = problem.seed();
     let mut state = FNV_OFFSET;
     state = hash_str(state, "optimization-selection-cache");
+    state = hash_str(state, "implementation-dedupe-v1");
     state = hash_str(state, score_namespace);
     state = hash_u64(state, config.beam_width as u64);
     state = hash_u64(state, config.max_depth as u64);
@@ -478,6 +479,7 @@ where
     let seed = problem.seed();
     let mut state = FNV_OFFSET;
     state = hash_str(state, "auto-optimization-selection-cache");
+    state = hash_str(state, "implementation-dedupe-v1");
     state = hash_str(state, score_namespace);
     state = hash_u64(state, config.beam_width as u64);
     state = hash_u64(state, config.max_steps as u64);
