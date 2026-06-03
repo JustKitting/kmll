@@ -9,8 +9,9 @@ use std::{
 use nn_rust_inference::runtime;
 
 use super::{
-    KernelIrModule, KernelIrOpKind, KnownSassOpcode, SassAnalysisModule, SassLiftedModule,
-    SassLiftedOpClass, SassModifier, SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind,
+    KernelIrModule, KernelIrOpKind, KnownSassOpcode, MemoryAddressBase, MemoryAddressImmediate,
+    MemorySpace, RegisterRef, SassAnalysisModule, SassLiftedModule, SassLiftedOpClass,
+    SassMemoryAccessKind, SassModifier, SassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind,
     SassOpcodeCatalogSource, SassPatternModule, SassRegionPath, analyze_sass_ir,
     known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
     render_sass_file_side_by_side,
@@ -548,14 +549,14 @@ pub struct SassCoverageMemoryAccess {
     pub function: String,
     pub address: u64,
     pub predicate: Option<String>,
-    pub kind: String,
-    pub space: String,
+    pub kind: SassMemoryAccessKind,
+    pub space: MemorySpace,
     pub width_bits: Option<u32>,
-    pub value_register: String,
+    pub value_register: RegisterRef,
     pub address_expr: String,
-    pub address_registers: Vec<String>,
-    pub address_base: Option<String>,
-    pub offset: Option<String>,
+    pub address_registers: Vec<RegisterRef>,
+    pub address_base: Option<MemoryAddressBase>,
+    pub offset: Option<MemoryAddressImmediate>,
     pub source: String,
 }
 
@@ -1318,18 +1319,14 @@ fn append_analysis(
                 function: function.name.clone(),
                 address: access.address,
                 predicate: access.predicate.clone(),
-                kind: access.kind.to_string(),
-                space: access.space.to_string(),
+                kind: access.kind,
+                space: access.space,
                 width_bits: access.width_bits,
-                value_register: access.value_register.to_string(),
+                value_register: access.value_register.clone(),
                 address_expr: access.memory_address.to_string(),
-                address_registers: access
-                    .address_registers
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect(),
-                address_base: access.address_base.as_ref().map(ToString::to_string),
-                offset: access.offset.as_ref().map(ToString::to_string),
+                address_registers: access.address_registers.clone(),
+                address_base: access.address_base.clone(),
+                offset: access.offset.clone(),
                 source: access.source.clone(),
             });
         }
@@ -2050,17 +2047,17 @@ fn render_memory_accesses_tsv(report: &SassCoverageReport) -> String {
             tsv(&access.function),
             access.address,
             tsv(access.predicate.as_deref().unwrap_or("")),
-            tsv(&access.kind),
-            tsv(&access.space),
+            tsv(&access.kind.to_string()),
+            tsv(&access.space.to_string()),
             access
                 .width_bits
                 .map(|bits| bits.to_string())
                 .unwrap_or_default(),
-            tsv(&access.value_register),
+            tsv(&access.value_register.to_string()),
             tsv(&access.address_expr),
-            tsv(&access.address_registers.join(",")),
-            tsv(access.address_base.as_deref().unwrap_or("")),
-            tsv(access.offset.as_deref().unwrap_or("")),
+            tsv(&display_list(&access.address_registers)),
+            tsv(&display_optional(access.address_base.as_ref())),
+            tsv(&display_optional(access.offset.as_ref())),
             tsv(&access.source),
         )
         .expect("write to string");
@@ -2075,6 +2072,18 @@ fn render_counts_tsv(header: &str, counts: &[SassOpcodeCount]) -> String {
         writeln!(out, "{}\t{}", tsv(&count.opcode), count.count).expect("write to string");
     }
     out
+}
+
+fn display_list<T: fmt::Display>(values: &[T]) -> String {
+    values
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn display_optional<T: fmt::Display>(value: Option<&T>) -> String {
+    value.map(ToString::to_string).unwrap_or_default()
 }
 
 fn render_unsupported_tsv(report: &SassCoverageReport) -> String {

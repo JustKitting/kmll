@@ -1614,9 +1614,9 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.live_range_count > 0);
     assert!(report.memory_access_count > 0);
     assert!(report.memory_accesses.iter().any(|access| {
-        access.kind == "load"
-            && access.space == "descriptor"
-            && access.address_base.as_deref() == Some("UR4")
+        access.kind == SassMemoryAccessKind::Load
+            && access.space == MemorySpace::Descriptor
+            && access.address_base.as_ref() == Some(&MemoryAddressBase::Descriptor(reg("UR4")))
     }));
     assert!(
         report
