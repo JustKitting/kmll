@@ -288,7 +288,14 @@ fn lift_simple_sass_maps_observed_core_ops() {
         KernelIrOpKind::ReadSpecialRegister { dst, special }
             if dst == "R0" && special == "SR_TID.X"
     ));
-    assert!(matches!(kinds[1], KernelIrOpKind::Load { .. }));
+    assert!(matches!(
+        kinds[1],
+        KernelIrOpKind::Load {
+            space: MemorySpace::Descriptor,
+            access,
+            ..
+        } if access.width_bits.is_none() && access.modifiers.as_slice() == ["E"]
+    ));
     assert!(matches!(
         kinds[3],
         KernelIrOpKind::IntegerAdd {
@@ -297,7 +304,14 @@ fn lift_simple_sass_maps_observed_core_ops() {
             width_bits: None
         } if dst == "R4" && inputs == &vec!["R2".to_string(), "R3".to_string()]
     ));
-    assert!(matches!(kinds[4], KernelIrOpKind::Store { .. }));
+    assert!(matches!(
+        kinds[4],
+        KernelIrOpKind::Store {
+            space: MemorySpace::Descriptor,
+            access,
+            ..
+        } if access.width_bits.is_none() && access.modifiers.as_slice() == ["E"]
+    ));
     assert!(matches!(
         kinds[5],
         KernelIrOpKind::Permute { dst, inputs } if dst == "R5" && inputs.len() == 3
@@ -380,8 +394,12 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
         SassLiftedSemantics::Load {
             space: MemorySpace::Descriptor,
             dst,
-            address
+            address,
+            width_bits,
+            modifiers
         } if dst == "R2" && address == "desc[UR4][R0.64]"
+            && width_bits.is_none()
+            && modifiers.as_slice() == ["E"]
     ));
     assert!(load.outputs.iter().any(|value| value.register == "R2"));
 
@@ -416,8 +434,12 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
         SassLiftedSemantics::Store {
             space: MemorySpace::Descriptor,
             address,
-            value
+            value,
+            width_bits,
+            modifiers
         } if address == "desc[UR8][R0.64]" && value == "R4"
+            && width_bits.is_none()
+            && modifiers.as_slice() == ["E"]
     ));
     assert!(store.inputs.iter().any(|value| value.register == "R4"));
     assert!(store.outputs.is_empty());
@@ -438,7 +460,9 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
     assert!(text.contains("lifted_value_ir"));
     assert!(text.contains("integer-math integer-add"));
     assert!(text.contains("memory load"));
-    assert!(text.contains("semantics=load(space=descriptor,dst=R2,address=desc[UR4][R0.64])"));
+    assert!(text.contains(
+        "semantics=load(space=descriptor,dst=R2,address=desc[UR4][R0.64],width=-,modifiers=[E])"
+    ));
 }
 
 #[test]
@@ -452,6 +476,14 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
         KernelIrOpKind::Exit {
             condition: Some(ref condition)
         } if condition == "P0"
+    )));
+    assert!(ops.iter().any(|op| matches!(
+        op.kind,
+        KernelIrOpKind::Load {
+            access: ref memory_access,
+            ..
+        } if memory_access.width_bits == Some(16)
+            && memory_access.modifiers.as_slice() == ["E", "U16"]
     )));
     assert!(ops.iter().any(|op| matches!(
         op.kind,
@@ -1208,9 +1240,9 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.lifted_ops.iter().any(|op| {
         op.class == "memory"
             && op.kind == "load"
-            && op
-                .semantics
-                .contains("load(space=descriptor,dst=R2,address=desc[UR4][R0.64])")
+            && op.semantics.contains(
+                "load(space=descriptor,dst=R2,address=desc[UR4][R0.64],width=-,modifiers=[E])",
+            )
     }));
     let lifted_ops_tsv =
         fs::read_to_string(&report.lifted_ops_path).expect("lifted ops TSV should be readable");

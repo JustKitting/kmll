@@ -73,11 +73,13 @@ pub enum KernelIrOpKind {
         dst: String,
         address: String,
         space: MemorySpace,
+        access: MemoryAccessInfo,
     },
     Store {
         address: String,
         value: String,
         space: MemorySpace,
+        access: MemoryAccessInfo,
     },
     IntegerAdd {
         dst: String,
@@ -212,6 +214,21 @@ impl fmt::Display for MemorySpace {
             Self::Constant => f.write_str("constant"),
             Self::Descriptor => f.write_str("descriptor"),
             Self::Unknown => f.write_str("unknown"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryAccessInfo {
+    pub width_bits: Option<u32>,
+    pub modifiers: Vec<String>,
+}
+
+impl MemoryAccessInfo {
+    pub fn new(width_bits: Option<u32>, modifiers: Vec<String>) -> Self {
+        Self {
+            width_bits,
+            modifiers,
         }
     }
 }

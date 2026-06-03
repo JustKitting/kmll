@@ -49,8 +49,8 @@ pub use self::{
         simple_kernel_fixtures,
     },
     ir::{
-        KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemorySpace,
-        SassMappingConfidence, lift_sass_module,
+        KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemoryAccessInfo,
+        MemorySpace, SassMappingConfidence, lift_sass_module,
     },
     known_opcodes::{KnownSassOpcode, known_sass_opcodes},
     lifted::{

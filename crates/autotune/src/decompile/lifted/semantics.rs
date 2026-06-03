@@ -20,11 +20,15 @@ pub enum SassLiftedSemantics {
         space: MemorySpace,
         dst: String,
         address: String,
+        width_bits: Option<u32>,
+        modifiers: Vec<String>,
     },
     Store {
         space: MemorySpace,
         address: String,
         value: String,
+        width_bits: Option<u32>,
+        modifiers: Vec<String>,
     },
     IntegerAdd {
         dst: String,
@@ -154,12 +158,26 @@ impl fmt::Display for SassLiftedSemantics {
                 space,
                 dst,
                 address,
-            } => write!(f, "load(space={space},dst={dst},address={address})"),
+                width_bits,
+                modifiers,
+            } => write!(
+                f,
+                "load(space={space},dst={dst},address={address},width={},modifiers=[{}])",
+                option_u32(*width_bits),
+                modifiers.join(",")
+            ),
             Self::Store {
                 space,
                 address,
                 value,
-            } => write!(f, "store(space={space},address={address},value={value})"),
+                width_bits,
+                modifiers,
+            } => write!(
+                f,
+                "store(space={space},address={address},value={value},width={},modifiers=[{}])",
+                option_u32(*width_bits),
+                modifiers.join(",")
+            ),
             Self::IntegerAdd {
                 dst,
                 inputs,
@@ -315,19 +333,25 @@ pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
             dst,
             address,
             space,
+            access,
         } => SassLiftedSemantics::Load {
             space: *space,
             dst: dst.clone(),
             address: address.clone(),
+            width_bits: access.width_bits,
+            modifiers: access.modifiers.clone(),
         },
         KernelIrOpKind::Store {
             address,
             value,
             space,
+            access,
         } => SassLiftedSemantics::Store {
             space: *space,
             address: address.clone(),
             value: value.clone(),
+            width_bits: access.width_bits,
+            modifiers: access.modifiers.clone(),
         },
         KernelIrOpKind::IntegerAdd {
             dst,

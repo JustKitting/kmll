@@ -1,5 +1,5 @@
 use super::super::super::sass::SassInstruction;
-use super::super::types::{KernelIrOpKind, MemorySpace};
+use super::super::types::{KernelIrOpKind, MemoryAccessInfo, MemorySpace};
 use super::{LiftResult, operands::map_two_operands};
 
 pub(super) fn lift(opcode: &str, instruction: &SassInstruction) -> Option<LiftResult> {
@@ -9,6 +9,7 @@ pub(super) fn lift(opcode: &str, instruction: &SassInstruction) -> Option<LiftRe
         }),
         "LD" | "LDG" | "LDS" | "LDL" => {
             map_two_operands(instruction, |dst, address| KernelIrOpKind::Load {
+                access: memory_access_info(instruction),
                 dst,
                 space: memory_space(opcode, &address),
                 address,
@@ -16,6 +17,7 @@ pub(super) fn lift(opcode: &str, instruction: &SassInstruction) -> Option<LiftRe
         }
         "ST" | "STG" | "STS" | "STL" => {
             map_two_operands(instruction, |address, value| KernelIrOpKind::Store {
+                access: memory_access_info(instruction),
                 space: memory_space(opcode, &address),
                 address,
                 value,
@@ -36,4 +38,21 @@ fn memory_space(opcode: &str, address: &str) -> MemorySpace {
         "LDC" | "LDCU" | "ULDC" => MemorySpace::Constant,
         _ => MemorySpace::Unknown,
     }
+}
+
+fn memory_access_info(instruction: &SassInstruction) -> MemoryAccessInfo {
+    MemoryAccessInfo::new(
+        memory_width_bits(&instruction.modifiers),
+        instruction.modifiers.clone(),
+    )
+}
+
+fn memory_width_bits(modifiers: &[String]) -> Option<u32> {
+    modifiers.iter().find_map(|modifier| {
+        modifier
+            .strip_prefix('U')
+            .or_else(|| modifier.strip_prefix('S'))
+            .and_then(|bits| bits.parse::<u32>().ok())
+            .or_else(|| modifier.parse::<u32>().ok())
+    })
 }
