@@ -970,13 +970,18 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreImma)
         .expect("IMMA PTX probe should exist");
+    let dmma_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreDmma)
+        .expect("DMMA PTX probe should exist");
 
     assert_eq!(options.compile_arch, "sm_120");
     assert_eq!(
         options.probes,
         vec![
             PtxDecompileProbeKind::TensorCoreHmma,
-            PtxDecompileProbeKind::TensorCoreImma
+            PtxDecompileProbeKind::TensorCoreImma,
+            PtxDecompileProbeKind::TensorCoreDmma
         ]
     );
     assert!(
@@ -994,6 +999,13 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             .contains("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32")
     );
     assert!(imma_probe.source.contains("st.global.s32"));
+    assert_eq!(dmma_probe.symbol, "tensor_core_dmma_probe");
+    assert!(
+        dmma_probe
+            .source
+            .contains("mma.sync.aligned.m8n8k4.row.col.f64.f64.f64.f64")
+    );
+    assert!(dmma_probe.source.contains("st.global.f64"));
 }
 
 #[test]

@@ -160,6 +160,7 @@ impl DecompilePtxProbeOptions {
             probes: vec![
                 PtxDecompileProbeKind::TensorCoreHmma,
                 PtxDecompileProbeKind::TensorCoreImma,
+                PtxDecompileProbeKind::TensorCoreDmma,
             ],
         }
     }
