@@ -466,6 +466,99 @@ impl OptimizationActionSpec {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptimizationActionSpaceSet {
+    pub spaces: Vec<OptimizationActionSpace>,
+}
+
+impl OptimizationActionSpaceSet {
+    pub fn new(spaces: impl Into<Vec<OptimizationActionSpace>>) -> Self {
+        Self {
+            spaces: spaces.into(),
+        }
+    }
+
+    pub fn action_count(&self) -> usize {
+        self.spaces
+            .iter()
+            .map(OptimizationActionSpace::action_count)
+            .sum()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OptimizationActionSpace {
+    Split {
+        variants: Vec<OptimizationAxisFactorChoice>,
+    },
+    Unroll {
+        axis: u8,
+        factors: Vec<u32>,
+    },
+    TileGemm {
+        variants: Vec<OptimizationTile3dChoice>,
+    },
+    StrideOrder {
+        orders: Vec<Vec<u8>>,
+    },
+}
+
+impl OptimizationActionSpace {
+    pub fn action_count(&self) -> usize {
+        match self {
+            Self::Split { variants } => variants.len(),
+            Self::Unroll { factors, .. } => factors.len(),
+            Self::TileGemm { variants } => variants.len(),
+            Self::StrideOrder { orders } => orders.len(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptimizationAxisFactorChoice {
+    pub axis: u8,
+    pub factor: u32,
+    pub materialization: OptimizationActionMaterialization,
+}
+
+impl OptimizationAxisFactorChoice {
+    pub const fn new(
+        axis: u8,
+        factor: u32,
+        materialization: OptimizationActionMaterialization,
+    ) -> Self {
+        Self {
+            axis,
+            factor,
+            materialization,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptimizationTile3dChoice {
+    pub m: u32,
+    pub n: u32,
+    pub k: u32,
+    pub materialization: OptimizationActionMaterialization,
+}
+
+impl OptimizationTile3dChoice {
+    pub const fn new(
+        m: u32,
+        n: u32,
+        k: u32,
+        materialization: OptimizationActionMaterialization,
+    ) -> Self {
+        Self {
+            m,
+            n,
+            k,
+            materialization,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptimizationScoreSource {
     Heuristic,
@@ -607,6 +700,7 @@ impl OptimizationSearchConfig {
 pub struct OptimizationSearchReport {
     pub family: String,
     pub config: OptimizationSearchConfig,
+    pub action_space: Option<OptimizationActionSpaceSet>,
     pub explored: usize,
     pub rejected: usize,
     pub best: Option<OptimizationCandidateSpec>,
@@ -625,11 +719,17 @@ impl OptimizationSearchReport {
         Self {
             family: family.into(),
             config,
+            action_space: None,
             explored,
             rejected,
             best,
             beam,
         }
+    }
+
+    pub fn with_action_space(mut self, action_space: OptimizationActionSpaceSet) -> Self {
+        self.action_space = Some(action_space);
+        self
     }
 
     pub fn push_json(&self, out: &mut String, indent: usize) {
@@ -638,6 +738,13 @@ impl OptimizationSearchReport {
         push_json_field_u32(out, "schema_version", 1, indent + 2, true);
         push_json_field_string(out, "family", &self.family, indent + 2, true);
         push_optimization_search_config_json(out, "config", self.config, indent + 2, true);
+        push_optimization_action_space_set_json(
+            out,
+            "action_space",
+            self.action_space.as_ref(),
+            indent + 2,
+            true,
+        );
         push_json_field_usize(out, "explored", self.explored, indent + 2, true);
         push_json_field_usize(out, "rejected", self.rejected, indent + 2, true);
         push_optimization_candidate_field_json(out, "best", self.best.as_ref(), indent + 2, true);
@@ -723,6 +830,7 @@ pub struct AutoOptimizationSearchStep {
 pub struct AutoOptimizationSearchReport {
     pub family: String,
     pub config: AutoOptimizationSearchConfig,
+    pub action_space: Option<OptimizationActionSpaceSet>,
     pub explored: usize,
     pub rejected: usize,
     pub exit_reason: AutoOptimizationExitReason,
@@ -745,6 +853,7 @@ impl AutoOptimizationSearchReport {
         Self {
             family: family.into(),
             config,
+            action_space: None,
             explored,
             rejected,
             exit_reason,
@@ -754,12 +863,24 @@ impl AutoOptimizationSearchReport {
         }
     }
 
+    pub fn with_action_space(mut self, action_space: OptimizationActionSpaceSet) -> Self {
+        self.action_space = Some(action_space);
+        self
+    }
+
     pub fn push_json(&self, out: &mut String, indent: usize) {
         push_indent(out, indent);
         out.push_str("{\n");
         push_json_field_u32(out, "schema_version", 1, indent + 2, true);
         push_json_field_string(out, "family", &self.family, indent + 2, true);
         push_auto_optimization_search_config_json(out, "config", self.config, indent + 2, true);
+        push_optimization_action_space_set_json(
+            out,
+            "action_space",
+            self.action_space.as_ref(),
+            indent + 2,
+            true,
+        );
         push_json_field_usize(out, "explored", self.explored, indent + 2, true);
         push_json_field_usize(out, "rejected", self.rejected, indent + 2, true);
         push_auto_optimization_exit_reason_json(
@@ -1758,6 +1879,170 @@ fn push_auto_optimization_search_step_json(
     out.push('}');
 }
 
+fn push_optimization_action_space_set_json(
+    out: &mut String,
+    name: &str,
+    action_space: Option<&OptimizationActionSpaceSet>,
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": ");
+    if let Some(action_space) = action_space {
+        out.push_str("{\n");
+        push_json_field_usize(
+            out,
+            "total_actions",
+            action_space.action_count(),
+            indent + 2,
+            true,
+        );
+        push_indent(out, indent + 2);
+        out.push_str("\"spaces\": [\n");
+        for (index, space) in action_space.spaces.iter().enumerate() {
+            if index > 0 {
+                out.push_str(",\n");
+            }
+            push_optimization_action_space_json(out, space, indent + 4);
+        }
+        out.push('\n');
+        push_indent(out, indent + 2);
+        out.push_str("]\n");
+        push_indent(out, indent);
+        out.push('}');
+    } else {
+        out.push_str("null");
+    }
+    push_optional_comma(out, comma);
+}
+
+fn push_optimization_action_space_json(
+    out: &mut String,
+    space: &OptimizationActionSpace,
+    indent: usize,
+) {
+    push_indent(out, indent);
+    out.push_str("{\n");
+    match space {
+        OptimizationActionSpace::Split { variants } => {
+            push_json_field_string(
+                out,
+                "op",
+                OptimizationActionOp::Split.label(),
+                indent + 2,
+                true,
+            );
+            push_json_field_usize(out, "action_count", variants.len(), indent + 2, true);
+            push_indent(out, indent + 2);
+            out.push_str("\"variants\": [\n");
+            for (index, variant) in variants.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(",\n");
+                }
+                push_axis_factor_choice_json(out, variant, indent + 4);
+            }
+            out.push('\n');
+            push_indent(out, indent + 2);
+            out.push_str("]\n");
+        }
+        OptimizationActionSpace::Unroll { axis, factors } => {
+            push_json_field_string(
+                out,
+                "op",
+                OptimizationActionOp::Unroll.label(),
+                indent + 2,
+                true,
+            );
+            push_json_field_u32(out, "axis", u32::from(*axis), indent + 2, true);
+            push_json_field_usize(out, "action_count", factors.len(), indent + 2, true);
+            push_json_field_u32_array(out, "factors", factors, indent + 2, false);
+        }
+        OptimizationActionSpace::TileGemm { variants } => {
+            push_json_field_string(
+                out,
+                "op",
+                OptimizationActionOp::TileGemm.label(),
+                indent + 2,
+                true,
+            );
+            push_json_field_usize(out, "action_count", variants.len(), indent + 2, true);
+            push_indent(out, indent + 2);
+            out.push_str("\"variants\": [\n");
+            for (index, variant) in variants.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(",\n");
+                }
+                push_tile3d_choice_json(out, variant, indent + 4);
+            }
+            out.push('\n');
+            push_indent(out, indent + 2);
+            out.push_str("]\n");
+        }
+        OptimizationActionSpace::StrideOrder { orders } => {
+            push_json_field_string(
+                out,
+                "op",
+                OptimizationActionOp::StrideOrder.label(),
+                indent + 2,
+                true,
+            );
+            push_json_field_usize(out, "action_count", orders.len(), indent + 2, true);
+            push_indent(out, indent + 2);
+            out.push_str("\"orders\": [\n");
+            for (index, order) in orders.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(",\n");
+                }
+                push_indent(out, indent + 4);
+                push_u8_array(out, order);
+            }
+            out.push('\n');
+            push_indent(out, indent + 2);
+            out.push_str("]\n");
+        }
+    }
+    push_indent(out, indent);
+    out.push('}');
+}
+
+fn push_axis_factor_choice_json(
+    out: &mut String,
+    choice: &OptimizationAxisFactorChoice,
+    indent: usize,
+) {
+    push_indent(out, indent);
+    out.push_str("{\n");
+    push_json_field_u32(out, "axis", u32::from(choice.axis), indent + 2, true);
+    push_json_field_u32(out, "factor", choice.factor, indent + 2, true);
+    push_json_field_string(
+        out,
+        "materialization",
+        choice.materialization.label(),
+        indent + 2,
+        false,
+    );
+    push_indent(out, indent);
+    out.push('}');
+}
+
+fn push_tile3d_choice_json(out: &mut String, choice: &OptimizationTile3dChoice, indent: usize) {
+    push_indent(out, indent);
+    out.push_str("{\n");
+    push_json_field_u32(out, "m", choice.m, indent + 2, true);
+    push_json_field_u32(out, "n", choice.n, indent + 2, true);
+    push_json_field_u32(out, "k", choice.k, indent + 2, true);
+    push_json_field_string(
+        out,
+        "materialization",
+        choice.materialization.label(),
+        indent + 2,
+        false,
+    );
+    push_indent(out, indent);
+    out.push('}');
+}
+
 fn push_optimization_candidate_field_json(
     out: &mut String,
     name: &str,
@@ -2151,7 +2436,27 @@ fn push_json_field_u8_array(
 ) {
     push_indent(out, indent);
     push_json_string(out, name);
-    out.push_str(": [");
+    out.push_str(": ");
+    push_u8_array(out, values);
+    push_optional_comma(out, comma);
+}
+
+fn push_json_field_u32_array(
+    out: &mut String,
+    name: &str,
+    values: &[u32],
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": ");
+    push_u32_array(out, values);
+    push_optional_comma(out, comma);
+}
+
+fn push_u8_array(out: &mut String, values: &[u8]) {
+    out.push('[');
     for (index, value) in values.iter().enumerate() {
         if index > 0 {
             out.push_str(", ");
@@ -2159,7 +2464,17 @@ fn push_json_field_u8_array(
         out.push_str(&value.to_string());
     }
     out.push(']');
-    push_optional_comma(out, comma);
+}
+
+fn push_u32_array(out: &mut String, values: &[u32]) {
+    out.push('[');
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&value.to_string());
+    }
+    out.push(']');
 }
 
 fn push_json_string(out: &mut String, value: &str) {
@@ -2345,13 +2660,38 @@ mod tests {
             3,
             Some(candidate.clone()),
             vec![candidate],
-        );
+        )
+        .with_action_space(OptimizationActionSpaceSet::new(vec![
+            OptimizationActionSpace::Split {
+                variants: vec![
+                    OptimizationAxisFactorChoice::new(
+                        0,
+                        4,
+                        OptimizationActionMaterialization::Existing,
+                    ),
+                    OptimizationAxisFactorChoice::new(
+                        0,
+                        8,
+                        OptimizationActionMaterialization::DeferredGenerated,
+                    ),
+                ],
+            },
+            OptimizationActionSpace::Unroll {
+                axis: 1,
+                factors: vec![2, 4, 8],
+            },
+        ]));
 
         let json = report.to_json_string();
 
         assert!(json.contains("\"family\": \"matvec-bf16-row-major\""));
         assert!(json.contains("\"beam_width\": 8"));
         assert!(json.contains("\"require_launchable\": false"));
+        assert!(json.contains("\"action_space\""));
+        assert!(json.contains("\"total_actions\": 5"));
+        assert!(json.contains("\"variants\""));
+        assert!(json.contains("\"materialization\": \"existing\""));
+        assert!(json.contains("\"factors\": [2, 4, 8]"));
         assert!(json.contains("\"launchable\": false"));
         assert!(json.contains("\"action_trace\""));
         assert!(json.contains("\"op\": \"split\""));
@@ -2404,12 +2744,29 @@ mod tests {
             }],
             Some(candidate.clone()),
             vec![candidate],
-        );
+        )
+        .with_action_space(OptimizationActionSpaceSet::new(vec![
+            OptimizationActionSpace::TileGemm {
+                variants: vec![OptimizationTile3dChoice::new(
+                    16,
+                    16,
+                    16,
+                    OptimizationActionMaterialization::Existing,
+                )],
+            },
+            OptimizationActionSpace::StrideOrder {
+                orders: vec![vec![2, 1]],
+            },
+        ]));
 
         let json = report.to_json_string();
 
         assert!(json.contains("\"max_steps\": 2"));
         assert!(json.contains("\"min_score_improvement\": 0.000000000000"));
+        assert!(json.contains("\"action_space\""));
+        assert!(json.contains("\"total_actions\": 2"));
+        assert!(json.contains("\"op\": \"tile-gemm\""));
+        assert!(json.contains("\"orders\""));
         assert!(json.contains("\"exit_reason\""));
         assert!(json.contains("\"label\": \"no-improvement\""));
         assert!(json.contains("\"best_delta\": -1.000000000000"));

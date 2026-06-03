@@ -17,11 +17,11 @@ use cuda_worker::{CudaWorkerPool, SMOKE_LAUNCH_TAPE};
 use nn_rust_inference::{
     autotune::{
         AutoOptimizeConfig, BeamSearchConfig, EmittedKernelOptimizationSelection,
-        GemmRustCudaGenerator, GemmSearchProblem, KernelArtifactStore, KernelCandidateMetadata,
-        KernelMaterialization, KernelMetadataSearchProblem, KernelOptimizationCacheKey,
-        KernelScheduleAction, KernelScheduleActionArg, MatvecRustCudaGenerator,
-        MatvecSearchProblem, ScheduleTransform, SearchScore, SearchScoreSource,
-        SelectionCacheStatus, auto_optimize_metadata_with_selection_cache,
+        GemmRustCudaGenerator, GemmSearchProblem, KernelActionSearchProblem, KernelArtifactStore,
+        KernelCandidateMetadata, KernelMaterialization, KernelMetadataSearchProblem,
+        KernelOptimizationCacheKey, KernelScheduleAction, KernelScheduleActionArg,
+        MatvecRustCudaGenerator, MatvecSearchProblem, ScheduleTransform, SearchScore,
+        SearchScoreSource, SelectionCacheStatus, auto_optimize_metadata_with_selection_cache,
     },
     chat,
     dtypes::{Bf16, DType},
@@ -565,7 +565,11 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
                 emitted_cached_selection.selection_path.display(),
                 emitted_cached_selection.selection_bytes
             );
-            let report = result.auto_optimization_report("gemm-f32-bf16-row-col-row", config);
+            let report = result.auto_optimization_report_with_action_space(
+                "gemm-f32-bf16-row-col-row",
+                config,
+                &problem.search_space(),
+            );
             let emitted_report = store.emit_auto_search_report(&report)?;
             println!(
                 "emitted_auto_search_report report_key={} report_path={} report_bytes={}",
@@ -827,7 +831,11 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
                 emitted_cached_selection.selection_path.display(),
                 emitted_cached_selection.selection_bytes
             );
-            let report = result.auto_optimization_report("matvec-bf16-row-major", config);
+            let report = result.auto_optimization_report_with_action_space(
+                "matvec-bf16-row-major",
+                config,
+                &problem.search_space(),
+            );
             let emitted_report = store.emit_auto_search_report(&report)?;
             println!(
                 "emitted_auto_search_report report_key={} report_path={} report_bytes={}",

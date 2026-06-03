@@ -11,10 +11,14 @@ pub use nn_rust_profiling::{
     AutoOptimizationSearchConfig, AutoOptimizationSearchReport, AutoOptimizationSearchStep,
     OptimizationActionArg as KernelScheduleActionArg,
     OptimizationActionMaterialization as KernelActionMaterialization,
-    OptimizationActionOp as KernelScheduleActionOp, OptimizationActionSpec as KernelScheduleAction,
-    OptimizationCandidateSpec, OptimizationScore as SearchScore,
-    OptimizationScoreSource as SearchScoreSource, OptimizationSearchConfig,
-    OptimizationSearchReport, OptimizationTiming,
+    OptimizationActionOp as KernelScheduleActionOp,
+    OptimizationActionSpace as ProfilingActionSpace,
+    OptimizationActionSpaceSet as ProfilingActionSpaceSet,
+    OptimizationActionSpec as KernelScheduleAction,
+    OptimizationAxisFactorChoice as ProfilingAxisFactorChoice, OptimizationCandidateSpec,
+    OptimizationScore as SearchScore, OptimizationScoreSource as SearchScoreSource,
+    OptimizationSearchConfig, OptimizationSearchReport,
+    OptimizationTile3dChoice as ProfilingTile3dChoice, OptimizationTiming,
 };
 use nn_rust_profiling::{
     CudaLaunchSpec, NumericKind, OperationKind, OperationRoute, ProfileDuration, ProfileTimeSource,
@@ -820,6 +824,16 @@ impl BeamSearchResult {
                 .collect(),
         )
     }
+
+    pub fn optimization_report_with_action_space(
+        &self,
+        family: impl Into<String>,
+        config: BeamSearchConfig,
+        action_space: &KernelActionSpaceSet,
+    ) -> OptimizationSearchReport {
+        self.optimization_report(family, config)
+            .with_action_space(action_space.optimization_spec())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -882,6 +896,20 @@ impl AutoOptimizeResult {
             .optimization_report(family, config.as_beam_search_config())
     }
 
+    pub fn optimization_report_with_action_space(
+        &self,
+        family: impl Into<String>,
+        config: AutoOptimizeConfig,
+        action_space: &KernelActionSpaceSet,
+    ) -> OptimizationSearchReport {
+        self.as_beam_search_result()
+            .optimization_report_with_action_space(
+                family,
+                config.as_beam_search_config(),
+                action_space,
+            )
+    }
+
     pub fn auto_optimization_report(
         &self,
         family: impl Into<String>,
@@ -907,6 +935,16 @@ impl AutoOptimizeResult {
                 .map(KernelCandidateMetadata::optimization_spec)
                 .collect(),
         )
+    }
+
+    pub fn auto_optimization_report_with_action_space(
+        &self,
+        family: impl Into<String>,
+        config: AutoOptimizeConfig,
+        action_space: &KernelActionSpaceSet,
+    ) -> AutoOptimizationSearchReport {
+        self.auto_optimization_report(family, config)
+            .with_action_space(action_space.optimization_spec())
     }
 }
 
@@ -991,6 +1029,15 @@ impl KernelActionSpaceSet {
             .flat_map(KernelActionSpace::actions)
             .collect()
     }
+
+    pub fn optimization_spec(&self) -> ProfilingActionSpaceSet {
+        ProfilingActionSpaceSet::new(
+            self.spaces
+                .iter()
+                .map(KernelActionSpace::optimization_spec)
+                .collect::<Vec<_>>(),
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1044,6 +1091,43 @@ impl KernelActionSpace {
                 .cloned()
                 .map(KernelScheduleAction::stride_order)
                 .collect(),
+        }
+    }
+
+    fn optimization_spec(&self) -> ProfilingActionSpace {
+        match self {
+            Self::Split { variants } => ProfilingActionSpace::Split {
+                variants: variants
+                    .iter()
+                    .map(|variant| {
+                        ProfilingAxisFactorChoice::new(
+                            variant.axis,
+                            variant.factor,
+                            variant.materialization,
+                        )
+                    })
+                    .collect(),
+            },
+            Self::Unroll { axis, factors } => ProfilingActionSpace::Unroll {
+                axis: *axis,
+                factors: factors.clone(),
+            },
+            Self::TileGemm { variants } => ProfilingActionSpace::TileGemm {
+                variants: variants
+                    .iter()
+                    .map(|variant| {
+                        ProfilingTile3dChoice::new(
+                            variant.tile.m,
+                            variant.tile.n,
+                            variant.tile.k,
+                            variant.materialization,
+                        )
+                    })
+                    .collect(),
+            },
+            Self::StrideOrder { orders } => ProfilingActionSpace::StrideOrder {
+                orders: orders.clone(),
+            },
         }
     }
 }
@@ -3543,6 +3627,7 @@ fn search_report_key(report: &OptimizationSearchReport) -> KernelMetadataKey {
     state = hash_u64(state, report.config.beam_width as u64);
     state = hash_u64(state, report.config.max_depth as u64);
     state = hash_u64(state, u64::from(report.config.require_launchable));
+    state = hash_optional_profiling_action_space_set(state, report.action_space.as_ref());
     state = hash_u64(state, report.explored as u64);
     state = hash_u64(state, report.rejected as u64);
     if let Some(best) = &report.best {
@@ -3564,6 +3649,7 @@ fn auto_search_report_key(report: &AutoOptimizationSearchReport) -> KernelMetada
     state = hash_u64(state, report.config.max_steps as u64);
     state = hash_u64(state, u64::from(report.config.require_launchable));
     state = hash_u64(state, report.config.min_score_improvement.to_bits());
+    state = hash_optional_profiling_action_space_set(state, report.action_space.as_ref());
     state = hash_u64(state, report.explored as u64);
     state = hash_u64(state, report.rejected as u64);
     state = hash_str(state, report.exit_reason.label());
@@ -3594,6 +3680,72 @@ fn auto_search_report_key(report: &AutoOptimizationSearchReport) -> KernelMetada
         state = hash_optimization_candidate(state, candidate);
     }
     KernelMetadataKey(state)
+}
+
+fn hash_optional_profiling_action_space_set(
+    state: u64,
+    action_space: Option<&ProfilingActionSpaceSet>,
+) -> u64 {
+    if let Some(action_space) = action_space {
+        hash_profiling_action_space_set(state, action_space)
+    } else {
+        hash_str(state, "no-action-space")
+    }
+}
+
+fn hash_profiling_action_space_set(mut state: u64, action_space: &ProfilingActionSpaceSet) -> u64 {
+    state = hash_str(state, "profiling-action-space-set");
+    state = hash_u64(state, action_space.spaces.len() as u64);
+    for space in &action_space.spaces {
+        state = hash_profiling_action_space(state, space);
+    }
+    state
+}
+
+fn hash_profiling_action_space(mut state: u64, action_space: &ProfilingActionSpace) -> u64 {
+    match action_space {
+        ProfilingActionSpace::Split { variants } => {
+            state = hash_str(state, "split");
+            state = hash_u64(state, variants.len() as u64);
+            for variant in variants {
+                state = hash_u64(state, variant.axis as u64);
+                state = hash_u64(state, variant.factor as u64);
+                state = hash_str(state, variant.materialization.label());
+            }
+            state
+        }
+        ProfilingActionSpace::Unroll { axis, factors } => {
+            state = hash_str(state, "unroll");
+            state = hash_u64(state, *axis as u64);
+            state = hash_u64(state, factors.len() as u64);
+            for factor in factors {
+                state = hash_u64(state, *factor as u64);
+            }
+            state
+        }
+        ProfilingActionSpace::TileGemm { variants } => {
+            state = hash_str(state, "tile-gemm");
+            state = hash_u64(state, variants.len() as u64);
+            for variant in variants {
+                state = hash_u64(state, variant.m as u64);
+                state = hash_u64(state, variant.n as u64);
+                state = hash_u64(state, variant.k as u64);
+                state = hash_str(state, variant.materialization.label());
+            }
+            state
+        }
+        ProfilingActionSpace::StrideOrder { orders } => {
+            state = hash_str(state, "stride-order");
+            state = hash_u64(state, orders.len() as u64);
+            for order in orders {
+                state = hash_u64(state, order.len() as u64);
+                for axis in order {
+                    state = hash_u64(state, *axis as u64);
+                }
+            }
+            state
+        }
+    }
 }
 
 fn hash_optional_score(mut state: u64, score: Option<SearchScore>) -> u64 {
@@ -5379,7 +5531,11 @@ mod tests {
                 + (64.0 - f64::from(plan.reduce_unroll));
             SearchScore::measured(score)
         });
-        let report = result.optimization_report("matvec-bf16-row-major", config);
+        let report = result.optimization_report_with_action_space(
+            "matvec-bf16-row-major",
+            config,
+            &problem.search_space(),
+        );
 
         let emitted = store
             .emit_search_report(&report)
@@ -5413,6 +5569,18 @@ mod tests {
         assert_eq!(
             report_json["config"]["require_launchable"].as_bool(),
             Some(false)
+        );
+        assert_eq!(
+            report_json["action_space"]["total_actions"].as_u64(),
+            Some(problem.search_space().actions().len() as u64)
+        );
+        assert_eq!(
+            report_json["action_space"]["spaces"][0]["op"].as_str(),
+            Some("split")
+        );
+        assert_eq!(
+            report_json["action_space"]["spaces"][1]["op"].as_str(),
+            Some("unroll")
         );
         assert_eq!(report_json["best"]["launchable"].as_bool(), Some(false));
         assert_eq!(
@@ -5462,7 +5630,11 @@ mod tests {
                 SearchScore::heuristic(10.0)
             }
         });
-        let report = result.auto_optimization_report("matvec-bf16-row-major", config);
+        let report = result.auto_optimization_report_with_action_space(
+            "matvec-bf16-row-major",
+            config,
+            &problem.search_space(),
+        );
 
         let emitted = store
             .emit_auto_search_report(&report)
@@ -5488,6 +5660,14 @@ mod tests {
         );
         assert_eq!(report_json["config"]["beam_width"].as_u64(), Some(4));
         assert_eq!(report_json["config"]["max_steps"].as_u64(), Some(2));
+        assert_eq!(
+            report_json["action_space"]["total_actions"].as_u64(),
+            Some(problem.search_space().actions().len() as u64)
+        );
+        assert_eq!(
+            report_json["action_space"]["spaces"][0]["variants"][0]["materialization"].as_str(),
+            Some("existing")
+        );
         assert_eq!(
             report_json["exit_reason"]["label"].as_str(),
             Some("no-improvement")
