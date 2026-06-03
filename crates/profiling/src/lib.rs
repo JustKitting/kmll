@@ -664,6 +664,146 @@ impl OptimizationSearchReport {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AutoOptimizationSearchConfig {
+    pub beam_width: usize,
+    pub max_steps: usize,
+    pub require_launchable: bool,
+    pub min_score_improvement: f64,
+}
+
+impl AutoOptimizationSearchConfig {
+    pub const fn new(
+        beam_width: usize,
+        max_steps: usize,
+        require_launchable: bool,
+        min_score_improvement: f64,
+    ) -> Self {
+        Self {
+            beam_width,
+            max_steps,
+            require_launchable,
+            min_score_improvement,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AutoOptimizationExitReason {
+    CacheHit,
+    MaxSteps,
+    NoCandidates,
+    NoImprovement { best_delta: f64 },
+}
+
+impl AutoOptimizationExitReason {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::CacheHit => "cache-hit",
+            Self::MaxSteps => "max-steps",
+            Self::NoCandidates => "no-candidates",
+            Self::NoImprovement { .. } => "no-improvement",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoOptimizationSearchStep {
+    pub depth: usize,
+    pub input_beam_len: usize,
+    pub generated: usize,
+    pub accepted: usize,
+    pub rejected: usize,
+    pub best_before: Option<OptimizationScore>,
+    pub best_after: Option<OptimizationScore>,
+    pub improvement: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoOptimizationSearchReport {
+    pub family: String,
+    pub config: AutoOptimizationSearchConfig,
+    pub explored: usize,
+    pub rejected: usize,
+    pub exit_reason: AutoOptimizationExitReason,
+    pub steps: Vec<AutoOptimizationSearchStep>,
+    pub best: Option<OptimizationCandidateSpec>,
+    pub beam: Vec<OptimizationCandidateSpec>,
+}
+
+impl AutoOptimizationSearchReport {
+    pub fn new(
+        family: impl Into<String>,
+        config: AutoOptimizationSearchConfig,
+        explored: usize,
+        rejected: usize,
+        exit_reason: AutoOptimizationExitReason,
+        steps: Vec<AutoOptimizationSearchStep>,
+        best: Option<OptimizationCandidateSpec>,
+        beam: Vec<OptimizationCandidateSpec>,
+    ) -> Self {
+        Self {
+            family: family.into(),
+            config,
+            explored,
+            rejected,
+            exit_reason,
+            steps,
+            best,
+            beam,
+        }
+    }
+
+    pub fn push_json(&self, out: &mut String, indent: usize) {
+        push_indent(out, indent);
+        out.push_str("{\n");
+        push_json_field_u32(out, "schema_version", 1, indent + 2, true);
+        push_json_field_string(out, "family", &self.family, indent + 2, true);
+        push_auto_optimization_search_config_json(out, "config", self.config, indent + 2, true);
+        push_json_field_usize(out, "explored", self.explored, indent + 2, true);
+        push_json_field_usize(out, "rejected", self.rejected, indent + 2, true);
+        push_auto_optimization_exit_reason_json(
+            out,
+            "exit_reason",
+            self.exit_reason,
+            indent + 2,
+            true,
+        );
+        push_indent(out, indent + 2);
+        out.push_str("\"steps\": [\n");
+        for (index, step) in self.steps.iter().enumerate() {
+            if index > 0 {
+                out.push_str(",\n");
+            }
+            push_auto_optimization_search_step_json(out, step, indent + 4);
+        }
+        out.push('\n');
+        push_indent(out, indent + 2);
+        out.push_str("],\n");
+        push_optimization_candidate_field_json(out, "best", self.best.as_ref(), indent + 2, true);
+        push_indent(out, indent + 2);
+        out.push_str("\"beam\": [\n");
+        for (index, candidate) in self.beam.iter().enumerate() {
+            if index > 0 {
+                out.push_str(",\n");
+            }
+            push_optimization_candidate_json(out, candidate, indent + 4);
+        }
+        out.push('\n');
+        push_indent(out, indent + 2);
+        out.push_str("]\n");
+        push_indent(out, indent);
+        out.push('}');
+    }
+
+    pub fn to_json_string(&self) -> String {
+        let mut out = String::new();
+        self.push_json(&mut out, 0);
+        out.push('\n');
+        out
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProfileSegment {
     pub name: String,
@@ -1547,6 +1687,77 @@ fn push_optimization_search_config_json(
     push_optional_comma(out, comma);
 }
 
+fn push_auto_optimization_search_config_json(
+    out: &mut String,
+    name: &str,
+    config: AutoOptimizationSearchConfig,
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": {\n");
+    push_json_field_usize(out, "beam_width", config.beam_width, indent + 2, true);
+    push_json_field_usize(out, "max_steps", config.max_steps, indent + 2, true);
+    push_json_field_bool(
+        out,
+        "require_launchable",
+        config.require_launchable,
+        indent + 2,
+        true,
+    );
+    push_json_field_f64(
+        out,
+        "min_score_improvement",
+        config.min_score_improvement,
+        indent + 2,
+        false,
+    );
+    push_indent(out, indent);
+    out.push('}');
+    push_optional_comma(out, comma);
+}
+
+fn push_auto_optimization_exit_reason_json(
+    out: &mut String,
+    name: &str,
+    reason: AutoOptimizationExitReason,
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    out.push_str(": {\n");
+    push_json_field_string(out, "label", reason.label(), indent + 2, true);
+    let delta = match reason {
+        AutoOptimizationExitReason::NoImprovement { best_delta } => Some(best_delta),
+        _ => None,
+    };
+    push_json_field_optional_f64(out, "best_delta", delta, indent + 2, false);
+    push_indent(out, indent);
+    out.push('}');
+    push_optional_comma(out, comma);
+}
+
+fn push_auto_optimization_search_step_json(
+    out: &mut String,
+    step: &AutoOptimizationSearchStep,
+    indent: usize,
+) {
+    push_indent(out, indent);
+    out.push_str("{\n");
+    push_json_field_usize(out, "depth", step.depth, indent + 2, true);
+    push_json_field_usize(out, "input_beam_len", step.input_beam_len, indent + 2, true);
+    push_json_field_usize(out, "generated", step.generated, indent + 2, true);
+    push_json_field_usize(out, "accepted", step.accepted, indent + 2, true);
+    push_json_field_usize(out, "rejected", step.rejected, indent + 2, true);
+    push_optimization_score_json(out, "best_before", step.best_before, indent + 2, true);
+    push_optimization_score_json(out, "best_after", step.best_after, indent + 2, true);
+    push_json_field_optional_f64(out, "improvement", step.improvement, indent + 2, false);
+    push_indent(out, indent);
+    out.push('}');
+}
+
 fn push_optimization_candidate_field_json(
     out: &mut String,
     name: &str,
@@ -1846,6 +2057,23 @@ fn push_json_field_f64(out: &mut String, name: &str, value: f64, indent: usize, 
     push_optional_comma(out, comma);
 }
 
+fn push_json_field_optional_f64(
+    out: &mut String,
+    name: &str,
+    value: Option<f64>,
+    indent: usize,
+    comma: bool,
+) {
+    push_indent(out, indent);
+    push_json_string(out, name);
+    if let Some(value) = value {
+        out.push_str(&format!(": {:.12}", value));
+    } else {
+        out.push_str(": null");
+    }
+    push_optional_comma(out, comma);
+}
+
 fn push_json_field_u32(out: &mut String, name: &str, value: u32, indent: usize, comma: bool) {
     push_indent(out, indent);
     push_json_string(out, name);
@@ -2130,6 +2358,67 @@ mod tests {
         assert!(json.contains("\"op\": \"unroll\""));
         assert!(json.contains("\"score\""));
         assert!(json.contains("\"source\": \"measured\""));
+        assert!(!json.contains("#[kernel]"));
+        assert!(!json.contains("pub fn"));
+        assert!(!json.contains("pub struct Bf16"));
+    }
+
+    #[test]
+    fn auto_optimization_search_report_serializes_steps_and_exit_metadata() {
+        let launch = CudaLaunchSpec::new("matvec_bf16_rows8", (16, 1, 1), (256, 1, 1), 0);
+        let operation = TypedOperationSpec::new(
+            "row-major-warp-rows8::bf16",
+            OperationKind::Matvec,
+            OperationRoute::CudaKernel,
+        )
+        .with_launch(launch.clone());
+        let candidate = OptimizationCandidateSpec::new(
+            "matvec-bf16-row-major",
+            "abc987",
+            "row-major-matvec-generator",
+            launch,
+            operation,
+        )
+        .with_launchable(false)
+        .with_action_trace(vec![OptimizationActionSpec::split(
+            0,
+            8,
+            OptimizationActionMaterialization::DeferredGenerated,
+        )])
+        .with_score(OptimizationScore::heuristic(2.0));
+        let report = AutoOptimizationSearchReport::new(
+            "matvec-bf16-row-major",
+            AutoOptimizationSearchConfig::new(8, 2, false, 0.0),
+            8,
+            0,
+            AutoOptimizationExitReason::NoImprovement { best_delta: -1.0 },
+            vec![AutoOptimizationSearchStep {
+                depth: 1,
+                input_beam_len: 8,
+                generated: 12,
+                accepted: 8,
+                rejected: 0,
+                best_before: OptimizationScore::heuristic(2.0),
+                best_after: OptimizationScore::heuristic(3.0),
+                improvement: Some(-1.0),
+            }],
+            Some(candidate.clone()),
+            vec![candidate],
+        );
+
+        let json = report.to_json_string();
+
+        assert!(json.contains("\"max_steps\": 2"));
+        assert!(json.contains("\"min_score_improvement\": 0.000000000000"));
+        assert!(json.contains("\"exit_reason\""));
+        assert!(json.contains("\"label\": \"no-improvement\""));
+        assert!(json.contains("\"best_delta\": -1.000000000000"));
+        assert!(json.contains("\"steps\""));
+        assert!(json.contains("\"input_beam_len\": 8"));
+        assert!(json.contains("\"best_before\""));
+        assert!(json.contains("\"best_after\""));
+        assert!(json.contains("\"improvement\": -1.000000000000"));
+        assert!(json.contains("\"action_trace\""));
         assert!(!json.contains("#[kernel]"));
         assert!(!json.contains("pub fn"));
         assert!(!json.contains("pub struct Bf16"));

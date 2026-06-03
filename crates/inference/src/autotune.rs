@@ -6,17 +6,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use nn_rust_profiling::{
-    CudaLaunchSpec, NumericKind, OperationKind, OperationRoute, ProfileDuration, ProfileTimeSource,
-    SampleStats, TensorTypeSpec, TypedOperationSpec,
-};
 pub use nn_rust_profiling::{
+    AutoOptimizationExitReason as ProfilingAutoOptimizationExitReason,
+    AutoOptimizationSearchConfig, AutoOptimizationSearchReport, AutoOptimizationSearchStep,
     OptimizationActionArg as KernelScheduleActionArg,
     OptimizationActionMaterialization as KernelActionMaterialization,
     OptimizationActionOp as KernelScheduleActionOp, OptimizationActionSpec as KernelScheduleAction,
     OptimizationCandidateSpec, OptimizationScore as SearchScore,
     OptimizationScoreSource as SearchScoreSource, OptimizationSearchConfig,
     OptimizationSearchReport, OptimizationTiming,
+};
+use nn_rust_profiling::{
+    CudaLaunchSpec, NumericKind, OperationKind, OperationRoute, ProfileDuration, ProfileTimeSource,
+    SampleStats, TensorTypeSpec, TypedOperationSpec,
 };
 use serde_json::{Value, json};
 
@@ -336,6 +338,13 @@ impl KernelArtifactStore {
             .join(format!("{}.json", search_report_key(report).hex()))
     }
 
+    pub fn auto_search_report_path_for(&self, report: &AutoOptimizationSearchReport) -> PathBuf {
+        self.root
+            .join("auto-search-reports")
+            .join(sanitize_path_component(&report.family))
+            .join(format!("{}.json", auto_search_report_key(report).hex()))
+    }
+
     pub fn selection_path_for(&self, selection: &KernelOptimizationSelection) -> PathBuf {
         self.root
             .join("selections")
@@ -363,6 +372,24 @@ impl KernelArtifactStore {
         fs::write(&path, report_json.as_bytes())?;
         Ok(EmittedSearchReport {
             report_key: search_report_key(report),
+            report_path: path,
+            report_bytes: report_json.len(),
+        })
+    }
+
+    pub fn emit_auto_search_report(
+        &self,
+        report: &AutoOptimizationSearchReport,
+    ) -> Result<EmittedSearchReport, KernelGenerationError> {
+        let path = self.auto_search_report_path_for(report);
+        fs::create_dir_all(
+            path.parent()
+                .expect("auto search report path should have a parent directory"),
+        )?;
+        let report_json = report.to_json_string();
+        fs::write(&path, report_json.as_bytes())?;
+        Ok(EmittedSearchReport {
+            report_key: auto_search_report_key(report),
             report_path: path,
             report_bytes: report_json.len(),
         })
@@ -823,6 +850,59 @@ impl AutoOptimizeResult {
     ) -> OptimizationSearchReport {
         self.as_beam_search_result()
             .optimization_report(family, config.as_beam_search_config())
+    }
+
+    pub fn auto_optimization_report(
+        &self,
+        family: impl Into<String>,
+        config: AutoOptimizeConfig,
+    ) -> AutoOptimizationSearchReport {
+        AutoOptimizationSearchReport::new(
+            family,
+            AutoOptimizationSearchConfig::new(
+                config.beam_width,
+                config.max_steps,
+                config.require_launchable,
+                config.min_score_improvement,
+            ),
+            self.explored,
+            self.rejected,
+            profiling_auto_exit_reason(self.exit_reason),
+            self.steps.iter().map(profiling_auto_search_step).collect(),
+            self.best
+                .as_ref()
+                .map(KernelCandidateMetadata::optimization_spec),
+            self.beam
+                .iter()
+                .map(KernelCandidateMetadata::optimization_spec)
+                .collect(),
+        )
+    }
+}
+
+fn profiling_auto_exit_reason(
+    reason: AutoOptimizeExitReason,
+) -> ProfilingAutoOptimizationExitReason {
+    match reason {
+        AutoOptimizeExitReason::CacheHit => ProfilingAutoOptimizationExitReason::CacheHit,
+        AutoOptimizeExitReason::MaxSteps => ProfilingAutoOptimizationExitReason::MaxSteps,
+        AutoOptimizeExitReason::NoCandidates => ProfilingAutoOptimizationExitReason::NoCandidates,
+        AutoOptimizeExitReason::NoImprovement { best_delta } => {
+            ProfilingAutoOptimizationExitReason::NoImprovement { best_delta }
+        }
+    }
+}
+
+fn profiling_auto_search_step(step: &AutoOptimizeStep) -> AutoOptimizationSearchStep {
+    AutoOptimizationSearchStep {
+        depth: step.depth,
+        input_beam_len: step.input_beam_len,
+        generated: step.generated,
+        accepted: step.accepted,
+        rejected: step.rejected,
+        best_before: step.best_before,
+        best_after: step.best_after,
+        improvement: step.improvement,
     }
 }
 
@@ -3260,6 +3340,56 @@ fn search_report_key(report: &OptimizationSearchReport) -> KernelMetadataKey {
     KernelMetadataKey(state)
 }
 
+fn auto_search_report_key(report: &AutoOptimizationSearchReport) -> KernelMetadataKey {
+    let mut state = FNV_OFFSET;
+    state = hash_str(state, "auto-optimization-search-report");
+    state = hash_str(state, &report.family);
+    state = hash_u64(state, report.config.beam_width as u64);
+    state = hash_u64(state, report.config.max_steps as u64);
+    state = hash_u64(state, u64::from(report.config.require_launchable));
+    state = hash_u64(state, report.config.min_score_improvement.to_bits());
+    state = hash_u64(state, report.explored as u64);
+    state = hash_u64(state, report.rejected as u64);
+    state = hash_str(state, report.exit_reason.label());
+    if let ProfilingAutoOptimizationExitReason::NoImprovement { best_delta } = report.exit_reason {
+        state = hash_u64(state, best_delta.to_bits());
+    }
+    for step in &report.steps {
+        state = hash_u64(state, step.depth as u64);
+        state = hash_u64(state, step.input_beam_len as u64);
+        state = hash_u64(state, step.generated as u64);
+        state = hash_u64(state, step.accepted as u64);
+        state = hash_u64(state, step.rejected as u64);
+        state = hash_optional_score(state, step.best_before);
+        state = hash_optional_score(state, step.best_after);
+        if let Some(improvement) = step.improvement {
+            state = hash_str(state, "improvement");
+            state = hash_u64(state, improvement.to_bits());
+        } else {
+            state = hash_str(state, "no-improvement-value");
+        }
+    }
+    if let Some(best) = &report.best {
+        state = hash_optimization_candidate(state, best);
+    } else {
+        state = hash_str(state, "no-best");
+    }
+    for candidate in &report.beam {
+        state = hash_optimization_candidate(state, candidate);
+    }
+    KernelMetadataKey(state)
+}
+
+fn hash_optional_score(mut state: u64, score: Option<SearchScore>) -> u64 {
+    if let Some(score) = score {
+        state = hash_str(state, "score");
+        state = hash_str(state, score.source.label());
+        hash_u64(state, score.value.to_bits())
+    } else {
+        hash_str(state, "no-score")
+    }
+}
+
 fn hash_action_space_set(mut state: u64, action_space: &KernelActionSpaceSet) -> u64 {
     state = hash_str(state, "action-space-set");
     state = hash_u64(state, action_space.spaces.len() as u64);
@@ -4960,6 +5090,79 @@ mod tests {
             report_json["beam"]
                 .as_array()
                 .is_some_and(|beam| !beam.is_empty())
+        );
+        assert!(!report_text.contains("#[kernel]"));
+        assert!(!report_text.contains("pub fn matvec_bf16"));
+        assert!(!report_text.contains("pub struct Bf16"));
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn artifact_store_writes_auto_search_report_with_step_metadata() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+        let problem = MatvecSearchProblem::bf16_row_major(128, 256);
+        let config = AutoOptimizeConfig {
+            beam_width: 4,
+            max_steps: 2,
+            require_launchable: false,
+            min_score_improvement: 0.0,
+        };
+        let result = auto_optimize_metadata_with_scorer(&problem, config, |candidate| {
+            let plan = schedule_matvec_plan(&candidate.schedule)?;
+            if plan.reduce_unroll == MatvecSchedulePlan::DEFAULT_REDUCE_UNROLL {
+                SearchScore::heuristic(1.0)
+            } else {
+                SearchScore::heuristic(10.0)
+            }
+        });
+        let report = result.auto_optimization_report("matvec-bf16-row-major", config);
+
+        let emitted = store
+            .emit_auto_search_report(&report)
+            .expect("artifact store should write compact auto-search report");
+
+        assert!(emitted.report_path.starts_with(store.root()));
+        assert!(
+            emitted
+                .report_path
+                .components()
+                .any(|component| component.as_os_str() == "auto-search-reports")
+        );
+        assert!(emitted.report_bytes > 0);
+
+        let report_text = fs::read_to_string(&emitted.report_path)
+            .expect("auto-search report should be readable");
+        let report_json: Value =
+            serde_json::from_str(&report_text).expect("auto-search report should be valid JSON");
+
+        assert_eq!(
+            report_json["family"].as_str(),
+            Some("matvec-bf16-row-major")
+        );
+        assert_eq!(report_json["config"]["beam_width"].as_u64(), Some(4));
+        assert_eq!(report_json["config"]["max_steps"].as_u64(), Some(2));
+        assert_eq!(
+            report_json["exit_reason"]["label"].as_str(),
+            Some("no-improvement")
+        );
+        assert!(
+            report_json["steps"]
+                .as_array()
+                .is_some_and(|steps| !steps.is_empty())
+        );
+        let steps = report_json["steps"]
+            .as_array()
+            .expect("steps should be serialized as an array");
+        assert!(
+            steps
+                .iter()
+                .any(|step| step["best_before"].is_object() && step["best_after"].is_object())
+        );
+        assert_eq!(
+            report_json["best"]["action_trace"][0]["op"].as_str(),
+            Some("split")
         );
         assert!(!report_text.contains("#[kernel]"));
         assert!(!report_text.contains("pub fn matvec_bf16"));
