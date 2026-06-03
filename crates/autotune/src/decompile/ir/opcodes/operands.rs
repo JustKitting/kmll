@@ -3,7 +3,7 @@ use super::super::super::sass::{
 };
 use super::super::types::{
     AggregateOperand, ControlTarget, KernelIrOpKind, PredicateCondition, RegisterRef,
-    SassMappingConfidence, ScalarOperand,
+    SassMappingConfidence, SassOpcode, ScalarOperand,
 };
 use super::LiftResult;
 
@@ -138,7 +138,7 @@ pub(super) fn map_warp_shuffle_operands(
 pub(super) fn unsupported_arity(instruction: &SassInstruction, expected: usize) -> LiftResult {
     (
         KernelIrOpKind::Unsupported {
-            opcode: instruction.opcode.clone(),
+            opcode: SassOpcode::new(instruction.opcode.clone()),
             reason: format!(
                 "expected at least {expected} operands, saw {}",
                 instruction.operands.len()

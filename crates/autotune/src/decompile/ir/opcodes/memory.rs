@@ -1,7 +1,7 @@
 use super::super::super::sass::{SassInstruction, SassOperand, SassOperandKind};
 use super::super::types::{
     KernelIrOpKind, MemoryAccessInfo, MemoryAddress, MemoryAddressKind, MemorySpace, RegisterRef,
-    SassMappingConfidence,
+    SassMappingConfidence, SassOpcode,
 };
 use super::LiftResult;
 
@@ -62,7 +62,7 @@ fn lift_load_const(instruction: &SassInstruction) -> LiftResult {
 fn unsupported_arity(instruction: &SassInstruction, expected: usize) -> LiftResult {
     (
         KernelIrOpKind::Unsupported {
-            opcode: instruction.opcode.clone(),
+            opcode: SassOpcode::new(instruction.opcode.clone()),
             reason: format!(
                 "expected {expected} operands, saw {}",
                 instruction.operands.len()

@@ -76,7 +76,7 @@ impl SassOpcode {
 
     pub fn from_ir_op(op: &KernelIrOp) -> Self {
         match &op.kind {
-            KernelIrOpKind::Unsupported { opcode, .. } => Self::new(opcode.clone()),
+            KernelIrOpKind::Unsupported { opcode, .. } => opcode.clone(),
             _ => Self::new(op.source_opcode.clone()),
         }
     }
@@ -158,21 +158,21 @@ pub enum KernelIrOpKind {
         wide: bool,
     },
     TensorCoreMma {
-        opcode: String,
+        opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
         element_type: Option<String>,
         scope: Option<String>,
     },
     TensorCoreMemory {
-        opcode: String,
+        opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
     },
     TensorMemoryAccess {
-        opcode: String,
+        opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
     },
     WarpGroup {
-        opcode: String,
+        opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
     },
     CompareSet {
@@ -227,7 +227,7 @@ pub enum KernelIrOpKind {
     },
     NoOp,
     Unsupported {
-        opcode: String,
+        opcode: SassOpcode,
         reason: String,
     },
 }

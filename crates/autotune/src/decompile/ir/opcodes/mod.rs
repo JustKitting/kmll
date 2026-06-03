@@ -11,7 +11,7 @@ mod tensor;
 mod warp;
 
 use super::super::sass::{SassInstruction, SassPredicate};
-use super::types::{KernelIrOpKind, PredicateCondition, SassMappingConfidence};
+use super::types::{KernelIrOpKind, PredicateCondition, SassMappingConfidence, SassOpcode};
 
 pub(super) type LiftResult = (KernelIrOpKind, SassMappingConfidence);
 
@@ -39,7 +39,7 @@ pub(super) fn lift_kind(instruction: &SassInstruction) -> LiftResult {
 fn unsupported_opcode(instruction: &SassInstruction) -> LiftResult {
     (
         KernelIrOpKind::Unsupported {
-            opcode: instruction.opcode.clone(),
+            opcode: SassOpcode::new(instruction.opcode.clone()),
             reason: "no local mapping for opcode yet".to_string(),
         },
         SassMappingConfidence::Unsupported,

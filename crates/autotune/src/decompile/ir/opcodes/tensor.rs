@@ -1,4 +1,4 @@
-use super::super::types::{AggregateOperand, KernelIrOpKind, SassMappingConfidence};
+use super::super::types::{AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassOpcode};
 use super::LiftResult;
 
 pub(super) fn lift(opcode: &str, operands: &[AggregateOperand]) -> Option<LiftResult> {
@@ -7,7 +7,7 @@ pub(super) fn lift(opcode: &str, operands: &[AggregateOperand]) -> Option<LiftRe
         "BGMMA" | "BMMA" | "DMMA" | "HGMMA" | "HMMA" | "IGMMA" | "IMMA" | "OMMA" | "QGMMA"
         | "QMMA" | "UTCHMMA" | "UTCIMMA" | "UTCOMMA" | "UTCQMMA" => (
             KernelIrOpKind::TensorCoreMma {
-                opcode: opcode.to_string(),
+                opcode: SassOpcode::new(opcode),
                 operands,
                 element_type: tensor_core_element_type(opcode).map(str::to_string),
                 scope: tensor_core_scope(opcode).map(str::to_string),
@@ -16,21 +16,21 @@ pub(super) fn lift(opcode: &str, operands: &[AggregateOperand]) -> Option<LiftRe
         ),
         "LDT" | "LDTM" | "STT" | "STTM" => (
             KernelIrOpKind::TensorCoreMemory {
-                opcode: opcode.to_string(),
+                opcode: SassOpcode::new(opcode),
                 operands,
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
         "UBLKCP" | "UBLKPF" | "UBLKRED" | "UTMALDG" | "UTMAPF" | "UTMAREDG" | "UTMASTG" => (
             KernelIrOpKind::TensorMemoryAccess {
-                opcode: opcode.to_string(),
+                opcode: SassOpcode::new(opcode),
                 operands,
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
         "WARPGROUP" | "WARPGROUPSET" => (
             KernelIrOpKind::WarpGroup {
-                opcode: opcode.to_string(),
+                opcode: SassOpcode::new(opcode),
                 operands,
             },
             SassMappingConfidence::OpcodeHeuristic,

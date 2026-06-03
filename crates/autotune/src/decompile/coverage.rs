@@ -858,7 +858,7 @@ fn append_opcode_catalog_unsupported(
                 continue;
             };
             opcode_catalog
-                .entry(opcode.clone())
+                .entry(opcode.to_string())
                 .or_default()
                 .unsupported_count += 1;
         }
@@ -959,7 +959,7 @@ fn append_unsupported(
                 sass_path: sass_path.to_path_buf(),
                 function: function.name.clone(),
                 address: op.address,
-                opcode: opcode.clone(),
+                opcode: opcode.to_string(),
                 reason: reason.clone(),
                 raw: op.source.clone(),
             });

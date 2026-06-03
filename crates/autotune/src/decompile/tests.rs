@@ -725,7 +725,7 @@ fn lift_tensor_core_sass_keeps_known_op_families_typed() {
             element_type: Some(element_type),
             scope: Some(scope),
             operands,
-        } if opcode == "HMMA"
+        } if opcode == &SassOpcode::new("HMMA")
             && element_type == "half"
             && scope == "warp"
             && aggregate_texts(operands).as_slice() == ["R8", "R12", "R16", "R20"]
@@ -738,7 +738,8 @@ fn lift_tensor_core_sass_keeps_known_op_families_typed() {
     assert!(matches!(
         &function.ops[1].kind,
         KernelIrOpKind::TensorCoreMemory { opcode, operands }
-            if opcode == "LDT" && aggregate_texts(operands).as_slice() == ["R2", "tmem[UR4]"]
+            if opcode == &SassOpcode::new("LDT")
+                && aggregate_texts(operands).as_slice() == ["R2", "tmem[UR4]"]
     ));
     assert!(matches!(
         &function.ops[1].kind,
@@ -749,7 +750,8 @@ fn lift_tensor_core_sass_keeps_known_op_families_typed() {
     assert!(matches!(
         &function.ops[2].kind,
         KernelIrOpKind::TensorMemoryAccess { opcode, operands }
-            if opcode == "UTMALDG" && aggregate_texts(operands).as_slice() == ["desc[UR8][R0.64]", "R2"]
+            if opcode == &SassOpcode::new("UTMALDG")
+                && aggregate_texts(operands).as_slice() == ["desc[UR8][R0.64]", "R2"]
     ));
     assert!(matches!(
         &function.ops[2].kind,
@@ -765,7 +767,7 @@ fn lift_tensor_core_sass_keeps_known_op_families_typed() {
     assert!(matches!(
         &function.ops[3].kind,
         KernelIrOpKind::WarpGroup { opcode, operands }
-            if opcode == "WARPGROUP" && operands.is_empty()
+            if opcode == &SassOpcode::new("WARPGROUP") && operands.is_empty()
     ));
 
     let analysis = analyze_sass_ir(&ir);
