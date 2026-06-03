@@ -39,6 +39,21 @@ pub(super) fn classify_op(kind: &KernelIrOpKind) -> (SassLiftedOpClass, SassLift
         KernelIrOpKind::IntegerMad { .. } => {
             (SassLiftedOpClass::IntegerMath, SassLiftedOpKind::IntegerMad)
         }
+        KernelIrOpKind::TensorCoreMma { .. } => (
+            SassLiftedOpClass::TensorCore,
+            SassLiftedOpKind::TensorCoreMma,
+        ),
+        KernelIrOpKind::TensorCoreMemory { .. } => (
+            SassLiftedOpClass::TensorMemory,
+            SassLiftedOpKind::TensorCoreMemory,
+        ),
+        KernelIrOpKind::TensorMemoryAccess { .. } => (
+            SassLiftedOpClass::TensorMemory,
+            SassLiftedOpKind::TensorMemoryAccess,
+        ),
+        KernelIrOpKind::WarpGroup { .. } => {
+            (SassLiftedOpClass::WarpGroup, SassLiftedOpKind::WarpGroup)
+        }
         KernelIrOpKind::CompareSet { .. } => {
             (SassLiftedOpClass::Predicate, SassLiftedOpKind::CompareSet)
         }

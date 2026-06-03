@@ -396,6 +396,10 @@ impl KernelIrOpDef for KernelIrOp {
             | KernelIrOpKind::Permute { dst, .. }
             | KernelIrOpKind::AddressCalc { dst, .. } => Some(dst),
             KernelIrOpKind::Store { .. }
+            | KernelIrOpKind::TensorCoreMma { .. }
+            | KernelIrOpKind::TensorCoreMemory { .. }
+            | KernelIrOpKind::TensorMemoryAccess { .. }
+            | KernelIrOpKind::WarpGroup { .. }
             | KernelIrOpKind::Branch { .. }
             | KernelIrOpKind::Call { .. }
             | KernelIrOpKind::Return { .. }

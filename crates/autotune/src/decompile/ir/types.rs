@@ -118,6 +118,24 @@ pub enum KernelIrOpKind {
         c: String,
         wide: bool,
     },
+    TensorCoreMma {
+        opcode: String,
+        operands: Vec<String>,
+        element_type: Option<String>,
+        scope: Option<String>,
+    },
+    TensorCoreMemory {
+        opcode: String,
+        operands: Vec<String>,
+    },
+    TensorMemoryAccess {
+        opcode: String,
+        operands: Vec<String>,
+    },
+    WarpGroup {
+        opcode: String,
+        operands: Vec<String>,
+    },
     CompareSet {
         dst: String,
         comparison: Option<String>,

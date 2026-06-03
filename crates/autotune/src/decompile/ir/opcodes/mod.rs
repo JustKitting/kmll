@@ -7,6 +7,7 @@ mod movement;
 mod operands;
 mod predicate;
 mod sync;
+mod tensor;
 mod warp;
 
 use super::super::sass::{SassInstruction, SassPredicate};
@@ -23,6 +24,7 @@ pub(super) fn lift_kind(instruction: &SassInstruction) -> LiftResult {
     let opcode = instruction.opcode.as_str();
     control::lift(opcode, instruction, &operands)
         .or_else(|| warp::lift(opcode, instruction))
+        .or_else(|| tensor::lift(opcode, &operands))
         .or_else(|| movement::lift(opcode, instruction, &operands))
         .or_else(|| memory::lift(opcode, instruction))
         .or_else(|| math::lift(opcode, instruction, &operands))

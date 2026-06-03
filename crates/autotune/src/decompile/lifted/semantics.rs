@@ -65,6 +65,24 @@ pub enum SassLiftedSemantics {
         c: String,
         wide: bool,
     },
+    TensorCoreMma {
+        opcode: String,
+        operands: Vec<String>,
+        element_type: Option<String>,
+        scope: Option<String>,
+    },
+    TensorCoreMemory {
+        opcode: String,
+        operands: Vec<String>,
+    },
+    TensorMemoryAccess {
+        opcode: String,
+        operands: Vec<String>,
+    },
+    WarpGroup {
+        opcode: String,
+        operands: Vec<String>,
+    },
     CompareSet {
         dst: String,
         comparison: Option<String>,
@@ -181,6 +199,35 @@ impl fmt::Display for SassLiftedSemantics {
             ),
             Self::IntegerMad { dst, a, b, c, wide } => {
                 write!(f, "integer-mad(dst={dst},a={a},b={b},c={c},wide={wide})")
+            }
+            Self::TensorCoreMma {
+                opcode,
+                operands,
+                element_type,
+                scope,
+            } => write!(
+                f,
+                "tensor-core-mma(opcode={opcode},element-type={},scope={},operands=[{}])",
+                option_str(element_type.as_deref()),
+                option_str(scope.as_deref()),
+                operands.join(",")
+            ),
+            Self::TensorCoreMemory { opcode, operands } => write!(
+                f,
+                "tensor-core-memory(opcode={opcode},operands=[{}])",
+                operands.join(",")
+            ),
+            Self::TensorMemoryAccess { opcode, operands } => write!(
+                f,
+                "tensor-memory-access(opcode={opcode},operands=[{}])",
+                operands.join(",")
+            ),
+            Self::WarpGroup { opcode, operands } => {
+                write!(
+                    f,
+                    "warpgroup(opcode={opcode},operands=[{}])",
+                    operands.join(",")
+                )
             }
             Self::CompareSet {
                 dst,
@@ -334,6 +381,33 @@ pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
             b: b.clone(),
             c: c.clone(),
             wide: *wide,
+        },
+        KernelIrOpKind::TensorCoreMma {
+            opcode,
+            operands,
+            element_type,
+            scope,
+        } => SassLiftedSemantics::TensorCoreMma {
+            opcode: opcode.clone(),
+            operands: operands.clone(),
+            element_type: element_type.clone(),
+            scope: scope.clone(),
+        },
+        KernelIrOpKind::TensorCoreMemory { opcode, operands } => {
+            SassLiftedSemantics::TensorCoreMemory {
+                opcode: opcode.clone(),
+                operands: operands.clone(),
+            }
+        }
+        KernelIrOpKind::TensorMemoryAccess { opcode, operands } => {
+            SassLiftedSemantics::TensorMemoryAccess {
+                opcode: opcode.clone(),
+                operands: operands.clone(),
+            }
+        }
+        KernelIrOpKind::WarpGroup { opcode, operands } => SassLiftedSemantics::WarpGroup {
+            opcode: opcode.clone(),
+            operands: operands.clone(),
         },
         KernelIrOpKind::CompareSet {
             dst,

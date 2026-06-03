@@ -74,6 +74,20 @@ $helper:
         /*0140*/                   RET.REL.NODEC R4 `(matvec_bf16_rows17) ;       /* 0x0 */
 "#;
 
+const TENSOR_CORE_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.tensor_core_fixture,"ax",@progbits
+        .global tensor_core_fixture
+tensor_core_fixture:
+.text.tensor_core_fixture:
+        /*0000*/                   HMMA R8, R12, R16, R20 ;                      /* 0x0 */
+        /*0010*/                   LDT R2, tmem[UR4] ;                           /* 0x0 */
+        /*0020*/                   UTMALDG desc[UR8][R0.64], R2 ;                /* 0x0 */
+        /*0030*/                   WARPGROUP ;                                   /* 0x0 */
+        /*0040*/                   EXIT ;                                        /* 0x0 */
+"#;
+
 const UNSUPPORTED_SASS: &str = r#"
         .target sm_120
 
@@ -445,6 +459,52 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
 }
 
 #[test]
+fn lift_tensor_core_sass_keeps_known_op_families_typed() {
+    let module = parse_nvidia_sass(TENSOR_CORE_SASS).expect("tensor SASS should parse");
+    let ir = lift_sass_module(&module);
+    let function = &ir.functions[0];
+
+    assert!(matches!(
+        &function.ops[0].kind,
+        KernelIrOpKind::TensorCoreMma {
+            opcode,
+            element_type: Some(element_type),
+            scope: Some(scope),
+            operands,
+        } if opcode == "HMMA"
+            && element_type == "half"
+            && scope == "warp"
+            && operands == &["R8", "R12", "R16", "R20"]
+    ));
+    assert!(matches!(
+        &function.ops[1].kind,
+        KernelIrOpKind::TensorCoreMemory { opcode, operands }
+            if opcode == "LDT" && operands == &["R2", "tmem[UR4]"]
+    ));
+    assert!(matches!(
+        &function.ops[2].kind,
+        KernelIrOpKind::TensorMemoryAccess { opcode, operands }
+            if opcode == "UTMALDG" && operands == &["desc[UR8][R0.64]", "R2"]
+    ));
+    assert!(matches!(
+        &function.ops[3].kind,
+        KernelIrOpKind::WarpGroup { opcode, operands }
+            if opcode == "WARPGROUP" && operands.is_empty()
+    ));
+
+    let analysis = analyze_sass_ir(&ir);
+    let lifted = lift_sass_value_ir(&ir, &analysis);
+    let hmma = lifted.functions[0]
+        .ops
+        .iter()
+        .find(|op| op.opcode == "HMMA")
+        .expect("HMMA should be lifted");
+    assert_eq!(hmma.class, SassLiftedOpClass::TensorCore);
+    assert_eq!(hmma.kind, SassLiftedOpKind::TensorCoreMma);
+    assert!(hmma.semantics.to_string().contains("tensor-core-mma"));
+}
+
+#[test]
 fn semantic_patterns_recover_bf16_widen_and_warp_reduce() {
     let module = parse_nvidia_sass(ROWS17_SLICE).expect("rows17 slice should parse");
     let ir = lift_sass_module(&module);
@@ -792,6 +852,9 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert_eq!(report.files.len(), 3);
     assert_eq!(report.parsed_file_count, 3);
     assert_eq!(report.parse_error_count, 0);
+    assert!(report.known_opcode_count > 0);
+    assert!(report.known_unobserved_opcode_count > 0);
+    assert!(report.observed_unregistered_opcode_count > 0);
     assert_eq!(report.unsupported_instruction_count, 1);
     assert!(
         report
@@ -805,6 +868,9 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         .find(|entry| entry.opcode == "MYSTERY")
         .expect("unsupported opcode should be catalogued");
     assert_eq!(mystery_catalog.support, "unsupported");
+    assert_eq!(mystery_catalog.coverage, "observed-unmapped");
+    assert!(!mystery_catalog.known);
+    assert!(mystery_catalog.observed);
     assert_eq!(mystery_catalog.unsupported_count, 1);
     assert!(
         mystery_catalog
@@ -829,6 +895,27 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
             .source_formats
             .iter()
             .any(|format| format == "sass")
+    );
+    let hmma_catalog = report
+        .opcode_catalog
+        .iter()
+        .find(|entry| entry.opcode == "HMMA")
+        .expect("known tensor-core opcode should be catalogued without local observation");
+    assert!(hmma_catalog.known);
+    assert!(!hmma_catalog.observed);
+    assert_eq!(hmma_catalog.support, "unobserved");
+    assert_eq!(hmma_catalog.coverage, "known-unobserved");
+    assert!(
+        hmma_catalog
+            .architectures
+            .iter()
+            .any(|architecture| architecture == "sm120")
+    );
+    assert!(
+        hmma_catalog
+            .classes
+            .iter()
+            .any(|class| class == "tensor-core")
     );
     assert!(
         report
@@ -912,9 +999,10 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     let opcode_catalog_tsv =
         fs::read_to_string(&report.opcode_catalog_path).expect("opcode catalog TSV should read");
     assert!(opcode_catalog_tsv.starts_with(
-        "opcode\tinstruction_count\tsignature_count\tsignatures\tsource_formats\tclasses\tkinds\tsupport\tunsupported_count"
+        "opcode\tknown\tobserved\tinstruction_count\tsignature_count\tsignatures\tsource_formats\tarchitectures\tknown_sources\tclasses\tkinds\tsupport\tcoverage\tunsupported_count"
     ));
     assert!(opcode_catalog_tsv.contains("MYSTERY"));
+    assert!(opcode_catalog_tsv.contains("HMMA"));
     assert!(
         report
             .files

@@ -17,6 +17,7 @@ mod analysis;
 mod coverage;
 mod fixtures;
 mod ir;
+mod known_opcodes;
 mod lifted;
 mod patterns;
 mod sass;
@@ -42,6 +43,7 @@ pub use self::{
         KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemorySpace,
         SassMappingConfidence, lift_sass_module,
     },
+    known_opcodes::{KnownSassOpcode, known_sass_opcodes},
     lifted::{
         SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedOpClass, SassLiftedOpKind,
         SassLiftedSemantics, SassLiftedValueRef, lift_sass_value_ir,

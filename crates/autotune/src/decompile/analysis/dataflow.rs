@@ -406,6 +406,10 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
         }
         KernelIrOpKind::Call { operands, .. }
         | KernelIrOpKind::Return { operands, .. }
+        | KernelIrOpKind::TensorCoreMma { operands, .. }
+        | KernelIrOpKind::TensorCoreMemory { operands, .. }
+        | KernelIrOpKind::TensorMemoryAccess { operands, .. }
+        | KernelIrOpKind::WarpGroup { operands, .. }
         | KernelIrOpKind::Sync { operands, .. } => {
             for operand in operands {
                 push_registers(operand, &mut uses);
