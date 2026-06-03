@@ -5,7 +5,7 @@ use std::{
 
 use super::{
     ImmediateValue, KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, RegisterRef,
-    RegisterRefKind, ScalarOperand, ScalarOperandKind,
+    RegisterRefKind, SassWarpShuffleMode, ScalarOperand, ScalarOperandKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -433,10 +433,10 @@ fn recover_warp_reduce_sum(function: &KernelIrFunction, patterns: &mut Vec<SassS
         .enumerate()
         .filter_map(|(index, op)| match &op.kind {
             KernelIrOpKind::WarpShuffle {
-                mode: Some(mode),
+                mode: Some(SassWarpShuffleMode::Down),
                 offset,
                 ..
-            } if mode == "DOWN" => Some((index, op, offset.clone())),
+            } => Some((index, op, offset.clone())),
             _ => None,
         })
         .collect::<Vec<_>>();

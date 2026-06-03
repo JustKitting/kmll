@@ -2,7 +2,7 @@ use std::fmt;
 
 use super::super::{
     AggregateOperand, ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace,
-    PredicateCondition, RegisterRef, SassOpcode, SassSyncKind, ScalarOperand,
+    PredicateCondition, RegisterRef, SassOpcode, SassSyncKind, SassWarpShuffleMode, ScalarOperand,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,7 +113,7 @@ pub enum SassLiftedSemantics {
         condition: Option<PredicateCondition>,
     },
     WarpShuffle {
-        mode: Option<String>,
+        mode: Option<SassWarpShuffleMode>,
         predicate: RegisterRef,
         dst: RegisterRef,
         src: ScalarOperand,
@@ -293,7 +293,7 @@ impl fmt::Display for SassLiftedSemantics {
             } => write!(
                 f,
                 "warp-shuffle(mode={},predicate={predicate},dst={dst},src={src},offset={offset},mask={mask})",
-                option_str(mode.as_deref())
+                option_display(mode.as_ref())
             ),
             Self::Shift { dst, inputs } => {
                 write!(

@@ -198,7 +198,7 @@ pub enum KernelIrOpKind {
         condition: Option<PredicateCondition>,
     },
     WarpShuffle {
-        mode: Option<String>,
+        mode: Option<SassWarpShuffleMode>,
         predicate: RegisterRef,
         dst: RegisterRef,
         src: ScalarOperand,
@@ -262,6 +262,44 @@ impl SassSyncKind {
 }
 
 impl fmt::Display for SassSyncKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassWarpShuffleMode {
+    Up,
+    Down,
+    Bfly,
+    Index,
+    Raw(String),
+}
+
+impl SassWarpShuffleMode {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        match raw.as_str() {
+            "UP" => Self::Up,
+            "DOWN" => Self::Down,
+            "BFLY" => Self::Bfly,
+            "IDX" => Self::Index,
+            _ => Self::Raw(raw),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Up => "UP",
+            Self::Down => "DOWN",
+            Self::Bfly => "BFLY",
+            Self::Index => "IDX",
+            Self::Raw(raw) => raw,
+        }
+    }
+}
+
+impl fmt::Display for SassWarpShuffleMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }

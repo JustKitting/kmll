@@ -697,10 +697,10 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
     assert!(ops.iter().any(|op| matches!(
         op.kind,
         KernelIrOpKind::WarpShuffle {
-            mode: Some(ref mode),
+            mode: Some(SassWarpShuffleMode::Down),
             offset: ref shuffle_offset,
             ..
-        } if mode == "DOWN" && shuffle_offset == &scalar("0x10")
+        } if shuffle_offset == &scalar("0x10")
     )));
     assert!(ops.iter().any(|op| matches!(
         op.kind,
