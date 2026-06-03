@@ -20,6 +20,7 @@ use nn_rust_inference::{
         KernelCandidateMetadata, KernelMaterialization, KernelScheduleAction,
         KernelScheduleActionArg, MatvecRustCudaGenerator, MatvecSearchProblem, ScheduleTransform,
         SearchScore, SearchScoreSource, beam_search_metadata, beam_search_metadata_with_scorer,
+        optimization_selection_cache_key,
     },
     chat,
     dtypes::{Bf16, DType},
@@ -493,6 +494,12 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
         .best
         .as_ref()
         .ok_or_else(|| invalid_input("kernel-autotune-gemm did not produce any candidates"))?;
+    let score_namespace = if measure {
+        format!("measured-cuda-event-r{measure_repeat_count}-w{measure_warmup_count}")
+    } else {
+        "heuristic".to_string()
+    };
+    let selection_cache_key = optimization_selection_cache_key(&problem, config, &score_namespace);
 
     println!(
         "kernel_autotune_gemm m={m} n={n} k={k} beam_width={beam_width} max_depth={max_depth} allow_generated={allow_generated} measure={measure}"
@@ -530,6 +537,15 @@ fn run_kernel_autotune_gemm(args: &[String]) -> AppResult<()> {
                 emitted_selection.artifact_key,
                 emitted_selection.selection_path.display(),
                 emitted_selection.selection_bytes
+            );
+            let emitted_cached_selection =
+                store.emit_selection_cache_for_candidate(&selection_cache_key, best)?;
+            println!(
+                "emitted_selection_cache cache_key={} artifact_key={} selection_path={} selection_bytes={}",
+                selection_cache_key.hex(),
+                emitted_cached_selection.artifact_key,
+                emitted_cached_selection.selection_path.display(),
+                emitted_cached_selection.selection_bytes
             );
             let report = result.optimization_report("gemm-f32-bf16-row-col-row", config);
             let emitted_report = store.emit_search_report(&report)?;
@@ -723,6 +739,12 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         .best
         .as_ref()
         .ok_or_else(|| invalid_input("kernel-autotune-matvec did not produce any candidates"))?;
+    let score_namespace = if measure {
+        format!("measured-cuda-event-r{measure_repeat_count}-w{measure_warmup_count}")
+    } else {
+        "heuristic".to_string()
+    };
+    let selection_cache_key = optimization_selection_cache_key(&problem, config, &score_namespace);
 
     println!(
         "kernel_autotune_matvec rows={rows} cols={cols} beam_width={beam_width} max_depth={max_depth} allow_generated={allow_generated} measure={measure}"
@@ -760,6 +782,15 @@ fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
                 emitted_selection.artifact_key,
                 emitted_selection.selection_path.display(),
                 emitted_selection.selection_bytes
+            );
+            let emitted_cached_selection =
+                store.emit_selection_cache_for_candidate(&selection_cache_key, best)?;
+            println!(
+                "emitted_selection_cache cache_key={} artifact_key={} selection_path={} selection_bytes={}",
+                selection_cache_key.hex(),
+                emitted_cached_selection.artifact_key,
+                emitted_cached_selection.selection_path.display(),
+                emitted_cached_selection.selection_bytes
             );
             let report = result.optimization_report("matvec-bf16-row-major", config);
             let emitted_report = store.emit_search_report(&report)?;

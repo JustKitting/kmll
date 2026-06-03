@@ -343,6 +343,13 @@ impl KernelArtifactStore {
             .join(format!("{}.json", selection.artifact_key))
     }
 
+    pub fn selection_cache_path_for(&self, cache_key: &KernelOptimizationCacheKey) -> PathBuf {
+        self.root
+            .join("selection-cache")
+            .join(sanitize_path_component(&cache_key.family))
+            .join(format!("{}.json", cache_key.key.hex()))
+    }
+
     pub fn emit_search_report(
         &self,
         report: &OptimizationSearchReport,
@@ -386,6 +393,36 @@ impl KernelArtifactStore {
         self.emit_selection(&KernelOptimizationSelection::from_candidate(candidate))
     }
 
+    pub fn emit_selection_cache(
+        &self,
+        cache_key: &KernelOptimizationCacheKey,
+        selection: &KernelOptimizationSelection,
+    ) -> Result<EmittedKernelOptimizationSelection, KernelGenerationError> {
+        let path = self.selection_cache_path_for(cache_key);
+        fs::create_dir_all(
+            path.parent()
+                .expect("selection cache path should have a parent directory"),
+        )?;
+        let selection_json = serde_json::to_vec_pretty(&selection_json(selection))?;
+        fs::write(&path, &selection_json)?;
+        Ok(EmittedKernelOptimizationSelection {
+            artifact_key: selection.artifact_key.clone(),
+            selection_path: path,
+            selection_bytes: selection_json.len(),
+        })
+    }
+
+    pub fn emit_selection_cache_for_candidate(
+        &self,
+        cache_key: &KernelOptimizationCacheKey,
+        candidate: &KernelCandidateMetadata,
+    ) -> Result<EmittedKernelOptimizationSelection, KernelGenerationError> {
+        self.emit_selection_cache(
+            cache_key,
+            &KernelOptimizationSelection::from_candidate(candidate),
+        )
+    }
+
     pub fn read_selection(
         &self,
         path: impl AsRef<Path>,
@@ -393,6 +430,20 @@ impl KernelArtifactStore {
         let selection_text = fs::read_to_string(path)?;
         let selection_json: Value = serde_json::from_str(&selection_text)?;
         parse_selection_json(&selection_json)
+    }
+
+    pub fn read_selection_cache(
+        &self,
+        cache_key: &KernelOptimizationCacheKey,
+    ) -> Result<Option<KernelOptimizationSelection>, KernelGenerationError> {
+        let path = self.selection_cache_path_for(cache_key);
+        let selection_text = match fs::read_to_string(path) {
+            Ok(selection_text) => selection_text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let selection_json: Value = serde_json::from_str(&selection_text)?;
+        parse_selection_json(&selection_json).map(Some)
     }
 
     pub fn emit_metadata(
@@ -468,6 +519,18 @@ pub struct EmittedSearchReport {
     pub report_key: KernelMetadataKey,
     pub report_path: PathBuf,
     pub report_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KernelOptimizationCacheKey {
+    pub family: String,
+    pub key: KernelMetadataKey,
+}
+
+impl KernelOptimizationCacheKey {
+    pub fn hex(&self) -> String {
+        self.key.hex()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -864,6 +927,28 @@ where
         beam,
         explored,
         rejected,
+    }
+}
+
+pub fn optimization_selection_cache_key<P>(
+    problem: &P,
+    config: BeamSearchConfig,
+    score_namespace: &str,
+) -> KernelOptimizationCacheKey
+where
+    P: KernelMetadataSearchProblem,
+{
+    let seed = problem.seed();
+    let mut state = FNV_OFFSET;
+    state = hash_str(state, "optimization-selection-cache");
+    state = hash_str(state, score_namespace);
+    state = hash_u64(state, config.beam_width as u64);
+    state = hash_u64(state, config.max_depth as u64);
+    state = hash_u64(state, u64::from(config.require_launchable));
+    state = hash_optimization_candidate(state, &seed.optimization_spec());
+    KernelOptimizationCacheKey {
+        family: seed.family,
+        key: KernelMetadataKey(state),
     }
 }
 
@@ -3584,6 +3669,117 @@ mod tests {
             .expect("selection should replay into selected candidate");
         assert_eq!(replayed.artifact_key(), candidate.artifact_key());
         assert_eq!(replayed.launch.kernel, "matvec_bf16_rows8_u8");
+
+        remove_test_generated_root(&root);
+    }
+
+    #[test]
+    fn selection_cache_key_tracks_problem_config_and_score_namespace() {
+        let problem = MatvecSearchProblem::bf16_row_major(128, 256);
+        let same_problem = MatvecSearchProblem::bf16_row_major(128, 256);
+        let different_problem = MatvecSearchProblem::bf16_row_major(128, 512);
+        let config = BeamSearchConfig {
+            beam_width: 4,
+            max_depth: 2,
+            require_launchable: false,
+        };
+
+        let key = optimization_selection_cache_key(&problem, config, "heuristic");
+
+        assert_eq!(
+            key,
+            optimization_selection_cache_key(&same_problem, config, "heuristic")
+        );
+        assert_ne!(
+            key,
+            optimization_selection_cache_key(&different_problem, config, "heuristic")
+        );
+        assert_ne!(
+            key,
+            optimization_selection_cache_key(
+                &problem,
+                BeamSearchConfig {
+                    beam_width: 8,
+                    ..config
+                },
+                "heuristic"
+            )
+        );
+        assert_ne!(
+            key,
+            optimization_selection_cache_key(&problem, config, "measured-cuda-event-r5-w2")
+        );
+        assert_eq!(key.family, "matvec-bf16-row-major");
+        assert_eq!(key.hex().len(), 16);
+    }
+
+    #[test]
+    fn artifact_store_writes_and_reads_selection_cache() {
+        let root = test_generated_root();
+        let store = KernelArtifactStore::new(&root);
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let config = BeamSearchConfig {
+            beam_width: 4,
+            max_depth: 3,
+            require_launchable: false,
+        };
+        let cache_key = optimization_selection_cache_key(&problem, config, "heuristic");
+        let candidate = replay_schedule_actions(
+            &problem,
+            &[
+                KernelScheduleAction::tile_gemm(
+                    16,
+                    32,
+                    16,
+                    KernelActionMaterialization::DeferredGenerated,
+                ),
+                KernelScheduleAction::unroll(2, 4),
+                KernelScheduleAction::stride_order(vec![2, 1]),
+            ],
+        )
+        .expect("valid GEMM action trace should replay into candidate metadata");
+
+        assert!(
+            store
+                .read_selection_cache(&cache_key)
+                .expect("missing selection cache should not be an error")
+                .is_none()
+        );
+
+        let emitted = store
+            .emit_selection_cache_for_candidate(&cache_key, &candidate)
+            .expect("artifact store should write selection cache metadata");
+        assert!(emitted.selection_path.starts_with(store.root()));
+        assert!(
+            emitted
+                .selection_path
+                .components()
+                .any(|component| component.as_os_str() == "selection-cache")
+        );
+        assert_eq!(
+            emitted
+                .selection_path
+                .file_stem()
+                .and_then(|stem| stem.to_str()),
+            Some(cache_key.hex().as_str())
+        );
+
+        let selection = store
+            .read_selection_cache(&cache_key)
+            .expect("selection cache should parse")
+            .expect("selection cache should exist after write");
+        let replayed = selection
+            .replay(&problem)
+            .expect("cached selection should replay into selected candidate");
+        assert_eq!(selection.artifact_key, candidate.artifact_key().hex());
+        assert_eq!(replayed.artifact_key(), candidate.artifact_key());
+        assert_eq!(replayed.launch.kernel, "gemm_f32_bf16_tile_16x32x16_u4_bk");
+
+        let cache_text = fs::read_to_string(&emitted.selection_path)
+            .expect("selection cache should be readable");
+        assert!(cache_text.contains("\"action_trace\""));
+        assert!(!cache_text.contains("#[kernel]"));
+        assert!(!cache_text.contains("pub fn gemm_f32_bf16"));
 
         remove_test_generated_root(&root);
     }
