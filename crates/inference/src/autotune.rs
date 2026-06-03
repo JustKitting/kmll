@@ -120,6 +120,7 @@ pub enum ScheduleTransform {
     ThreadGroup { axis: u8, factor: u32 },
     TileGemm { m: u32, n: u32, k: u32 },
     StrideOrder { axes: Vec<u8> },
+    Swap { axis_a: u8, axis_b: u8 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
@@ -1106,6 +1107,9 @@ pub enum KernelActionSpace {
     StrideOrder {
         orders: Vec<Vec<u8>>,
     },
+    Swap {
+        pairs: Vec<(u8, u8)>,
+    },
 }
 
 impl KernelActionSpace {
@@ -1147,6 +1151,11 @@ impl KernelActionSpace {
                 .cloned()
                 .map(KernelScheduleAction::stride_order)
                 .collect(),
+            Self::Swap { pairs } => pairs
+                .iter()
+                .copied()
+                .map(|(axis_a, axis_b)| KernelScheduleAction::swap(axis_a, axis_b))
+                .collect(),
         }
     }
 
@@ -1187,6 +1196,9 @@ impl KernelActionSpace {
             },
             Self::StrideOrder { orders } => ProfilingActionSpace::StrideOrder {
                 orders: orders.clone(),
+            },
+            Self::Swap { pairs } => ProfilingActionSpace::Swap {
+                pairs: pairs.clone(),
             },
         }
     }
@@ -2197,6 +2209,28 @@ impl From<GemmTileShape> for KernelTile3d {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GemmThreadOrder {
+    NThenM,
+    MThenN,
+}
+
+impl GemmThreadOrder {
+    pub const fn symbol_suffix(self) -> &'static str {
+        match self {
+            Self::NThenM => "",
+            Self::MThenN => "_sw01",
+        }
+    }
+
+    pub const fn operation_suffix(self) -> &'static str {
+        match self {
+            Self::NThenM => "",
+            Self::MThenN => "-sw01",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GemmSchedulePlan {
     pub tile: GemmTileShape,
     pub reduce_unroll: u32,
@@ -2206,6 +2240,7 @@ pub struct GemmSchedulePlan {
     pub b_load_unroll: u32,
     pub a_load_order: GemmATileLoadOrder,
     pub b_load_order: GemmBTileLoadOrder,
+    pub thread_order: GemmThreadOrder,
 }
 
 impl GemmSchedulePlan {
@@ -2219,6 +2254,7 @@ impl GemmSchedulePlan {
             b_load_unroll: 1,
             a_load_order: GemmATileLoadOrder::KContiguous,
             b_load_order: GemmBTileLoadOrder::TileLinear,
+            thread_order: GemmThreadOrder::NThenM,
         }
     }
 
@@ -2257,6 +2293,11 @@ impl GemmSchedulePlan {
         self
     }
 
+    pub const fn with_thread_order(mut self, order: GemmThreadOrder) -> Self {
+        self.thread_order = order;
+        self
+    }
+
     pub const fn normalized(self) -> Self {
         self.with_reduce_unroll(self.reduce_unroll)
             .with_m_per_thread(self.m_per_thread)
@@ -2267,11 +2308,12 @@ impl GemmSchedulePlan {
 
     pub fn block_dim(self) -> (u32, u32, u32) {
         let plan = self.normalized();
-        (
-            plan.tile.n.div_ceil(plan.n_per_thread),
-            plan.tile.m.div_ceil(plan.m_per_thread),
-            1,
-        )
+        let threads_n = plan.tile.n.div_ceil(plan.n_per_thread);
+        let threads_m = plan.tile.m.div_ceil(plan.m_per_thread);
+        match plan.thread_order {
+            GemmThreadOrder::NThenM => (threads_n, threads_m, 1),
+            GemmThreadOrder::MThenN => (threads_m, threads_n, 1),
+        }
     }
 
     fn thread_count(self) -> u32 {
@@ -2343,6 +2385,14 @@ impl GemmSchedulePlan {
             write!(&mut suffix, "-bu{}", plan.b_load_unroll).expect("write to string");
         }
         suffix
+    }
+
+    fn thread_order_symbol_suffix(self) -> &'static str {
+        self.normalized().thread_order.symbol_suffix()
+    }
+
+    fn thread_order_operation_suffix(self) -> &'static str {
+        self.normalized().thread_order.operation_suffix()
     }
 }
 
@@ -2449,20 +2499,23 @@ impl GemmSearchProblem {
         let local_tile_operation_suffix = plan.local_tile_operation_suffix();
         let load_unroll_symbol_suffix = plan.load_unroll_symbol_suffix();
         let load_unroll_operation_suffix = plan.load_unroll_operation_suffix();
+        let thread_order_symbol_suffix = plan.thread_order_symbol_suffix();
+        let thread_order_operation_suffix = plan.thread_order_operation_suffix();
         let symbol_hint = if plan.reduce_unroll == 1 {
             format!(
-                "gemm_f32_bf16_tile_{}x{}x{}{}{}{}{}",
+                "gemm_f32_bf16_tile_{}x{}x{}{}{}{}{}{}",
                 tile.m,
                 tile.n,
                 tile.k,
                 local_tile_symbol_suffix,
                 load_unroll_symbol_suffix,
                 a_order_suffix,
-                b_order_suffix
+                b_order_suffix,
+                thread_order_symbol_suffix
             )
         } else {
             format!(
-                "gemm_f32_bf16_tile_{}x{}x{}_u{}{}{}{}{}",
+                "gemm_f32_bf16_tile_{}x{}x{}_u{}{}{}{}{}{}",
                 tile.m,
                 tile.n,
                 tile.k,
@@ -2470,7 +2523,8 @@ impl GemmSearchProblem {
                 local_tile_symbol_suffix,
                 load_unroll_symbol_suffix,
                 a_order_suffix,
-                b_order_suffix
+                b_order_suffix,
+                thread_order_symbol_suffix
             )
         };
         let launch_kernel = if existing_tile {
@@ -2487,18 +2541,19 @@ impl GemmSearchProblem {
         let operation = TypedOperationSpec::new(
             if plan.reduce_unroll == 1 {
                 format!(
-                    "gemm-f32-bf16-{}x{}x{}{}{}{}{}",
+                    "gemm-f32-bf16-{}x{}x{}{}{}{}{}{}",
                     tile.m,
                     tile.n,
                     tile.k,
                     local_tile_operation_suffix,
                     load_unroll_operation_suffix,
                     a_order_suffix,
-                    b_order_suffix
+                    b_order_suffix,
+                    thread_order_operation_suffix
                 )
             } else {
                 format!(
-                    "gemm-f32-bf16-{}x{}x{}-u{}{}{}{}{}",
+                    "gemm-f32-bf16-{}x{}x{}-u{}{}{}{}{}{}",
                     tile.m,
                     tile.n,
                     tile.k,
@@ -2506,7 +2561,8 @@ impl GemmSearchProblem {
                     local_tile_operation_suffix,
                     load_unroll_operation_suffix,
                     a_order_suffix,
-                    b_order_suffix
+                    b_order_suffix,
+                    thread_order_operation_suffix
                 )
             },
             OperationKind::Gemm,
@@ -2576,6 +2632,12 @@ impl GemmSearchProblem {
         if plan.b_load_order == GemmBTileLoadOrder::KContiguous {
             schedule = schedule.with_transform(ScheduleTransform::StrideOrder { axes: vec![2, 1] });
         }
+        if plan.thread_order == GemmThreadOrder::MThenN {
+            schedule = schedule.with_transform(ScheduleTransform::Swap {
+                axis_a: 0,
+                axis_b: 1,
+            });
+        }
 
         KernelCandidateMetadata::new(
             "gemm-f32-bf16-row-col-row",
@@ -2606,6 +2668,7 @@ impl GemmSearchProblem {
             && plan.b_load_unroll == 1
             && plan.a_load_order == GemmATileLoadOrder::KContiguous
             && plan.b_load_order == GemmBTileLoadOrder::TileLinear
+            && plan.thread_order == GemmThreadOrder::NThenM
     }
 
     fn action_materialization_for_plan(plan: GemmSchedulePlan) -> KernelActionMaterialization {
@@ -2809,6 +2872,9 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                 factors: b_load_unroll_factors,
             });
         }
+        spaces.push(KernelActionSpace::Swap {
+            pairs: vec![(0, 1)],
+        });
         spaces.push(KernelActionSpace::StrideOrder {
             orders: stride_orders,
         });
@@ -2850,6 +2916,11 @@ impl KernelActionSearchProblem for GemmSearchProblem {
             if !factors.is_empty() {
                 spaces.push(KernelActionSpace::Unroll { axis: 4, factors });
             }
+        }
+        if plan.thread_order == GemmThreadOrder::NThenM {
+            spaces.push(KernelActionSpace::Swap {
+                pairs: vec![(0, 1)],
+            });
         }
         let orders = Self::stride_orders_for_plan(plan);
         if !orders.is_empty() {
@@ -3008,6 +3079,22 @@ impl KernelActionSearchProblem for GemmSearchProblem {
                     self.candidate_for_plan(plan.with_b_load_order(order)),
                 ))
             }
+            KernelScheduleAction {
+                op: KernelScheduleActionOp::Swap,
+                axis: None,
+                arg: KernelScheduleActionArg::AxisPair { axis_a, axis_b },
+                materialization: KernelActionMaterialization::DeferredGenerated,
+            } => {
+                let plan = schedule_gemm_plan(&candidate.schedule)?;
+                if (*axis_a, *axis_b) != (0, 1) || plan.thread_order != GemmThreadOrder::NThenM {
+                    return None;
+                }
+                Some(candidate_with_action_trace(
+                    candidate,
+                    action,
+                    self.candidate_for_plan(plan.with_thread_order(GemmThreadOrder::MThenN)),
+                ))
+            }
             _ => None,
         }
     }
@@ -3092,6 +3179,13 @@ impl KernelMetadataSearchProblem for GemmSearchProblem {
             block_count * ((unroll - 1.0) * 256.0 + (local_tile - 1.0) * 1024.0);
         let load_unroll_pressure =
             block_count * f64::from(a_load_unroll + b_load_unroll - 2) * 128.0;
+        let threads_m = tile.m.div_ceil(m_per_thread);
+        let threads_n = tile.n.div_ceil(n_per_thread);
+        let thread_order_penalty = match plan.thread_order {
+            GemmThreadOrder::NThenM if threads_n < 16 && threads_m >= 16 => block_count * 128.0,
+            GemmThreadOrder::MThenN if threads_n >= 16 => block_count * 96.0,
+            _ => 0.0,
+        };
         let a_load_penalty = match plan.a_load_order {
             GemmATileLoadOrder::KContiguous => block_count * 64.0,
             GemmATileLoadOrder::MContiguous => block_count * 512.0,
@@ -3107,6 +3201,7 @@ impl KernelMetadataSearchProblem for GemmSearchProblem {
                 + load_loop_overhead
                 + register_pressure
                 + load_unroll_pressure
+                + thread_order_penalty
                 + a_load_penalty
                 + b_load_penalty,
         )
@@ -3258,6 +3353,20 @@ fn schedule_gemm_a_load_order(schedule: &KernelSchedule) -> GemmATileLoadOrder {
         .unwrap_or(GemmATileLoadOrder::KContiguous)
 }
 
+fn schedule_gemm_thread_order(schedule: &KernelSchedule) -> GemmThreadOrder {
+    schedule
+        .transforms
+        .iter()
+        .find_map(|transform| match transform {
+            ScheduleTransform::Swap {
+                axis_a: 0,
+                axis_b: 1,
+            } => Some(GemmThreadOrder::MThenN),
+            _ => None,
+        })
+        .unwrap_or(GemmThreadOrder::NThenM)
+}
+
 fn schedule_gemm_plan(schedule: &KernelSchedule) -> Option<GemmSchedulePlan> {
     let tile = schedule_gemm_tile(schedule)?;
     Some(GemmSchedulePlan {
@@ -3269,6 +3378,7 @@ fn schedule_gemm_plan(schedule: &KernelSchedule) -> Option<GemmSchedulePlan> {
         b_load_unroll: schedule_gemm_b_load_unroll(schedule).unwrap_or(1),
         a_load_order: schedule_gemm_a_load_order(schedule),
         b_load_order: schedule_gemm_b_load_order(schedule),
+        thread_order: schedule_gemm_thread_order(schedule),
     })
 }
 
@@ -3352,6 +3462,7 @@ fn parse_action_json(
         "local-tile" => KernelScheduleActionOp::LocalTile,
         "tile-gemm" => KernelScheduleActionOp::TileGemm,
         "stride-order" => KernelScheduleActionOp::StrideOrder,
+        "swap" => KernelScheduleActionOp::Swap,
         op => {
             return Err(invalid_selection(format!(
                 "action_trace[{index}] has unsupported op {op:?}"
@@ -3401,6 +3512,10 @@ fn parse_action_arg_json(
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         )),
+        "axis-pair" => Ok(KernelScheduleActionArg::AxisPair {
+            axis_a: required_u8(value, "axis_a")?,
+            axis_b: required_u8(value, "axis_b")?,
+        }),
         kind => Err(invalid_selection(format!(
             "action_trace[{index}] has unsupported arg kind {kind:?}"
         ))),
@@ -3581,6 +3696,11 @@ fn required_u32(value: &Value, name: &str) -> Result<u32, KernelGenerationError>
         .map_err(|_| invalid_selection(format!("field {name:?} exceeds u32")))
 }
 
+fn required_u8(value: &Value, name: &str) -> Result<u8, KernelGenerationError> {
+    value_as_u8(required_field(value, name)?)
+        .ok_or_else(|| invalid_selection(format!("field {name:?} must fit in u8")))
+}
+
 fn optional_u8(value: &Value, name: &str) -> Result<Option<u8>, KernelGenerationError> {
     match value.get(name) {
         Some(Value::Null) | None => Ok(None),
@@ -3685,6 +3805,9 @@ fn transform_json(transform: &ScheduleTransform) -> Value {
         ScheduleTransform::StrideOrder { axes } => {
             json!({"op": "stride-order", "axes": axes})
         }
+        ScheduleTransform::Swap { axis_a, axis_b } => {
+            json!({"op": "swap", "axis_a": axis_a, "axis_b": axis_b})
+        }
     }
 }
 
@@ -3705,6 +3828,9 @@ fn action_arg_json(arg: &KernelScheduleActionArg) -> Value {
         }
         KernelScheduleActionArg::AxisOrder(axes) => {
             json!({"kind": "axis-order", "axes": axes})
+        }
+        KernelScheduleActionArg::AxisPair { axis_a, axis_b } => {
+            json!({"kind": "axis-pair", "axis_a": axis_a, "axis_b": axis_b})
         }
     }
 }
@@ -4055,6 +4181,7 @@ fn render_gemm_b_load_unrolled(source: &mut String, b_load_unroll: u32, k_contig
 }
 
 fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
+    let plan = plan.normalized();
     let tile = plan.tile;
     let reduce_unroll = plan.reduce_unroll.max(1);
     let m_per_thread = plan.m_per_thread.max(1);
@@ -4130,19 +4257,47 @@ fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
     )
     .expect("write to string");
     writeln!(source).expect("write to string");
-    writeln!(source, "    let tx = thread::threadIdx_x() as usize;").expect("write to string");
-    writeln!(source, "    let ty = thread::threadIdx_y() as usize;").expect("write to string");
-    writeln!(source, "    if tx >= THREADS_N || ty >= THREADS_M {{").expect("write to string");
-    writeln!(source, "        return;").expect("write to string");
-    writeln!(source, "    }}").expect("write to string");
+    match plan.thread_order {
+        GemmThreadOrder::NThenM => {
+            writeln!(source, "    let thread_n = thread::threadIdx_x() as usize;")
+                .expect("write to string");
+            writeln!(source, "    let thread_m = thread::threadIdx_y() as usize;")
+                .expect("write to string");
+            writeln!(
+                source,
+                "    if thread_n >= THREADS_N || thread_m >= THREADS_M {{"
+            )
+            .expect("write to string");
+            writeln!(source, "        return;").expect("write to string");
+            writeln!(source, "    }}").expect("write to string");
+            writeln!(source, "    let tid = thread_m * THREADS_N + thread_n;")
+                .expect("write to string");
+        }
+        GemmThreadOrder::MThenN => {
+            writeln!(source, "    let thread_m = thread::threadIdx_x() as usize;")
+                .expect("write to string");
+            writeln!(source, "    let thread_n = thread::threadIdx_y() as usize;")
+                .expect("write to string");
+            writeln!(
+                source,
+                "    if thread_m >= THREADS_M || thread_n >= THREADS_N {{"
+            )
+            .expect("write to string");
+            writeln!(source, "        return;").expect("write to string");
+            writeln!(source, "    }}").expect("write to string");
+            writeln!(source, "    let tid = thread_n * THREADS_M + thread_m;")
+                .expect("write to string");
+        }
+    }
     writeln!(source).expect("write to string");
     for row_output in 0..m_per_thread {
         if row_output == 0 {
-            writeln!(source, "    let tile_row0 = ty * THREAD_TILE_M;").expect("write to string");
+            writeln!(source, "    let tile_row0 = thread_m * THREAD_TILE_M;")
+                .expect("write to string");
         } else {
             writeln!(
                 source,
-                "    let tile_row{row_output} = ty * THREAD_TILE_M + {row_output};"
+                "    let tile_row{row_output} = thread_m * THREAD_TILE_M + {row_output};"
             )
             .expect("write to string");
         }
@@ -4154,11 +4309,12 @@ fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
     }
     for output in 0..n_per_thread {
         if output == 0 {
-            writeln!(source, "    let tile_col0 = tx * THREAD_TILE_N;").expect("write to string");
+            writeln!(source, "    let tile_col0 = thread_n * THREAD_TILE_N;")
+                .expect("write to string");
         } else {
             writeln!(
                 source,
-                "    let tile_col{output} = tx * THREAD_TILE_N + {output};"
+                "    let tile_col{output} = thread_n * THREAD_TILE_N + {output};"
             )
             .expect("write to string");
         }
@@ -4168,7 +4324,6 @@ fn render_f32_bf16_gemm_source(symbol: &str, plan: GemmSchedulePlan) -> String {
         )
         .expect("write to string");
     }
-    writeln!(source, "    let tid = ty * THREADS_N + tx;").expect("write to string");
     writeln!(source, "    let thread_count = THREADS_M * THREADS_N;").expect("write to string");
     writeln!(source, "    let m = m as usize;").expect("write to string");
     writeln!(source, "    let n = n as usize;").expect("write to string");
@@ -4677,6 +4832,15 @@ fn hash_profiling_action_space(mut state: u64, action_space: &ProfilingActionSpa
             }
             state
         }
+        ProfilingActionSpace::Swap { pairs } => {
+            state = hash_str(state, "swap");
+            state = hash_u64(state, pairs.len() as u64);
+            for (axis_a, axis_b) in pairs {
+                state = hash_u64(state, *axis_a as u64);
+                state = hash_u64(state, *axis_b as u64);
+            }
+            state
+        }
     }
 }
 
@@ -4751,6 +4915,15 @@ fn hash_action_space(mut state: u64, action_space: &KernelActionSpace) -> u64 {
             }
             state
         }
+        KernelActionSpace::Swap { pairs } => {
+            state = hash_str(state, "swap");
+            state = hash_u64(state, pairs.len() as u64);
+            for (axis_a, axis_b) in pairs {
+                state = hash_u64(state, *axis_a as u64);
+                state = hash_u64(state, *axis_b as u64);
+            }
+            state
+        }
     }
 }
 
@@ -4788,6 +4961,11 @@ fn hash_optimization_candidate(mut state: u64, candidate: &OptimizationCandidate
                     state = hash_u64(state, *axis as u64);
                 }
                 state
+            }
+            KernelScheduleActionArg::AxisPair { axis_a, axis_b } => {
+                let mut state = hash_str(state, "axis-pair");
+                state = hash_u64(state, *axis_a as u64);
+                hash_u64(state, *axis_b as u64)
             }
         };
         state = hash_str(state, action.materialization.label());
@@ -4902,6 +5080,11 @@ fn hash_transform(mut state: u64, transform: &ScheduleTransform) -> u64 {
                 state = hash_u64(state, *axis as u64);
             }
             state
+        }
+        ScheduleTransform::Swap { axis_a, axis_b } => {
+            state = hash_str(state, "swap");
+            state = hash_u64(state, *axis_a as u64);
+            hash_u64(state, *axis_b as u64)
         }
     }
 }
@@ -5491,12 +5674,12 @@ mod tests {
         assert!(
             generated
                 .source
-                .contains("let tile_row1 = ty * THREAD_TILE_M + 1;")
+                .contains("let tile_row1 = thread_m * THREAD_TILE_M + 1;")
         );
         assert!(
             generated
                 .source
-                .contains("let tile_col1 = tx * THREAD_TILE_N + 1;")
+                .contains("let tile_col1 = thread_n * THREAD_TILE_N + 1;")
         );
         assert!(generated.source.contains("let mut acc3 = 0.0_f32;"));
         assert!(generated.source.contains("TILE_A[tile_row1 * TILE_K + kk]"));
@@ -5627,7 +5810,7 @@ mod tests {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let seed = problem.seed();
         let full_space = problem.search_space();
-        assert_eq!(full_space.spaces.len(), 7);
+        assert_eq!(full_space.spaces.len(), 8);
         assert!(matches!(
             full_space.spaces[0],
             KernelActionSpace::TileGemm { .. }
@@ -5664,6 +5847,10 @@ mod tests {
         assert_eq!(b_load_factors, &[2, 3, 4]);
         assert!(matches!(
             full_space.spaces[6],
+            KernelActionSpace::Swap { .. }
+        ));
+        assert!(matches!(
+            full_space.spaces[7],
             KernelActionSpace::StrideOrder { .. }
         ));
 
@@ -5706,7 +5893,7 @@ mod tests {
         let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
         let schedule_spaces = problem.action_spaces(&tile_candidate);
         let schedule_actions = problem.schedule_actions(&tile_candidate);
-        assert_eq!(schedule_spaces.spaces.len(), 4);
+        assert_eq!(schedule_spaces.spaces.len(), 5);
         assert_eq!(schedule_spaces.actions(), schedule_actions);
         assert!(matches!(
             schedule_spaces.spaces[0],
@@ -5732,9 +5919,13 @@ mod tests {
         assert_eq!(n_factors, &[2, 4]);
         assert!(matches!(
             schedule_spaces.spaces[3],
+            KernelActionSpace::Swap { .. }
+        ));
+        assert!(matches!(
+            schedule_spaces.spaces[4],
             KernelActionSpace::StrideOrder { .. }
         ));
-        assert_eq!(schedule_actions.len(), 21);
+        assert_eq!(schedule_actions.len(), 22);
         assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 7)));
         assert!(schedule_actions.contains(&KernelScheduleAction::unroll(2, 16)));
         assert!(!schedule_actions.contains(&KernelScheduleAction::unroll(2, 1)));
@@ -5746,6 +5937,7 @@ mod tests {
         assert!(!schedule_actions.contains(&KernelScheduleAction::local_tile(1, 3)));
         assert!(schedule_actions.contains(&KernelScheduleAction::stride_order(vec![0, 2])));
         assert!(schedule_actions.contains(&KernelScheduleAction::stride_order(vec![2, 1])));
+        assert!(schedule_actions.contains(&KernelScheduleAction::swap(0, 1)));
 
         let unrolled = problem
             .apply_schedule_action(&tile_candidate, &KernelScheduleAction::unroll(2, 7))
@@ -5827,6 +6019,26 @@ mod tests {
             schedule_gemm_plan(&reordered.schedule).expect("reordered candidate should have plan");
         assert_eq!(reordered_plan.b_load_order, GemmBTileLoadOrder::KContiguous);
         assert_eq!(reordered.launch.kernel, "gemm_f32_bf16_tile_16x32x16_bk");
+
+        let swapped = problem
+            .apply_schedule_action(&tile_candidate, &KernelScheduleAction::swap(0, 1))
+            .expect("swap action should produce candidate metadata");
+        let swapped_plan =
+            schedule_gemm_plan(&swapped.schedule).expect("swapped candidate should have plan");
+        assert_eq!(swapped_plan.thread_order, GemmThreadOrder::MThenN);
+        assert_eq!(swapped.launch.kernel, "gemm_f32_bf16_tile_16x32x16_sw01");
+        assert_eq!(swapped.launch.block_dim.x, 16);
+        assert_eq!(swapped.launch.block_dim.y, 32);
+        assert_eq!(swapped.launch.block_dim.z, 1);
+        assert!(swapped.schedule.transforms.iter().any(|transform| {
+            matches!(
+                transform,
+                ScheduleTransform::Swap {
+                    axis_a: 0,
+                    axis_b: 1
+                }
+            )
+        }));
     }
 
     #[test]
@@ -5840,7 +6052,7 @@ mod tests {
         let spaces = problem.action_spaces(&local_candidate);
         let actions = spaces.actions();
 
-        assert_eq!(spaces.spaces.len(), 4);
+        assert_eq!(spaces.spaces.len(), 5);
         let KernelActionSpace::Unroll {
             axis: reduce_axis, ..
         } = &spaces.spaces[0]
@@ -5866,14 +6078,16 @@ mod tests {
         };
         assert_eq!(*b_load_axis, 4);
         assert_eq!(b_load_factors, &[2, 3, 4]);
+        assert!(matches!(spaces.spaces[3], KernelActionSpace::Swap { .. }));
         assert!(matches!(
-            spaces.spaces[3],
+            spaces.spaces[4],
             KernelActionSpace::StrideOrder { .. }
         ));
 
         assert!(actions.contains(&KernelScheduleAction::unroll(3, 2)));
         assert!(!actions.contains(&KernelScheduleAction::unroll(3, 3)));
         assert!(actions.contains(&KernelScheduleAction::unroll(4, 4)));
+        assert!(actions.contains(&KernelScheduleAction::swap(0, 1)));
 
         let a_unrolled = problem
             .apply_schedule_action(&local_candidate, &KernelScheduleAction::unroll(3, 2))
@@ -5929,7 +6143,7 @@ mod tests {
         let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
         let tile_candidate = problem.candidate_for_tile(GemmTileShape::new(16, 32, 16));
         let candidates = problem.expand(&tile_candidate);
-        assert_eq!(candidates.len(), 21);
+        assert_eq!(candidates.len(), 22);
 
         let unroll7 = candidates
             .iter()
@@ -6236,6 +6450,64 @@ mod tests {
                 .contains("let b_smem_index = tile_row * TILE_N + tile_col;")
         );
         assert!(generated.source.contains("TILE_B[b_smem_index] = if"));
+    }
+
+    #[test]
+    fn gemm_generator_renders_thread_axis_swap_source_on_demand() {
+        let problem = GemmSearchProblem::f32_bf16_row_col_row(128, 128, 256);
+        let candidate = replay_schedule_actions(
+            &problem,
+            &[
+                KernelScheduleAction::tile_gemm(
+                    16,
+                    32,
+                    16,
+                    KernelActionMaterialization::DeferredGenerated,
+                ),
+                KernelScheduleAction::swap(0, 1),
+            ],
+        )
+        .expect("valid swapped GEMM action trace should replay");
+        let plan = schedule_gemm_plan(&candidate.schedule).expect("swapped candidate should plan");
+        assert_eq!(plan.thread_order, GemmThreadOrder::MThenN);
+        assert_eq!(candidate.launch.block_dim.x, 16);
+        assert_eq!(candidate.launch.block_dim.y, 32);
+
+        let generated = GemmRustCudaGenerator
+            .source_for(&candidate)
+            .expect("GEMM generator should render thread-axis-swapped source");
+
+        assert_eq!(generated.symbol, "gemm_f32_bf16_tile_16x32x16_sw01");
+        assert!(
+            generated
+                .source
+                .contains("let thread_m = thread::threadIdx_x() as usize;")
+        );
+        assert!(
+            generated
+                .source
+                .contains("let thread_n = thread::threadIdx_y() as usize;")
+        );
+        assert!(
+            generated
+                .source
+                .contains("if thread_m >= THREADS_M || thread_n >= THREADS_N")
+        );
+        assert!(
+            generated
+                .source
+                .contains("let tid = thread_n * THREADS_M + thread_m;")
+        );
+        assert!(
+            generated
+                .source
+                .contains("let tile_row0 = thread_m * THREAD_TILE_M;")
+        );
+        assert!(
+            generated
+                .source
+                .contains("let tile_col0 = thread_n * THREAD_TILE_N;")
+        );
     }
 
     #[test]
@@ -7438,8 +7710,8 @@ mod tests {
         let best = result
             .best
             .expect("GEMM search should keep the existing tile");
-        assert_eq!(result.explored, 146);
-        assert_eq!(result.rejected, 145);
+        assert_eq!(result.explored, 147);
+        assert_eq!(result.rejected, 146);
         assert_eq!(
             schedule_gemm_tile(&best.schedule),
             Some(GemmTileShape::new(16, 16, 16))

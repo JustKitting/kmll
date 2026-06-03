@@ -1790,6 +1790,9 @@ fn format_schedule(transforms: &[ScheduleTransform]) -> String {
             }
             ScheduleTransform::TileGemm { m, n, k } => format!("tile_gemm(m={m},n={n},k={k})"),
             ScheduleTransform::StrideOrder { axes } => format!("stride_order(axes={axes:?})"),
+            ScheduleTransform::Swap { axis_a, axis_b } => {
+                format!("swap(axis_a={axis_a},axis_b={axis_b})")
+            }
         })
         .collect::<Vec<_>>();
     format!("[{}]", parts.join(","))
@@ -1823,6 +1826,9 @@ fn format_action_arg(arg: &KernelScheduleActionArg) -> String {
         KernelScheduleActionArg::Factor(factor) => format!("factor:{factor}"),
         KernelScheduleActionArg::Tile3d { m, n, k } => format!("tile3d:{m}x{n}x{k}"),
         KernelScheduleActionArg::AxisOrder(axes) => format!("axis_order:{axes:?}"),
+        KernelScheduleActionArg::AxisPair { axis_a, axis_b } => {
+            format!("axis_pair:{axis_a}<->{axis_b}")
+        }
     }
 }
 

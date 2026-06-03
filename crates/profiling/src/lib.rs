@@ -377,6 +377,7 @@ pub enum OptimizationActionOp {
     LocalTile,
     TileGemm,
     StrideOrder,
+    Swap,
 }
 
 impl OptimizationActionOp {
@@ -387,6 +388,7 @@ impl OptimizationActionOp {
             Self::LocalTile => "local-tile",
             Self::TileGemm => "tile-gemm",
             Self::StrideOrder => "stride-order",
+            Self::Swap => "swap",
         }
     }
 }
@@ -411,6 +413,7 @@ pub enum OptimizationActionArg {
     Factor(u32),
     Tile3d { m: u32, n: u32, k: u32 },
     AxisOrder(Vec<u8>),
+    AxisPair { axis_a: u8, axis_b: u8 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -475,6 +478,15 @@ impl OptimizationActionSpec {
             materialization: OptimizationActionMaterialization::DeferredGenerated,
         }
     }
+
+    pub const fn swap(axis_a: u8, axis_b: u8) -> Self {
+        Self {
+            op: OptimizationActionOp::Swap,
+            axis: None,
+            arg: OptimizationActionArg::AxisPair { axis_a, axis_b },
+            materialization: OptimizationActionMaterialization::DeferredGenerated,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -516,6 +528,9 @@ pub enum OptimizationActionSpace {
     StrideOrder {
         orders: Vec<Vec<u8>>,
     },
+    Swap {
+        pairs: Vec<(u8, u8)>,
+    },
 }
 
 impl OptimizationActionSpace {
@@ -526,6 +541,7 @@ impl OptimizationActionSpace {
             Self::LocalTile { factors, .. } => factors.len(),
             Self::TileGemm { variants } => variants.len(),
             Self::StrideOrder { orders } => orders.len(),
+            Self::Swap { pairs } => pairs.len(),
         }
     }
 }
@@ -2073,6 +2089,28 @@ fn push_optimization_action_space_json(
             push_indent(out, indent + 2);
             out.push_str("]\n");
         }
+        OptimizationActionSpace::Swap { pairs } => {
+            push_json_field_string(
+                out,
+                "op",
+                OptimizationActionOp::Swap.label(),
+                indent + 2,
+                true,
+            );
+            push_json_field_usize(out, "action_count", pairs.len(), indent + 2, true);
+            push_indent(out, indent + 2);
+            out.push_str("\"pairs\": [\n");
+            for (index, (axis_a, axis_b)) in pairs.iter().copied().enumerate() {
+                if index > 0 {
+                    out.push_str(",\n");
+                }
+                push_indent(out, indent + 4);
+                push_u32_array(out, &[u32::from(axis_a), u32::from(axis_b)]);
+            }
+            out.push('\n');
+            push_indent(out, indent + 2);
+            out.push_str("]\n");
+        }
     }
     push_indent(out, indent);
     out.push('}');
@@ -2223,6 +2261,14 @@ fn push_optimization_action_arg_json(
             out.push_str("{\n");
             push_json_field_string(out, "kind", "axis-order", indent + 2, true);
             push_json_field_u8_array(out, "axes", axes, indent + 2, false);
+            push_indent(out, indent);
+            out.push('}');
+        }
+        OptimizationActionArg::AxisPair { axis_a, axis_b } => {
+            out.push_str("{\n");
+            push_json_field_string(out, "kind", "axis-pair", indent + 2, true);
+            push_json_field_u32(out, "axis_a", u32::from(*axis_a), indent + 2, true);
+            push_json_field_u32(out, "axis_b", u32::from(*axis_b), indent + 2, false);
             push_indent(out, indent);
             out.push('}');
         }
@@ -2800,6 +2846,7 @@ mod tests {
             ),
             OptimizationActionSpec::unroll(1, 8),
             OptimizationActionSpec::local_tile(1, 2),
+            OptimizationActionSpec::swap(0, 1),
         ])
         .with_score(score);
         let report = OptimizationSearchReport::new(
@@ -2833,6 +2880,9 @@ mod tests {
                 axis: 1,
                 factors: vec![2, 4],
             },
+            OptimizationActionSpace::Swap {
+                pairs: vec![(0, 1)],
+            },
         ]));
 
         let json = report.to_json_string();
@@ -2841,15 +2891,18 @@ mod tests {
         assert!(json.contains("\"beam_width\": 8"));
         assert!(json.contains("\"require_launchable\": false"));
         assert!(json.contains("\"action_space\""));
-        assert!(json.contains("\"total_actions\": 7"));
+        assert!(json.contains("\"total_actions\": 8"));
         assert!(json.contains("\"variants\""));
         assert!(json.contains("\"materialization\": \"existing\""));
         assert!(json.contains("\"factors\": [2, 4, 8]"));
+        assert!(json.contains("\"pairs\""));
         assert!(json.contains("\"launchable\": false"));
         assert!(json.contains("\"action_trace\""));
         assert!(json.contains("\"op\": \"split\""));
         assert!(json.contains("\"op\": \"unroll\""));
         assert!(json.contains("\"op\": \"local-tile\""));
+        assert!(json.contains("\"op\": \"swap\""));
+        assert!(json.contains("\"kind\": \"axis-pair\""));
         assert!(json.contains("\"score\""));
         assert!(json.contains("\"source\": \"measured\""));
         assert!(json.contains("\"setup_segments\""));
@@ -2912,6 +2965,9 @@ mod tests {
             OptimizationActionSpace::StrideOrder {
                 orders: vec![vec![2, 1]],
             },
+            OptimizationActionSpace::Swap {
+                pairs: vec![(0, 1)],
+            },
         ]));
 
         let json = report.to_json_string();
@@ -2919,9 +2975,10 @@ mod tests {
         assert!(json.contains("\"max_steps\": 2"));
         assert!(json.contains("\"min_score_improvement\": 0.000000000000"));
         assert!(json.contains("\"action_space\""));
-        assert!(json.contains("\"total_actions\": 2"));
+        assert!(json.contains("\"total_actions\": 3"));
         assert!(json.contains("\"op\": \"tile-gemm\""));
         assert!(json.contains("\"orders\""));
+        assert!(json.contains("\"op\": \"swap\""));
         assert!(json.contains("\"exit_reason\""));
         assert!(json.contains("\"label\": \"no-improvement\""));
         assert!(json.contains("\"best_delta\": -1.000000000000"));
