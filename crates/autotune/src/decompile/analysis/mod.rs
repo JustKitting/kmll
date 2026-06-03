@@ -1,6 +1,7 @@
 mod cfg;
 mod dataflow;
 mod memory;
+mod regions;
 mod registers;
 mod render;
 mod types;
@@ -8,8 +9,8 @@ mod types;
 pub use self::types::{
     SassAnalysisFunction, SassAnalysisModule, SassBasicBlock, SassBlockTerminator, SassCfgEdge,
     SassCfgEdgeKind, SassDataflowOp, SassDefUseEdge, SassDominatorBlock, SassLiveRange,
-    SassMemoryAccess, SassMemoryAccessKind, SassNaturalLoop, SassReachingUse, SassSsaValue,
-    SassValueOp,
+    SassMemoryAccess, SassMemoryAccessKind, SassNaturalLoop, SassReachingUse, SassRegion,
+    SassRegionKind, SassSsaValue, SassValueOp,
 };
 
 use super::{KernelIrFunction, KernelIrModule};
@@ -18,6 +19,7 @@ use self::{
     cfg::{analyze_control_structure, build_blocks, build_edges},
     dataflow::{analyze_dataflow, analyze_reaching_defs, build_value_ops},
     memory::analyze_memory_accesses,
+    regions::recover_regions,
 };
 
 pub fn analyze_sass_ir(module: &KernelIrModule) -> SassAnalysisModule {
@@ -31,6 +33,7 @@ fn analyze_function(function: &KernelIrFunction) -> SassAnalysisFunction {
     let blocks = build_blocks(function);
     let edges = build_edges(function, &blocks);
     let (dominators, natural_loops) = analyze_control_structure(&blocks, &edges);
+    let regions = recover_regions(function, &blocks, &edges, &natural_loops);
     let dataflow = function
         .ops
         .iter()
@@ -46,6 +49,7 @@ fn analyze_function(function: &KernelIrFunction) -> SassAnalysisFunction {
         edges,
         dominators,
         natural_loops,
+        regions,
         dataflow,
         reaching_uses,
         ssa_values,

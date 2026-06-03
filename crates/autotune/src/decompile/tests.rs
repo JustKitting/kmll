@@ -159,6 +159,26 @@ loop_fixture:
         /*0060*/                   EXIT ;                                        /* 0x0 */
 "#;
 
+const NESTED_LOOP_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.nested_loop_fixture,"ax",@progbits
+        .global nested_loop_fixture
+nested_loop_fixture:
+.text.nested_loop_fixture:
+        /*0000*/                   MOV R2, RZ ;                                  /* 0x0 */
+.L_outer:
+        /*0010*/                   IADD R2, R2, 0x1 ;                            /* 0x0 */
+        /*0020*/                   MOV R3, RZ ;                                  /* 0x0 */
+.L_inner:
+        /*0030*/                   IADD R3, R3, 0x1 ;                            /* 0x0 */
+        /*0040*/                   ISETP.LT.U32.AND P0, PT, R3, R1, PT ;         /* 0x0 */
+        /*0050*/               @P0 BRA `(.L_inner) ;                             /* 0x0 */
+        /*0060*/                   ISETP.LT.U32.AND P1, PT, R2, R0, PT ;         /* 0x0 */
+        /*0070*/               @P1 BRA `(.L_outer) ;                             /* 0x0 */
+        /*0080*/                   EXIT ;                                        /* 0x0 */
+"#;
+
 #[test]
 fn parse_nvidia_sass_captures_nvdisasm_function_and_operands() {
     let module = parse_nvidia_sass(SIMPLE_SASS).expect("fixture SASS should parse");
@@ -748,6 +768,48 @@ fn analysis_recovers_dominators_and_natural_loops() {
 }
 
 #[test]
+fn analysis_recovers_constructive_region_paths_for_nested_loops() {
+    let module = parse_nvidia_sass(NESTED_LOOP_SASS).expect("nested loop fixture should parse");
+    let ir = lift_sass_module(&module);
+    let analysis = analyze_sass_ir(&ir);
+    let function = &analysis.functions[0];
+
+    assert_eq!(function.natural_loops.len(), 2);
+    assert!(function.regions.len() >= 3);
+    let root = function
+        .regions
+        .iter()
+        .find(|region| region.kind == SassRegionKind::Function)
+        .expect("function region should exist");
+    assert_eq!(root.depth, 0);
+    assert_eq!(root.parent, None);
+    assert!(root.opcode_closure.iter().any(|opcode| opcode == "BRA"));
+
+    let loop_regions = function
+        .regions
+        .iter()
+        .filter(|region| region.kind == SassRegionKind::NaturalLoop)
+        .collect::<Vec<_>>();
+    assert_eq!(loop_regions.len(), 2);
+    let outer = loop_regions
+        .iter()
+        .find(|region| region.depth == 1)
+        .expect("outer loop should be one level under function");
+    let inner = loop_regions
+        .iter()
+        .find(|region| region.depth == 2)
+        .expect("inner loop should be nested under the outer loop");
+    assert_eq!(inner.parent, Some(outer.id));
+    assert!(inner.path.len() > outer.path.len());
+    assert!(inner.path.starts_with(&outer.path));
+    assert!(inner.opcode_closure.iter().any(|opcode| opcode == "ISETP"));
+
+    let text = analysis.to_text();
+    assert!(text.contains("regions"));
+    assert!(text.contains("kind=natural-loop"));
+}
+
+#[test]
 fn analysis_keeps_fallthrough_after_predicated_exit() {
     let module =
         parse_nvidia_sass(PREDICATED_EXIT_SASS).expect("predicated exit fixture should parse");
@@ -1001,6 +1063,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.cfg_edges_path.exists());
     assert!(report.dominators_path.exists());
     assert!(report.natural_loops_path.exists());
+    assert!(report.regions_path.exists());
     assert!(report.dataflow_path.exists());
     assert!(report.reaching_uses_path.exists());
     assert!(report.ssa_values_path.exists());
@@ -1014,6 +1077,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.cfg_edge_count > 0);
     assert!(report.dominator_block_count > 0);
     assert!(report.natural_loop_count > 0);
+    assert!(report.region_count > 0);
     assert!(report.dataflow_op_count > 0);
     assert!(report.reaching_use_count > 0);
     assert!(report.ssa_value_count > 0);
@@ -1073,6 +1137,12 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     ));
     assert!(opcode_probe_targets_tsv.contains("HMMA"));
     assert!(opcode_probe_targets_tsv.contains("generate-sass-artifact"));
+    let regions_tsv = fs::read_to_string(&report.regions_path).expect("regions TSV should read");
+    assert!(regions_tsv.starts_with(
+        "sass_path\tfunction\tregion_id\tparent_region\tchildren\tdepth\tpath\tlocal_rank\tkind"
+    ));
+    assert!(regions_tsv.contains("function"));
+    assert!(regions_tsv.contains("opcode_closure"));
     assert!(
         report
             .files

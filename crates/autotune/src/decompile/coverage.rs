@@ -46,6 +46,7 @@ pub struct SassCoverageReport {
     pub cfg_edges_path: PathBuf,
     pub dominators_path: PathBuf,
     pub natural_loops_path: PathBuf,
+    pub regions_path: PathBuf,
     pub dataflow_path: PathBuf,
     pub reaching_uses_path: PathBuf,
     pub ssa_values_path: PathBuf,
@@ -66,6 +67,7 @@ pub struct SassCoverageReport {
     pub cfg_edges: Vec<SassCoverageCfgEdge>,
     pub dominators: Vec<SassCoverageDominatorBlock>,
     pub natural_loops: Vec<SassCoverageNaturalLoop>,
+    pub regions: Vec<SassCoverageRegion>,
     pub dataflow: Vec<SassCoverageDataflowOp>,
     pub reaching_uses: Vec<SassCoverageReachingUse>,
     pub ssa_values: Vec<SassCoverageSsaValue>,
@@ -82,6 +84,7 @@ pub struct SassCoverageReport {
     pub cfg_edge_count: usize,
     pub dominator_block_count: usize,
     pub natural_loop_count: usize,
+    pub region_count: usize,
     pub dataflow_op_count: usize,
     pub reaching_use_count: usize,
     pub ssa_value_count: usize,
@@ -114,6 +117,7 @@ pub struct SassCoverageFileReport {
     pub cfg_edge_count: usize,
     pub dominator_block_count: usize,
     pub natural_loop_count: usize,
+    pub region_count: usize,
     pub reaching_use_count: usize,
     pub ssa_value_count: usize,
     pub def_use_edge_count: usize,
@@ -290,6 +294,28 @@ pub struct SassCoverageNaturalLoop {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassCoverageRegion {
+    pub sass_path: PathBuf,
+    pub function: String,
+    pub id: usize,
+    pub parent: Option<usize>,
+    pub children: Vec<usize>,
+    pub depth: usize,
+    pub path: Vec<usize>,
+    pub local_rank: usize,
+    pub kind: String,
+    pub header_block: Option<usize>,
+    pub latch_block: Option<usize>,
+    pub branch_block: Option<usize>,
+    pub entry_blocks: Vec<usize>,
+    pub blocks: Vec<usize>,
+    pub op_addresses: Vec<u64>,
+    pub opcode_closure: Vec<String>,
+    pub condition: Option<String>,
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageDataflowOp {
     pub sass_path: PathBuf,
     pub function: String,
@@ -412,6 +438,7 @@ pub fn run_sass_coverage_scan(
     let mut cfg_edges = Vec::new();
     let mut dominators = Vec::new();
     let mut natural_loops = Vec::new();
+    let mut regions = Vec::new();
     let mut dataflow = Vec::new();
     let mut reaching_uses = Vec::new();
     let mut ssa_values = Vec::new();
@@ -467,6 +494,7 @@ pub fn run_sass_coverage_scan(
                     &mut cfg_edges,
                     &mut dominators,
                     &mut natural_loops,
+                    &mut regions,
                     &mut dataflow,
                     &mut reaching_uses,
                     &mut ssa_values,
@@ -523,6 +551,7 @@ pub fn run_sass_coverage_scan(
                     cfg_edge_count: analysis.edge_count(),
                     dominator_block_count: analysis.dominator_block_count(),
                     natural_loop_count: analysis.natural_loop_count(),
+                    region_count: analysis.region_count(),
                     reaching_use_count: analysis.reaching_use_count(),
                     ssa_value_count: analysis.ssa_value_count(),
                     def_use_edge_count: analysis.def_use_edge_count(),
@@ -548,6 +577,7 @@ pub fn run_sass_coverage_scan(
                     cfg_edge_count: 0,
                     dominator_block_count: 0,
                     natural_loop_count: 0,
+                    region_count: 0,
                     reaching_use_count: 0,
                     ssa_value_count: 0,
                     def_use_edge_count: 0,
@@ -578,6 +608,7 @@ pub fn run_sass_coverage_scan(
     let cfg_edge_count = cfg_edges.len();
     let dominator_block_count = dominators.len();
     let natural_loop_count = natural_loops.len();
+    let region_count = regions.len();
     let dataflow_op_count = dataflow.len();
     let reaching_use_count = reaching_uses.len();
     let ssa_value_count = ssa_values.len();
@@ -623,6 +654,7 @@ pub fn run_sass_coverage_scan(
     let cfg_edges_path = options.output_dir.join("cfg-edges.tsv");
     let dominators_path = options.output_dir.join("dominators.tsv");
     let natural_loops_path = options.output_dir.join("natural-loops.tsv");
+    let regions_path = options.output_dir.join("regions.tsv");
     let dataflow_path = options.output_dir.join("dataflow.tsv");
     let reaching_uses_path = options.output_dir.join("reaching-uses.tsv");
     let ssa_values_path = options.output_dir.join("ssa-values.tsv");
@@ -648,6 +680,7 @@ pub fn run_sass_coverage_scan(
         cfg_edges_path,
         dominators_path,
         natural_loops_path,
+        regions_path,
         dataflow_path,
         reaching_uses_path,
         ssa_values_path,
@@ -668,6 +701,7 @@ pub fn run_sass_coverage_scan(
         cfg_edges,
         dominators,
         natural_loops,
+        regions,
         dataflow,
         reaching_uses,
         ssa_values,
@@ -684,6 +718,7 @@ pub fn run_sass_coverage_scan(
         cfg_edge_count,
         dominator_block_count,
         natural_loop_count,
+        region_count,
         dataflow_op_count,
         reaching_use_count,
         ssa_value_count,
@@ -908,6 +943,7 @@ fn append_analysis(
     cfg_edges: &mut Vec<SassCoverageCfgEdge>,
     dominators: &mut Vec<SassCoverageDominatorBlock>,
     natural_loops: &mut Vec<SassCoverageNaturalLoop>,
+    regions: &mut Vec<SassCoverageRegion>,
     dataflow: &mut Vec<SassCoverageDataflowOp>,
     reaching_uses: &mut Vec<SassCoverageReachingUse>,
     ssa_values: &mut Vec<SassCoverageSsaValue>,
@@ -962,6 +998,28 @@ fn append_analysis(
                 blocks: natural_loop.blocks.clone(),
                 edge_condition: natural_loop.edge_condition.clone(),
                 edge_target: natural_loop.edge_target.clone(),
+            });
+        }
+        for region in &function.regions {
+            regions.push(SassCoverageRegion {
+                sass_path: sass_path.to_path_buf(),
+                function: function.name.clone(),
+                id: region.id,
+                parent: region.parent,
+                children: region.children.clone(),
+                depth: region.depth,
+                path: region.path.clone(),
+                local_rank: region.local_rank,
+                kind: region.kind.to_string(),
+                header_block: region.header_block,
+                latch_block: region.latch_block,
+                branch_block: region.branch_block,
+                entry_blocks: region.entry_blocks.clone(),
+                blocks: region.blocks.clone(),
+                op_addresses: region.op_addresses.clone(),
+                opcode_closure: region.opcode_closure.clone(),
+                condition: region.condition.clone(),
+                target: region.target.clone(),
             });
         }
         for op in &function.dataflow {
@@ -1136,6 +1194,7 @@ fn write_coverage_reports(report: &SassCoverageReport) -> Result<(), Box<dyn Err
         &report.natural_loops_path,
         render_natural_loops_tsv(report).as_bytes(),
     )?;
+    fs::write(&report.regions_path, render_regions_tsv(report).as_bytes())?;
     fs::write(
         &report.dataflow_path,
         render_dataflow_tsv(report).as_bytes(),
@@ -1192,6 +1251,7 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
     writeln!(out, "cfg_edges={}", report.cfg_edge_count).expect("write to string");
     writeln!(out, "dominator_blocks={}", report.dominator_block_count).expect("write to string");
     writeln!(out, "natural_loops={}", report.natural_loop_count).expect("write to string");
+    writeln!(out, "regions={}", report.region_count).expect("write to string");
     writeln!(out, "dataflow_ops={}", report.dataflow_op_count).expect("write to string");
     writeln!(out, "reaching_uses={}", report.reaching_use_count).expect("write to string");
     writeln!(out, "ssa_values={}", report.ssa_value_count).expect("write to string");
@@ -1257,6 +1317,7 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
         report.opcode_signature_counts.len()
     )
     .expect("write to string");
+    writeln!(out, "regions_path={}", report.regions_path.display()).expect("write to string");
     writeln!(out).expect("write to string");
     writeln!(out, "top_opcodes").expect("write to string");
     for count in report.opcode_counts.iter().take(32) {
@@ -1343,7 +1404,7 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "status\tsass_path\tparsed_instructions\tcfg_blocks\tcfg_edges\tdominator_blocks\tnatural_loops\treaching_uses\tssa_values\tdef_use_edges\tvalue_ops\tlifted_ops\tlive_ranges\tmemory_accesses\tsemantic_patterns\tunsupported_instructions\tir_path\tlifted_ir_path\tanalysis_path\tpatterns_path\tside_by_side_path\terror"
+        "status\tsass_path\tparsed_instructions\tcfg_blocks\tcfg_edges\tdominator_blocks\tnatural_loops\tregions\treaching_uses\tssa_values\tdef_use_edges\tvalue_ops\tlifted_ops\tlive_ranges\tmemory_accesses\tsemantic_patterns\tunsupported_instructions\tir_path\tlifted_ir_path\tanalysis_path\tpatterns_path\tside_by_side_path\terror"
     )
     .expect("write to string");
     for file in &report.files {
@@ -1354,7 +1415,7 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
         };
         writeln!(
             out,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             status,
             tsv(&file.sass_path.display().to_string()),
             file.parsed_instruction_count,
@@ -1362,6 +1423,7 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
             file.cfg_edge_count,
             file.dominator_block_count,
             file.natural_loop_count,
+            file.region_count,
             file.reaching_use_count,
             file.ssa_value_count,
             file.def_use_edge_count,
@@ -1504,6 +1566,50 @@ fn render_natural_loops_tsv(report: &SassCoverageReport) -> String {
             tsv(&format_blocks(&natural_loop.blocks)),
             tsv(natural_loop.edge_condition.as_deref().unwrap_or("")),
             tsv(natural_loop.edge_target.as_deref().unwrap_or("")),
+        )
+        .expect("write to string");
+    }
+    out
+}
+
+fn render_regions_tsv(report: &SassCoverageReport) -> String {
+    let mut out = String::new();
+    writeln!(
+        out,
+        "sass_path\tfunction\tregion_id\tparent_region\tchildren\tdepth\tpath\tlocal_rank\tkind\theader_block\tlatch_block\tbranch_block\tentry_blocks\tblocks\top_addresses\topcode_closure\tcondition\ttarget"
+    )
+    .expect("write to string");
+    for region in &report.regions {
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            tsv(&region.sass_path.display().to_string()),
+            tsv(&region.function),
+            region.id,
+            region.parent.map(|id| id.to_string()).unwrap_or_default(),
+            tsv(&format_blocks(&region.children)),
+            region.depth,
+            tsv(&format_region_path(&region.path)),
+            region.local_rank,
+            tsv(&region.kind),
+            region
+                .header_block
+                .map(|block| block.to_string())
+                .unwrap_or_default(),
+            region
+                .latch_block
+                .map(|block| block.to_string())
+                .unwrap_or_default(),
+            region
+                .branch_block
+                .map(|block| block.to_string())
+                .unwrap_or_default(),
+            tsv(&format_blocks(&region.entry_blocks)),
+            tsv(&format_blocks(&region.blocks)),
+            tsv(&format_addresses(&region.op_addresses)),
+            tsv(&region.opcode_closure.join(",")),
+            tsv(region.condition.as_deref().unwrap_or("")),
+            tsv(region.target.as_deref().unwrap_or("")),
         )
         .expect("write to string");
     }
@@ -1789,6 +1895,13 @@ fn format_blocks(blocks: &[usize]) -> String {
         .map(|block| block.to_string())
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn format_region_path(path: &[usize]) -> String {
+    path.iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 fn format_values(values: &[usize]) -> String {

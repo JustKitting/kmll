@@ -65,6 +65,13 @@ impl SassAnalysisModule {
             .sum()
     }
 
+    pub fn region_count(&self) -> usize {
+        self.functions
+            .iter()
+            .map(|function| function.regions.len())
+            .sum()
+    }
+
     pub fn ssa_value_count(&self) -> usize {
         self.functions
             .iter()
@@ -94,6 +101,7 @@ pub struct SassAnalysisFunction {
     pub edges: Vec<SassCfgEdge>,
     pub dominators: Vec<SassDominatorBlock>,
     pub natural_loops: Vec<SassNaturalLoop>,
+    pub regions: Vec<SassRegion>,
     pub dataflow: Vec<SassDataflowOp>,
     pub reaching_uses: Vec<SassReachingUse>,
     pub ssa_values: Vec<SassSsaValue>,
@@ -183,6 +191,45 @@ pub struct SassNaturalLoop {
     pub blocks: Vec<usize>,
     pub edge_condition: Option<String>,
     pub edge_target: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SassRegion {
+    pub id: usize,
+    pub parent: Option<usize>,
+    pub children: Vec<usize>,
+    pub depth: usize,
+    pub path: Vec<usize>,
+    pub local_rank: usize,
+    pub kind: SassRegionKind,
+    pub header_block: Option<usize>,
+    pub latch_block: Option<usize>,
+    pub branch_block: Option<usize>,
+    pub entry_blocks: Vec<usize>,
+    pub blocks: Vec<usize>,
+    pub op_addresses: Vec<u64>,
+    pub opcode_closure: Vec<String>,
+    pub condition: Option<String>,
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SassRegionKind {
+    Function,
+    NaturalLoop,
+    Branch,
+    BranchArm,
+}
+
+impl fmt::Display for SassRegionKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Function => f.write_str("function"),
+            Self::NaturalLoop => f.write_str("natural-loop"),
+            Self::Branch => f.write_str("branch"),
+            Self::BranchArm => f.write_str("branch-arm"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

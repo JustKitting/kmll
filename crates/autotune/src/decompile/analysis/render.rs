@@ -66,6 +66,30 @@ impl SassAnalysisModule {
                 )
                 .expect("write to string");
             }
+            writeln!(out, "  regions").expect("write to string");
+            for region in &function.regions {
+                writeln!(
+                    out,
+                    "    r{} parent={} depth={} path=[{}] rank={} kind={} blocks=[{}] children=[{}] ops=[{}] opcodes=[{}] header={} latch={} branch={} entries=[{}] condition={} target={}",
+                    region.id,
+                    format_region_id(region.parent),
+                    region.depth,
+                    format_region_path(&region.path),
+                    region.local_rank,
+                    region.kind,
+                    format_block_ids(&region.blocks),
+                    format_region_ids(&region.children),
+                    format_addresses(&region.op_addresses),
+                    region.opcode_closure.join(","),
+                    format_block_id(region.header_block),
+                    format_block_id(region.latch_block),
+                    format_block_id(region.branch_block),
+                    format_block_ids(&region.entry_blocks),
+                    region.condition.as_deref().unwrap_or("-"),
+                    region.target.as_deref().unwrap_or("-")
+                )
+                .expect("write to string");
+            }
             writeln!(out, "  dataflow").expect("write to string");
             for dataflow in &function.dataflow {
                 writeln!(
@@ -183,12 +207,33 @@ fn format_block_id(block_id: Option<usize>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+fn format_region_id(region_id: Option<usize>) -> String {
+    region_id
+        .map(|region_id| format!("r{region_id}"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
 fn format_block_ids(block_ids: &[usize]) -> String {
     block_ids
         .iter()
         .map(|block_id| format!("b{block_id}"))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn format_region_ids(region_ids: &[usize]) -> String {
+    region_ids
+        .iter()
+        .map(|region_id| format!("r{region_id}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_region_path(path: &[usize]) -> String {
+    path.iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 fn format_value_ids(value_ids: &[usize]) -> String {
