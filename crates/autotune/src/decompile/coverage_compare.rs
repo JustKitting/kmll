@@ -38,7 +38,7 @@ pub struct SassCoverageComparisonReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageOpcodeDelta {
-    pub opcode: String,
+    pub opcode: SassOpcode,
     pub change: SassCoverageOpcodeChange,
     pub baseline_known: bool,
     pub candidate_known: bool,
@@ -54,7 +54,7 @@ pub struct SassCoverageOpcodeDelta {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageProbeTargetDelta {
-    pub opcode: String,
+    pub opcode: SassOpcode,
     pub baseline_coverage: SassOpcodeCoverageState,
     pub candidate_coverage: SassOpcodeCoverageState,
     pub candidate_instruction_count: usize,
@@ -155,7 +155,7 @@ fn opcode_deltas(
             let candidate = candidate_catalog.get(&opcode);
             let change = opcode_change(baseline, candidate)?;
             Some(SassCoverageOpcodeDelta {
-                opcode: opcode.to_string(),
+                opcode,
                 change,
                 baseline_known: catalog_known(baseline),
                 candidate_known: catalog_known(candidate),
@@ -182,12 +182,7 @@ fn resolved_probe_targets(
         .filter(|delta| {
             delta.baseline_known && !delta.baseline_observed && delta.candidate_observed
         })
-        .map(|delta| {
-            probe_target_delta(
-                delta,
-                candidate_catalog.get(&SassOpcode::new(delta.opcode.clone())),
-            )
-        })
+        .map(|delta| probe_target_delta(delta, candidate_catalog.get(&delta.opcode)))
         .collect()
 }
 
@@ -201,12 +196,7 @@ fn new_probe_targets(
         .filter(|delta| {
             delta.candidate_known && !delta.candidate_observed && delta.baseline_observed
         })
-        .map(|delta| {
-            probe_target_delta(
-                delta,
-                candidate_catalog.get(&SassOpcode::new(delta.opcode.clone())),
-            )
-        })
+        .map(|delta| probe_target_delta(delta, candidate_catalog.get(&delta.opcode)))
         .collect()
 }
 
@@ -398,7 +388,7 @@ fn render_opcode_delta_tsv(report: &SassCoverageComparisonReport) -> String {
         writeln!(
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            tsv(&delta.opcode),
+            tsv(&delta.opcode.to_string()),
             tsv(&delta.change.to_string()),
             delta.baseline_known,
             delta.candidate_known,
@@ -427,7 +417,7 @@ fn render_probe_target_delta_tsv(targets: &[SassCoverageProbeTargetDelta]) -> St
         writeln!(
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            tsv(&target.opcode),
+            tsv(&target.opcode.to_string()),
             tsv(&target.baseline_coverage.to_string()),
             tsv(&target.candidate_coverage.to_string()),
             target.candidate_instruction_count,

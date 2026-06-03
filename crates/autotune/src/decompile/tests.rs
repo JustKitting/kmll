@@ -1831,13 +1831,13 @@ fn coverage_comparison_reports_resolved_probe_targets() {
         report
             .opcode_deltas
             .iter()
-            .any(|delta| delta.opcode == "IADD"
+            .any(|delta| delta.opcode == SassOpcode::new("IADD")
                 && delta.change == SassCoverageOpcodeChange::NewlyObserved)
     );
     let resolved_iadd = report
         .resolved_probe_targets
         .iter()
-        .find(|target| target.opcode == "IADD")
+        .find(|target| target.opcode == SassOpcode::new("IADD"))
         .expect("candidate IADD should resolve a baseline probe target");
     assert_eq!(
         resolved_iadd.baseline_coverage,
