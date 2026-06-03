@@ -55,7 +55,7 @@ pub(super) fn build_value_ops(
             SassValueOp {
                 address: op.address,
                 block_id: block_id_for_op_index(blocks, op_index),
-                predicate: op.predicate.as_ref().map(ToString::to_string),
+                predicate: op.predicate.clone(),
                 opcode: SassOpcode::from_ir_op(op),
                 kind: SassValueOpKind::from_ir_kind(&op.kind),
                 input_registers: dataflow.uses.clone(),
@@ -433,7 +433,7 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
     }
     SassDataflowOp {
         address: op.address,
-        predicate: op.predicate.as_ref().map(ToString::to_string),
+        predicate: op.predicate.clone(),
         defines,
         uses,
         source: op.source.clone(),

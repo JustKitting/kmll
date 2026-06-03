@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::super::{RegisterRef, SassOpcode};
+use super::super::{PredicateCondition, RegisterRef, SassOpcode};
 use super::semantics::SassLiftedSemantics;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,7 +28,7 @@ pub struct SassLiftedFunction {
 pub struct SassLiftedOp {
     pub address: u64,
     pub block_id: Option<usize>,
-    pub predicate: Option<String>,
+    pub predicate: Option<PredicateCondition>,
     pub opcode: SassOpcode,
     pub class: SassLiftedOpClass,
     pub kind: SassLiftedOpKind,

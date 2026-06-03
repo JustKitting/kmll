@@ -548,7 +548,7 @@ pub struct SassCoverageValueOp {
     pub function: String,
     pub address: u64,
     pub block_id: Option<usize>,
-    pub predicate: Option<String>,
+    pub predicate: Option<PredicateCondition>,
     pub opcode: SassOpcode,
     pub kind: SassValueOpKind,
     pub input_registers: Vec<RegisterRef>,
@@ -564,7 +564,7 @@ pub struct SassCoverageLiftedOp {
     pub function: String,
     pub address: u64,
     pub block_id: Option<usize>,
-    pub predicate: Option<String>,
+    pub predicate: Option<PredicateCondition>,
     pub opcode: SassOpcode,
     pub class: SassLiftedOpClass,
     pub kind: SassLiftedOpKind,
@@ -592,7 +592,7 @@ pub struct SassCoverageMemoryAccess {
     pub sass_path: PathBuf,
     pub function: String,
     pub address: u64,
-    pub predicate: Option<String>,
+    pub predicate: Option<PredicateCondition>,
     pub kind: SassMemoryAccessKind,
     pub space: MemorySpace,
     pub width_bits: Option<u32>,
@@ -1993,7 +1993,7 @@ fn render_value_ops_tsv(report: &SassCoverageReport) -> String {
             op.block_id
                 .map(|block| block.to_string())
                 .unwrap_or_default(),
-            tsv(op.predicate.as_deref().unwrap_or("")),
+            tsv(&display_optional(op.predicate.as_ref())),
             tsv(&op.opcode.to_string()),
             tsv(&display_list(&op.input_registers)),
             tsv(&display_list(&op.output_registers)),
@@ -2024,7 +2024,7 @@ fn render_lifted_ops_tsv(report: &SassCoverageReport) -> String {
             op.block_id
                 .map(|block| block.to_string())
                 .unwrap_or_default(),
-            tsv(op.predicate.as_deref().unwrap_or("")),
+            tsv(&display_optional(op.predicate.as_ref())),
             tsv(&op.opcode.to_string()),
             tsv(&op.class.to_string()),
             tsv(&op.kind.to_string()),
@@ -2078,7 +2078,7 @@ fn render_memory_accesses_tsv(report: &SassCoverageReport) -> String {
             tsv(&access.sass_path.display().to_string()),
             tsv(&access.function),
             access.address,
-            tsv(access.predicate.as_deref().unwrap_or("")),
+            tsv(&display_optional(access.predicate.as_ref())),
             tsv(&access.kind.to_string()),
             tsv(&access.space.to_string()),
             access

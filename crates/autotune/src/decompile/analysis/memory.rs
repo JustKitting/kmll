@@ -62,7 +62,7 @@ fn memory_access(
 ) -> SassMemoryAccess {
     SassMemoryAccess {
         address: op.address,
-        predicate: op.predicate.as_ref().map(ToString::to_string),
+        predicate: op.predicate.clone(),
         kind,
         space,
         width_bits,

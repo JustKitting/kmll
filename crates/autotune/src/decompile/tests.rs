@@ -1808,6 +1808,18 @@ fn coverage_scan_preserves_typed_semantic_pattern_rows() {
     assert!(report.semantic_pattern_counts.iter().any(|count| {
         count.category == SassSemanticPatternCategory::WarpReduceSum && count.count == 1
     }));
+    assert!(
+        report
+            .value_ops
+            .iter()
+            .any(|op| is_predicate_register(&op.predicate, "P0"))
+    );
+    assert!(
+        report
+            .lifted_ops
+            .iter()
+            .any(|op| is_predicate_register(&op.predicate, "P0"))
+    );
 
     let pattern_tsv =
         fs::read_to_string(&report.semantic_patterns_path).expect("patterns TSV should read");

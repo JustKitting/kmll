@@ -402,7 +402,7 @@ impl fmt::Display for SassValueOpKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassDataflowOp {
     pub address: u64,
-    pub predicate: Option<String>,
+    pub predicate: Option<PredicateCondition>,
     pub defines: Vec<RegisterRef>,
     pub uses: Vec<RegisterRef>,
     pub source: String,
@@ -458,7 +458,7 @@ pub struct SassDefUseEdge {
 pub struct SassValueOp {
     pub address: u64,
     pub block_id: Option<usize>,
-    pub predicate: Option<String>,
+    pub predicate: Option<PredicateCondition>,
     pub opcode: SassOpcode,
     pub kind: SassValueOpKind,
     pub input_registers: Vec<RegisterRef>,
@@ -488,7 +488,7 @@ impl SassLiveRange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassMemoryAccess {
     pub address: u64,
-    pub predicate: Option<String>,
+    pub predicate: Option<PredicateCondition>,
     pub kind: SassMemoryAccessKind,
     pub space: MemorySpace,
     pub width_bits: Option<u32>,

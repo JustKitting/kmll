@@ -21,7 +21,7 @@ impl SassLiftedModule {
                     op.kind,
                     format_value_refs(&op.inputs),
                     format_value_refs(&op.outputs),
-                    op.predicate.as_deref().unwrap_or("-"),
+                    format_optional_display(op.predicate.as_ref()),
                     op.source_operands.join(","),
                     op.semantics,
                     op.source
@@ -33,6 +33,13 @@ impl SassLiftedModule {
         out
     }
 }
+
+fn format_optional_display<T: std::fmt::Display>(value: Option<&T>) -> String {
+    value
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "-".to_string())
+}
+
 fn format_value_refs(values: &[SassLiftedValueRef]) -> String {
     values
         .iter()

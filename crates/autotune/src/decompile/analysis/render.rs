@@ -150,7 +150,7 @@ impl SassAnalysisModule {
                     op.opcode,
                     format_value_ids(&op.input_value_ids),
                     format_value_ids(&op.output_value_ids),
-                    op.predicate.as_deref().unwrap_or("-"),
+                    format_optional_display(op.predicate.as_ref()),
                     op.source
                 )
                 .expect("write to string");
@@ -193,7 +193,7 @@ impl SassAnalysisModule {
                         .width_bits
                         .map(|bits| bits.to_string())
                         .unwrap_or_else(|| "-".to_string()),
-                    access.predicate.as_deref().unwrap_or("-"),
+                    format_optional_display(access.predicate.as_ref()),
                     access.source
                 )
                 .expect("write to string");
@@ -233,6 +233,12 @@ fn format_display_list<T: ToString>(values: &[T]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn format_optional_display<T: std::fmt::Display>(value: Option<&T>) -> String {
+    value
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn format_block_id(block_id: Option<usize>) -> String {
