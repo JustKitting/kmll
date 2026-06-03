@@ -256,6 +256,7 @@ pub struct SassCoverageLiftedOp {
     pub opcode: String,
     pub class: String,
     pub kind: String,
+    pub semantics: String,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
     pub source_operands: Vec<String>,
@@ -788,6 +789,7 @@ fn append_analysis(
                     opcode: op.opcode.clone(),
                     class: op.class.to_string(),
                     kind: op.kind.to_string(),
+                    semantics: op.semantics.to_string(),
                     inputs: op.inputs.iter().map(|value| value.name()).collect(),
                     outputs: op.outputs.iter().map(|value| value.name()).collect(),
                     source_operands: op.source_operands.clone(),
@@ -1281,13 +1283,13 @@ fn render_lifted_ops_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "sass_path\tfunction\taddress\tblock_id\tpredicate\topcode\tclass\tkind\tinputs\toutputs\tsource_operands\tdetail\traw"
+        "sass_path\tfunction\taddress\tblock_id\tpredicate\topcode\tclass\tkind\tsemantics\tinputs\toutputs\tsource_operands\tdetail\traw"
     )
     .expect("write to string");
     for op in &report.lifted_ops {
         writeln!(
             out,
-            "{}\t{}\t{:#06x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{:#06x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&op.sass_path.display().to_string()),
             tsv(&op.function),
             op.address,
@@ -1298,6 +1300,7 @@ fn render_lifted_ops_tsv(report: &SassCoverageReport) -> String {
             tsv(&op.opcode),
             tsv(&op.class),
             tsv(&op.kind),
+            tsv(&op.semantics),
             tsv(&op.inputs.join(",")),
             tsv(&op.outputs.join(",")),
             tsv(&op.source_operands.join(",")),

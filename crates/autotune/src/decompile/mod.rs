@@ -43,7 +43,7 @@ pub use self::{
     },
     lifted::{
         SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedOpClass, SassLiftedOpKind,
-        SassLiftedValueRef, lift_sass_value_ir,
+        SassLiftedSemantics, SassLiftedValueRef, lift_sass_value_ir,
     },
     patterns::{
         SassPatternConfidence, SassPatternFunction, SassPatternModule, SassSemanticPattern,

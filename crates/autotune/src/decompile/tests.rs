@@ -247,6 +247,14 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
         .expect("descriptor load should lift");
     assert_eq!(load.class, SassLiftedOpClass::Memory);
     assert_eq!(load.kind, SassLiftedOpKind::Load);
+    assert!(matches!(
+        &load.semantics,
+        SassLiftedSemantics::Load {
+            space: MemorySpace::Descriptor,
+            dst,
+            address
+        } if dst == "R2" && address == "desc[UR4][R0.64]"
+    ));
     assert!(load.outputs.iter().any(|value| value.register == "R2"));
 
     let add = function
@@ -256,6 +264,14 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
         .expect("integer add should lift");
     assert_eq!(add.class, SassLiftedOpClass::IntegerMath);
     assert_eq!(add.kind, SassLiftedOpKind::IntegerAdd);
+    assert!(matches!(
+        &add.semantics,
+        SassLiftedSemantics::IntegerAdd {
+            dst,
+            inputs,
+            width_bits: None
+        } if dst == "R4" && inputs == &vec!["R2".to_string(), "R3".to_string()]
+    ));
     assert!(add.inputs.iter().any(|value| value.register == "R2"));
     assert!(add.inputs.iter().any(|value| value.register == "R3"));
     assert!(add.outputs.iter().any(|value| value.register == "R4"));
@@ -267,6 +283,14 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
         .expect("descriptor store should lift");
     assert_eq!(store.class, SassLiftedOpClass::Memory);
     assert_eq!(store.kind, SassLiftedOpKind::Store);
+    assert!(matches!(
+        &store.semantics,
+        SassLiftedSemantics::Store {
+            space: MemorySpace::Descriptor,
+            address,
+            value
+        } if address == "desc[UR8][R0.64]" && value == "R4"
+    ));
     assert!(store.inputs.iter().any(|value| value.register == "R4"));
     assert!(store.outputs.is_empty());
 
@@ -277,11 +301,16 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
         .expect("exit should lift");
     assert_eq!(exit.class, SassLiftedOpClass::ControlFlow);
     assert_eq!(exit.kind, SassLiftedOpKind::Exit);
+    assert!(matches!(
+        &exit.semantics,
+        SassLiftedSemantics::Exit { condition: None }
+    ));
 
     let text = lifted.to_text();
     assert!(text.contains("lifted_value_ir"));
     assert!(text.contains("integer-math integer-add"));
     assert!(text.contains("memory load"));
+    assert!(text.contains("semantics=load(space=descriptor,dst=R2,address=desc[UR4][R0.64])"));
 }
 
 #[test]
@@ -759,6 +788,18 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
             .iter()
             .any(|op| op.class == "memory" && op.kind == "load")
     );
+    assert!(report.lifted_ops.iter().any(|op| {
+        op.class == "memory"
+            && op.kind == "load"
+            && op
+                .semantics
+                .contains("load(space=descriptor,dst=R2,address=desc[UR4][R0.64])")
+    }));
+    let lifted_ops_tsv =
+        fs::read_to_string(&report.lifted_ops_path).expect("lifted ops TSV should be readable");
+    assert!(lifted_ops_tsv.starts_with(
+        "sass_path\tfunction\taddress\tblock_id\tpredicate\topcode\tclass\tkind\tsemantics"
+    ));
     assert!(
         report
             .files

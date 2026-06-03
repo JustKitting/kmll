@@ -1,5 +1,7 @@
 use std::fmt;
 
+use super::semantics::SassLiftedSemantics;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassLiftedModule {
     pub target: Option<String>,
@@ -29,6 +31,7 @@ pub struct SassLiftedOp {
     pub opcode: String,
     pub class: SassLiftedOpClass,
     pub kind: SassLiftedOpKind,
+    pub semantics: SassLiftedSemantics,
     pub inputs: Vec<SassLiftedValueRef>,
     pub outputs: Vec<SassLiftedValueRef>,
     pub source_operands: Vec<String>,

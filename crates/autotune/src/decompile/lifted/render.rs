@@ -14,7 +14,7 @@ impl SassLiftedModule {
             for op in &function.ops {
                 writeln!(
                     out,
-                    "    {:#06x}: block={} {} {} in=[{}] out=[{}] predicate={} operands=[{}] <- {}",
+                    "    {:#06x}: block={} {} {} in=[{}] out=[{}] predicate={} operands=[{}] semantics={} <- {}",
                     op.address,
                     format_block_id(op.block_id),
                     op.class,
@@ -23,6 +23,7 @@ impl SassLiftedModule {
                     format_value_refs(&op.outputs),
                     op.predicate.as_deref().unwrap_or("-"),
                     op.source_operands.join(","),
+                    op.semantics,
                     op.source
                 )
                 .expect("write to string");

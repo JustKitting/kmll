@@ -1,0 +1,417 @@
+use std::fmt;
+
+use super::super::{KernelIrOpKind, MemorySpace};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SassLiftedSemantics {
+    SpecialRead {
+        dst: String,
+        special: String,
+    },
+    Move {
+        dst: String,
+        src: String,
+    },
+    LoadConst {
+        dst: String,
+        source: String,
+    },
+    Load {
+        space: MemorySpace,
+        dst: String,
+        address: String,
+    },
+    Store {
+        space: MemorySpace,
+        address: String,
+        value: String,
+    },
+    IntegerAdd {
+        dst: String,
+        inputs: Vec<String>,
+        width_bits: Option<u32>,
+    },
+    FloatAdd {
+        dst: String,
+        lhs: String,
+        rhs: String,
+    },
+    FloatMul {
+        dst: String,
+        lhs: String,
+        rhs: String,
+    },
+    PackedHalfAdd {
+        dst: String,
+        inputs: Vec<String>,
+        lanes: u32,
+    },
+    PackedHalfMul {
+        dst: String,
+        inputs: Vec<String>,
+        lanes: u32,
+    },
+    FusedMultiplyAdd {
+        dst: String,
+        a: String,
+        b: String,
+        c: String,
+        lane_bits: Option<u32>,
+    },
+    IntegerMad {
+        dst: String,
+        a: String,
+        b: String,
+        c: String,
+        wide: bool,
+    },
+    CompareSet {
+        dst: String,
+        comparison: Option<String>,
+        dtype: Option<String>,
+        lhs: String,
+        rhs: String,
+    },
+    Branch {
+        target: Option<String>,
+        condition: Option<String>,
+    },
+    Call {
+        target: Option<String>,
+        operands: Vec<String>,
+    },
+    Return {
+        target: Option<String>,
+        operands: Vec<String>,
+    },
+    Exit {
+        condition: Option<String>,
+    },
+    WarpShuffle {
+        mode: Option<String>,
+        predicate: String,
+        dst: String,
+        src: String,
+        offset: String,
+        mask: String,
+    },
+    Shift {
+        dst: String,
+        inputs: Vec<String>,
+    },
+    LogicLut {
+        dst: String,
+        inputs: Vec<String>,
+    },
+    Permute {
+        dst: String,
+        inputs: Vec<String>,
+    },
+    AddressCalc {
+        dst: String,
+        inputs: Vec<String>,
+    },
+    Sync {
+        kind: String,
+        operands: Vec<String>,
+    },
+    NoOp,
+    Unsupported {
+        opcode: String,
+        reason: String,
+    },
+}
+
+impl fmt::Display for SassLiftedSemantics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SpecialRead { dst, special } => {
+                write!(f, "special-read(dst={dst},special={special})")
+            }
+            Self::Move { dst, src } => write!(f, "move(dst={dst},src={src})"),
+            Self::LoadConst { dst, source } => {
+                write!(f, "load-const(dst={dst},source={source})")
+            }
+            Self::Load {
+                space,
+                dst,
+                address,
+            } => write!(f, "load(space={space},dst={dst},address={address})"),
+            Self::Store {
+                space,
+                address,
+                value,
+            } => write!(f, "store(space={space},address={address},value={value})"),
+            Self::IntegerAdd {
+                dst,
+                inputs,
+                width_bits,
+            } => write!(
+                f,
+                "integer-add(dst={dst},inputs=[{}],width={})",
+                inputs.join(","),
+                option_u32(*width_bits)
+            ),
+            Self::FloatAdd { dst, lhs, rhs } => {
+                write!(f, "float-add(dst={dst},lhs={lhs},rhs={rhs})")
+            }
+            Self::FloatMul { dst, lhs, rhs } => {
+                write!(f, "float-mul(dst={dst},lhs={lhs},rhs={rhs})")
+            }
+            Self::PackedHalfAdd { dst, inputs, lanes } => write!(
+                f,
+                "packed-half-add(dst={dst},inputs=[{}],lanes={lanes})",
+                inputs.join(",")
+            ),
+            Self::PackedHalfMul { dst, inputs, lanes } => write!(
+                f,
+                "packed-half-mul(dst={dst},inputs=[{}],lanes={lanes})",
+                inputs.join(",")
+            ),
+            Self::FusedMultiplyAdd {
+                dst,
+                a,
+                b,
+                c,
+                lane_bits,
+            } => write!(
+                f,
+                "fused-multiply-add(dst={dst},a={a},b={b},c={c},lane-bits={})",
+                option_u32(*lane_bits)
+            ),
+            Self::IntegerMad { dst, a, b, c, wide } => {
+                write!(f, "integer-mad(dst={dst},a={a},b={b},c={c},wide={wide})")
+            }
+            Self::CompareSet {
+                dst,
+                comparison,
+                dtype,
+                lhs,
+                rhs,
+            } => write!(
+                f,
+                "compare-set(dst={dst},comparison={},dtype={},lhs={lhs},rhs={rhs})",
+                option_str(comparison.as_deref()),
+                option_str(dtype.as_deref())
+            ),
+            Self::Branch { target, condition } => write!(
+                f,
+                "branch(target={},condition={})",
+                option_str(target.as_deref()),
+                option_str(condition.as_deref())
+            ),
+            Self::Call { target, operands } => write!(
+                f,
+                "call(target={},operands=[{}])",
+                option_str(target.as_deref()),
+                operands.join(",")
+            ),
+            Self::Return { target, operands } => write!(
+                f,
+                "return(target={},operands=[{}])",
+                option_str(target.as_deref()),
+                operands.join(",")
+            ),
+            Self::Exit { condition } => {
+                write!(f, "exit(condition={})", option_str(condition.as_deref()))
+            }
+            Self::WarpShuffle {
+                mode,
+                predicate,
+                dst,
+                src,
+                offset,
+                mask,
+            } => write!(
+                f,
+                "warp-shuffle(mode={},predicate={predicate},dst={dst},src={src},offset={offset},mask={mask})",
+                option_str(mode.as_deref())
+            ),
+            Self::Shift { dst, inputs } => {
+                write!(f, "shift(dst={dst},inputs=[{}])", inputs.join(","))
+            }
+            Self::LogicLut { dst, inputs } => {
+                write!(f, "logic-lut(dst={dst},inputs=[{}])", inputs.join(","))
+            }
+            Self::Permute { dst, inputs } => {
+                write!(f, "permute(dst={dst},inputs=[{}])", inputs.join(","))
+            }
+            Self::AddressCalc { dst, inputs } => {
+                write!(f, "address-calc(dst={dst},inputs=[{}])", inputs.join(","))
+            }
+            Self::Sync { kind, operands } => {
+                write!(f, "sync(kind={kind},operands=[{}])", operands.join(","))
+            }
+            Self::NoOp => f.write_str("no-op"),
+            Self::Unsupported { opcode, reason } => {
+                write!(f, "unsupported(opcode={opcode},reason={reason})")
+            }
+        }
+    }
+}
+
+pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
+    match kind {
+        KernelIrOpKind::ReadSpecialRegister { dst, special } => SassLiftedSemantics::SpecialRead {
+            dst: dst.clone(),
+            special: special.clone(),
+        },
+        KernelIrOpKind::Move { dst, src } => SassLiftedSemantics::Move {
+            dst: dst.clone(),
+            src: src.clone(),
+        },
+        KernelIrOpKind::LoadConst { dst, source } => SassLiftedSemantics::LoadConst {
+            dst: dst.clone(),
+            source: source.clone(),
+        },
+        KernelIrOpKind::Load {
+            dst,
+            address,
+            space,
+        } => SassLiftedSemantics::Load {
+            space: *space,
+            dst: dst.clone(),
+            address: address.clone(),
+        },
+        KernelIrOpKind::Store {
+            address,
+            value,
+            space,
+        } => SassLiftedSemantics::Store {
+            space: *space,
+            address: address.clone(),
+            value: value.clone(),
+        },
+        KernelIrOpKind::IntegerAdd {
+            dst,
+            inputs,
+            width_bits,
+        } => SassLiftedSemantics::IntegerAdd {
+            dst: dst.clone(),
+            inputs: inputs.clone(),
+            width_bits: *width_bits,
+        },
+        KernelIrOpKind::FloatAdd { dst, lhs, rhs } => SassLiftedSemantics::FloatAdd {
+            dst: dst.clone(),
+            lhs: lhs.clone(),
+            rhs: rhs.clone(),
+        },
+        KernelIrOpKind::FloatMul { dst, lhs, rhs } => SassLiftedSemantics::FloatMul {
+            dst: dst.clone(),
+            lhs: lhs.clone(),
+            rhs: rhs.clone(),
+        },
+        KernelIrOpKind::PackedHalfAdd { dst, inputs, lanes } => {
+            SassLiftedSemantics::PackedHalfAdd {
+                dst: dst.clone(),
+                inputs: inputs.clone(),
+                lanes: *lanes,
+            }
+        }
+        KernelIrOpKind::PackedHalfMul { dst, inputs, lanes } => {
+            SassLiftedSemantics::PackedHalfMul {
+                dst: dst.clone(),
+                inputs: inputs.clone(),
+                lanes: *lanes,
+            }
+        }
+        KernelIrOpKind::FusedMultiplyAdd {
+            dst,
+            a,
+            b,
+            c,
+            lane_bits,
+        } => SassLiftedSemantics::FusedMultiplyAdd {
+            dst: dst.clone(),
+            a: a.clone(),
+            b: b.clone(),
+            c: c.clone(),
+            lane_bits: *lane_bits,
+        },
+        KernelIrOpKind::IntegerMad { dst, a, b, c, wide } => SassLiftedSemantics::IntegerMad {
+            dst: dst.clone(),
+            a: a.clone(),
+            b: b.clone(),
+            c: c.clone(),
+            wide: *wide,
+        },
+        KernelIrOpKind::CompareSet {
+            dst,
+            comparison,
+            dtype,
+            lhs,
+            rhs,
+        } => SassLiftedSemantics::CompareSet {
+            dst: dst.clone(),
+            comparison: comparison.clone(),
+            dtype: dtype.clone(),
+            lhs: lhs.clone(),
+            rhs: rhs.clone(),
+        },
+        KernelIrOpKind::Branch { target, condition } => SassLiftedSemantics::Branch {
+            target: target.clone(),
+            condition: condition.clone(),
+        },
+        KernelIrOpKind::Call { target, operands } => SassLiftedSemantics::Call {
+            target: target.clone(),
+            operands: operands.clone(),
+        },
+        KernelIrOpKind::Return { target, operands } => SassLiftedSemantics::Return {
+            target: target.clone(),
+            operands: operands.clone(),
+        },
+        KernelIrOpKind::Exit { condition } => SassLiftedSemantics::Exit {
+            condition: condition.clone(),
+        },
+        KernelIrOpKind::WarpShuffle {
+            mode,
+            predicate,
+            dst,
+            src,
+            offset,
+            mask,
+        } => SassLiftedSemantics::WarpShuffle {
+            mode: mode.clone(),
+            predicate: predicate.clone(),
+            dst: dst.clone(),
+            src: src.clone(),
+            offset: offset.clone(),
+            mask: mask.clone(),
+        },
+        KernelIrOpKind::Shift { dst, inputs } => SassLiftedSemantics::Shift {
+            dst: dst.clone(),
+            inputs: inputs.clone(),
+        },
+        KernelIrOpKind::LogicLut { dst, inputs } => SassLiftedSemantics::LogicLut {
+            dst: dst.clone(),
+            inputs: inputs.clone(),
+        },
+        KernelIrOpKind::Permute { dst, inputs } => SassLiftedSemantics::Permute {
+            dst: dst.clone(),
+            inputs: inputs.clone(),
+        },
+        KernelIrOpKind::AddressCalc { dst, inputs } => SassLiftedSemantics::AddressCalc {
+            dst: dst.clone(),
+            inputs: inputs.clone(),
+        },
+        KernelIrOpKind::Sync { kind, operands } => SassLiftedSemantics::Sync {
+            kind: kind.clone(),
+            operands: operands.clone(),
+        },
+        KernelIrOpKind::NoOp => SassLiftedSemantics::NoOp,
+        KernelIrOpKind::Unsupported { opcode, reason } => SassLiftedSemantics::Unsupported {
+            opcode: opcode.clone(),
+            reason: reason.clone(),
+        },
+    }
+}
+
+fn option_str(value: Option<&str>) -> &str {
+    value.unwrap_or("-")
+}
+
+fn option_u32(value: Option<u32>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}

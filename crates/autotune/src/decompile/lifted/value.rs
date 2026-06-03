@@ -5,6 +5,7 @@ use super::super::{
 };
 use super::{
     classify::classify_op,
+    semantics::lift_semantics,
     types::{SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedValueRef},
 };
 
@@ -107,6 +108,7 @@ fn lift_op(
         opcode: op.source_opcode.clone(),
         class,
         kind,
+        semantics: lift_semantics(&op.kind),
         inputs,
         outputs,
         source_operands: op.source_operands.clone(),
