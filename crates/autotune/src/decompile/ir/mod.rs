@@ -9,7 +9,7 @@ pub use self::{
         KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, MemoryAccessInfo,
         MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemoryAddressImmediateKind,
         MemoryAddressKind, MemorySpace, PredicateCondition, PredicateConditionKind, RegisterRef,
-        RegisterRefKind, SassMappingConfidence, SassOpcode, SassSyncKind, SassWarpShuffleMode,
-        ScalarOperand, ScalarOperandKind,
+        RegisterRefKind, SassMappingConfidence, SassOpcode, SassSyncKind, SassTensorElementType,
+        SassTensorScope, SassWarpShuffleMode, ScalarOperand, ScalarOperandKind,
     },
 };

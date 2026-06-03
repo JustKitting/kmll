@@ -722,12 +722,10 @@ fn lift_tensor_core_sass_keeps_known_op_families_typed() {
         &function.ops[0].kind,
         KernelIrOpKind::TensorCoreMma {
             opcode,
-            element_type: Some(element_type),
-            scope: Some(scope),
+            element_type: Some(SassTensorElementType::Half),
+            scope: Some(SassTensorScope::Warp),
             operands,
         } if opcode == &SassOpcode::new("HMMA")
-            && element_type == "half"
-            && scope == "warp"
             && aggregate_texts(operands).as_slice() == ["R8", "R12", "R16", "R20"]
     ));
     assert!(matches!(

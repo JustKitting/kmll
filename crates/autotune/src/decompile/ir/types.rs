@@ -160,8 +160,8 @@ pub enum KernelIrOpKind {
     TensorCoreMma {
         opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
-        element_type: Option<String>,
-        scope: Option<String>,
+        element_type: Option<SassTensorElementType>,
+        scope: Option<SassTensorScope>,
     },
     TensorCoreMemory {
         opcode: SassOpcode,
@@ -300,6 +300,85 @@ impl SassWarpShuffleMode {
 }
 
 impl fmt::Display for SassWarpShuffleMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassTensorElementType {
+    Bit,
+    Fp64,
+    Half,
+    Integer,
+    Fp4,
+    Fp8,
+    Raw(String),
+}
+
+impl SassTensorElementType {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        match raw.as_str() {
+            "bit" => Self::Bit,
+            "fp64" => Self::Fp64,
+            "half" => Self::Half,
+            "integer" => Self::Integer,
+            "fp4" => Self::Fp4,
+            "fp8" => Self::Fp8,
+            _ => Self::Raw(raw),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Bit => "bit",
+            Self::Fp64 => "fp64",
+            Self::Half => "half",
+            Self::Integer => "integer",
+            Self::Fp4 => "fp4",
+            Self::Fp8 => "fp8",
+            Self::Raw(raw) => raw,
+        }
+    }
+}
+
+impl fmt::Display for SassTensorElementType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassTensorScope {
+    Warp,
+    WarpGroup,
+    Uniform,
+    Raw(String),
+}
+
+impl SassTensorScope {
+    pub fn parse(raw: impl Into<String>) -> Self {
+        let raw = raw.into();
+        match raw.as_str() {
+            "warp" => Self::Warp,
+            "warpgroup" => Self::WarpGroup,
+            "uniform" => Self::Uniform,
+            _ => Self::Raw(raw),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Warp => "warp",
+            Self::WarpGroup => "warpgroup",
+            Self::Uniform => "uniform",
+            Self::Raw(raw) => raw,
+        }
+    }
+}
+
+impl fmt::Display for SassTensorScope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }

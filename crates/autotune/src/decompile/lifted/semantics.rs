@@ -2,7 +2,8 @@ use std::fmt;
 
 use super::super::{
     AggregateOperand, ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace,
-    PredicateCondition, RegisterRef, SassOpcode, SassSyncKind, SassWarpShuffleMode, ScalarOperand,
+    PredicateCondition, RegisterRef, SassOpcode, SassSyncKind, SassTensorElementType,
+    SassTensorScope, SassWarpShuffleMode, ScalarOperand,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,8 +76,8 @@ pub enum SassLiftedSemantics {
     TensorCoreMma {
         opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
-        element_type: Option<String>,
-        scope: Option<String>,
+        element_type: Option<SassTensorElementType>,
+        scope: Option<SassTensorScope>,
     },
     TensorCoreMemory {
         opcode: SassOpcode,
@@ -229,8 +230,8 @@ impl fmt::Display for SassLiftedSemantics {
             } => write!(
                 f,
                 "tensor-core-mma(opcode={opcode},element-type={},scope={},operands=[{}])",
-                option_str(element_type.as_deref()),
-                option_str(scope.as_deref()),
+                option_display(element_type.as_ref()),
+                option_display(scope.as_ref()),
                 format_display_list(operands)
             ),
             Self::TensorCoreMemory { opcode, operands } => write!(

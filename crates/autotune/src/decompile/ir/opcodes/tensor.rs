@@ -1,4 +1,7 @@
-use super::super::types::{AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassOpcode};
+use super::super::types::{
+    AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassOpcode, SassTensorElementType,
+    SassTensorScope,
+};
 use super::LiftResult;
 
 pub(super) fn lift(opcode: &str, operands: &[AggregateOperand]) -> Option<LiftResult> {
@@ -9,8 +12,8 @@ pub(super) fn lift(opcode: &str, operands: &[AggregateOperand]) -> Option<LiftRe
             KernelIrOpKind::TensorCoreMma {
                 opcode: SassOpcode::new(opcode),
                 operands,
-                element_type: tensor_core_element_type(opcode).map(str::to_string),
-                scope: tensor_core_scope(opcode).map(str::to_string),
+                element_type: tensor_core_element_type(opcode),
+                scope: tensor_core_scope(opcode),
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
@@ -39,23 +42,23 @@ pub(super) fn lift(opcode: &str, operands: &[AggregateOperand]) -> Option<LiftRe
     })
 }
 
-fn tensor_core_element_type(opcode: &str) -> Option<&'static str> {
+fn tensor_core_element_type(opcode: &str) -> Option<SassTensorElementType> {
     match opcode {
-        "BMMA" | "BGMMA" => Some("bit"),
-        "DMMA" => Some("fp64"),
-        "HGMMA" | "HMMA" | "UTCHMMA" => Some("half"),
-        "IGMMA" | "IMMA" | "UTCIMMA" => Some("integer"),
-        "OMMA" | "UTCOMMA" => Some("fp4"),
-        "QGMMA" | "QMMA" | "UTCQMMA" => Some("fp8"),
+        "BMMA" | "BGMMA" => Some(SassTensorElementType::Bit),
+        "DMMA" => Some(SassTensorElementType::Fp64),
+        "HGMMA" | "HMMA" | "UTCHMMA" => Some(SassTensorElementType::Half),
+        "IGMMA" | "IMMA" | "UTCIMMA" => Some(SassTensorElementType::Integer),
+        "OMMA" | "UTCOMMA" => Some(SassTensorElementType::Fp4),
+        "QGMMA" | "QMMA" | "UTCQMMA" => Some(SassTensorElementType::Fp8),
         _ => None,
     }
 }
 
-fn tensor_core_scope(opcode: &str) -> Option<&'static str> {
+fn tensor_core_scope(opcode: &str) -> Option<SassTensorScope> {
     match opcode {
-        "BGMMA" | "HGMMA" | "IGMMA" | "QGMMA" => Some("warpgroup"),
-        "UTCHMMA" | "UTCIMMA" | "UTCOMMA" | "UTCQMMA" => Some("uniform"),
-        "BMMA" | "DMMA" | "HMMA" | "IMMA" | "OMMA" | "QMMA" => Some("warp"),
+        "BGMMA" | "HGMMA" | "IGMMA" | "QGMMA" => Some(SassTensorScope::WarpGroup),
+        "UTCHMMA" | "UTCIMMA" | "UTCOMMA" | "UTCQMMA" => Some(SassTensorScope::Uniform),
+        "BMMA" | "DMMA" | "HMMA" | "IMMA" | "OMMA" | "QMMA" => Some(SassTensorScope::Warp),
         _ => None,
     }
 }
