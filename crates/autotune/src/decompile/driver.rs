@@ -14,5 +14,11 @@ pub use self::{
     fixtures::{run_decompile_fixture_coverage, run_decompile_fixtures},
     ptx::run_decompile_ptx_probes,
     sass_file::run_sass_file_decompile,
-    types::*,
+    types::{
+        DecompileAutotuneGemmOptions, DecompileAutotuneGemmReport, DecompileAutotuneMatvecOptions,
+        DecompileAutotuneMatvecReport, DecompileAutotuneSassOptions, DecompileAutotuneSassReport,
+        DecompileFixtureCoverageOptions, DecompileFixtureCoverageReport, DecompileFixtureOptions,
+        DecompileFixtureReport, DecompilePtxProbeOptions, DecompilePtxProbeReport,
+        SassFileDecompileOptions, SassFileDecompileReport,
+    },
 };
