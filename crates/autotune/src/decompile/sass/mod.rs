@@ -1,4 +1,10 @@
+mod headers;
+mod instruction;
+mod labels;
+mod operands;
 mod parser;
+mod registers;
+mod tokens;
 mod types;
 
 pub use self::{
@@ -9,6 +15,4 @@ pub use self::{
     },
 };
 
-pub(super) fn label_in_text(raw: &str) -> Option<String> {
-    parser::label_in_text(raw)
-}
+pub(super) use self::labels::label_in_text;
