@@ -34,6 +34,8 @@ fn artifact_store_writes_search_report_metadata_without_kernel_source() {
             .any(|component| component.as_os_str() == "search-reports")
     );
     assert!(emitted.report_bytes > 0);
+    assert!(emitted.visual_svg_path.is_none());
+    assert!(emitted.visual_html_path.is_none());
     assert!(
         !emitted
             .report_path
@@ -153,6 +155,18 @@ fn artifact_store_writes_auto_search_report_with_step_metadata() {
             .any(|component| component.as_os_str() == "auto-search-reports")
     );
     assert!(emitted.report_bytes > 0);
+    let visual_svg_path = emitted
+        .visual_svg_path
+        .as_ref()
+        .expect("auto-search report should emit an SVG visualization");
+    let visual_html_path = emitted
+        .visual_html_path
+        .as_ref()
+        .expect("auto-search report should emit an HTML visualization");
+    assert!(visual_svg_path.exists());
+    assert!(visual_html_path.exists());
+    assert!(emitted.visual_svg_bytes.expect("SVG byte count") > 0);
+    assert!(emitted.visual_html_bytes.expect("HTML byte count") > 0);
 
     let report_text =
         fs::read_to_string(&emitted.report_path).expect("auto-search report should be readable");
@@ -188,6 +202,13 @@ fn artifact_store_writes_auto_search_report_with_step_metadata() {
             .any(|variant| variant["factor"].as_u64() == Some(1)
                 && variant["materialization"].as_str() == Some("existing"))
     );
+    let svg_text = fs::read_to_string(visual_svg_path).expect("SVG visual should be readable");
+    assert!(svg_text.contains("Autotune Search Report"));
+    assert!(svg_text.contains("matvec-bf16-row-major"));
+    assert!(svg_text.contains("Beam Candidates"));
+    let html_text = fs::read_to_string(visual_html_path).expect("HTML visual should be readable");
+    assert!(html_text.contains("Autotune Search Report"));
+    assert!(html_text.contains(".json"));
     assert_eq!(
         report_json["exit_reason"]["label"].as_str(),
         Some("no-improvement")

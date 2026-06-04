@@ -241,6 +241,19 @@ pub fn run_decompile_autotune_gemm(
             auto_report_path: &emitted_report.report_path,
         },
     )?;
+    let auto_report_visual_svg_path = emitted_report.visual_svg_path.clone().ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            "auto-search report did not emit an SVG visualization",
+        )
+    })?;
+    let auto_report_visual_html_path =
+        emitted_report.visual_html_path.clone().ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                "auto-search report did not emit an HTML visualization",
+            )
+        })?;
 
     Ok(DecompileAutotuneGemmReport {
         m: options.m,
@@ -262,6 +275,8 @@ pub fn run_decompile_autotune_gemm(
         evidence: routed.evidence,
         operation_name: routed.operation.name,
         auto_report_path: emitted_report.report_path,
+        auto_report_visual_svg_path,
+        auto_report_visual_html_path,
         overview_path: overview_paths.markdown_path,
         overview_graph_path: overview_paths.graph_path,
         optimized_source_path: emitted_optimized.paths.source_path,

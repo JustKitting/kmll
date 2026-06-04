@@ -356,10 +356,28 @@ fn emit_requested_artifacts(
         let report = optimization.auto_optimization_report(config);
         let emitted_report = store.emit_auto_search_report(&report)?;
         println!(
-            "emitted_auto_search_report report_key={} report_path={} report_bytes={}",
+            "emitted_auto_search_report report_key={} report_path={} report_bytes={} visual_svg_path={} visual_svg_bytes={} visual_html_path={} visual_html_bytes={}",
             emitted_report.report_key.hex(),
             emitted_report.report_path.display(),
-            emitted_report.report_bytes
+            emitted_report.report_bytes,
+            emitted_report
+                .visual_svg_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            emitted_report
+                .visual_svg_bytes
+                .map(|bytes| bytes.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            emitted_report
+                .visual_html_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            emitted_report
+                .visual_html_bytes
+                .map(|bytes| bytes.to_string())
+                .unwrap_or_else(|| "none".to_string())
         );
     }
     if options.emit_crate {

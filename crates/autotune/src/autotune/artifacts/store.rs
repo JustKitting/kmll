@@ -2,6 +2,7 @@ use super::{
     super::{codegen::*, hashing::*, metadata::*, *},
     paths::standalone_crate_paths,
     types::*,
+    visual::write_auto_search_report_visuals,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +34,10 @@ impl KernelArtifactStore {
             report_key: search_report_key(report),
             report_path: path,
             report_bytes: report_json.len(),
+            visual_svg_path: None,
+            visual_svg_bytes: None,
+            visual_html_path: None,
+            visual_html_bytes: None,
         })
     }
 
@@ -47,11 +52,18 @@ impl KernelArtifactStore {
         )?;
         let report_json = report.to_json_string();
         fs::write(&path, report_json.as_bytes())?;
-        Ok(EmittedSearchReport {
+        let mut emitted = EmittedSearchReport {
             report_key: auto_search_report_key(report),
             report_path: path,
             report_bytes: report_json.len(),
-        })
+            visual_svg_path: None,
+            visual_svg_bytes: None,
+            visual_html_path: None,
+            visual_html_bytes: None,
+        };
+        let report_path = emitted.report_path.clone();
+        write_auto_search_report_visuals(&report_path, report, &mut emitted)?;
+        Ok(emitted)
     }
 
     pub fn emit_selection(

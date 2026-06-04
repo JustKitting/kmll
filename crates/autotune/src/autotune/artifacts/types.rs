@@ -25,6 +25,10 @@ pub struct EmittedSearchReport {
     pub report_key: KernelMetadataKey,
     pub report_path: PathBuf,
     pub report_bytes: usize,
+    pub visual_svg_path: Option<PathBuf>,
+    pub visual_svg_bytes: Option<usize>,
+    pub visual_html_path: Option<PathBuf>,
+    pub visual_html_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
