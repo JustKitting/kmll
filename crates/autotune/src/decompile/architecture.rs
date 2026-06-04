@@ -3,30 +3,59 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SassArchitecture {
     sm: u16,
+    suffix: Option<SassArchitectureSuffix>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassArchitectureSuffix {
+    A,
 }
 
 impl SassArchitecture {
     pub const fn sm(sm: u16) -> Self {
-        Self { sm }
+        Self { sm, suffix: None }
+    }
+
+    pub const fn sm_a(sm: u16) -> Self {
+        Self {
+            sm,
+            suffix: Some(SassArchitectureSuffix::A),
+        }
     }
 
     pub const fn sm_number(self) -> u16 {
         self.sm
     }
 
+    pub const fn suffix(self) -> Option<SassArchitectureSuffix> {
+        self.suffix
+    }
+
     pub fn parse(raw: &str) -> Option<Self> {
-        let sm = raw
-            .strip_prefix("sm_")
-            .or_else(|| raw.strip_prefix("sm"))?
-            .parse()
-            .ok()?;
-        Some(Self::sm(sm))
+        let raw = raw.strip_prefix("sm_").or_else(|| raw.strip_prefix("sm"))?;
+        let split_at = raw
+            .find(|ch: char| !ch.is_ascii_digit())
+            .unwrap_or(raw.len());
+        if split_at == 0 {
+            return None;
+        }
+        let sm = raw[..split_at].parse().ok()?;
+        let suffix = match &raw[split_at..] {
+            "" => None,
+            "a" | "A" => Some(SassArchitectureSuffix::A),
+            _ => return None,
+        };
+        Some(Self { sm, suffix })
     }
 }
 
 impl fmt::Display for SassArchitecture {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "sm{}", self.sm)
+        write!(f, "sm{}", self.sm)?;
+        match self.suffix {
+            Some(SassArchitectureSuffix::A) => f.write_str("a"),
+            None => Ok(()),
+        }
     }
 }
 

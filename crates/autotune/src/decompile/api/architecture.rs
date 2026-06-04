@@ -1,1 +1,1 @@
-pub use super::super::architecture::{SassArchitecture, SassTarget};
+pub use super::super::architecture::{SassArchitecture, SassArchitectureSuffix, SassTarget};

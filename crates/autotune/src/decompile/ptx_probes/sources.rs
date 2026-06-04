@@ -128,6 +128,43 @@ pub(super) const TENSOR_CORE_BMMA_PTX: &str = r#".version 8.0
 }
 "#;
 
+pub(super) const TENSOR_CORE_WGMMA_HGMMA_PTX: &str = r#".version 8.7
+.target sm_90a
+.address_size 64
+
+.visible .entry tensor_core_wgmma_hgmma_probe(
+    .param .u64 tensor_core_wgmma_hgmma_probe_out
+)
+{
+    .reg .pred %p<2>;
+    .reg .b32 %r<16>;
+    .reg .b64 %rd<4>;
+
+    ld.param.u64 %rd0, [tensor_core_wgmma_hgmma_probe_out];
+
+    mov.b32 %r0, 0x3c003c00;
+    mov.b32 %r1, 0x3c003c00;
+    mov.b32 %r2, 0x3c003c00;
+    mov.b32 %r3, 0x3c003c00;
+    mov.b32 %r4, 0;
+    mov.b32 %r5, 0;
+    mov.u64 %rd1, 0;
+    setp.ne.b32 %p0, 1, 0;
+
+    wgmma.fence.sync.aligned;
+    wgmma.mma_async.sync.aligned.m64n8k16.f16.f16.f16
+        {%r4, %r5},
+        {%r0, %r1, %r2, %r3},
+        %rd1,
+        %p0, 1, 1, 0;
+    wgmma.commit_group.sync.aligned;
+    wgmma.wait_group.sync.aligned 0;
+
+    st.global.u32 [%rd0], %r4;
+    ret;
+}
+"#;
+
 pub(super) const SCALAR_MEMORY_LOGIC_PTX: &str = r#".version 8.0
 .target sm_75
 .address_size 64

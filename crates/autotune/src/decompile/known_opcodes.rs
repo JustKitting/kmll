@@ -282,6 +282,19 @@ macro_rules! nvidia_mapped {
     };
 }
 
+macro_rules! nvidia_mapped_on {
+    ($opcode:ident, [$($arch:expr),* $(,)?], $class:ident, $kind:ident) => {
+        KnownSassOpcode {
+            opcode: SassOpcodeKind::$opcode,
+            architectures: &[$($arch),*],
+            class: SassOpcodeCatalogClass::$class,
+            kind: SassOpcodeCatalogKind::$kind,
+            source: SassOpcodeCatalogSource::NvidiaCudaBinaryUtilitiesInstructionReference,
+            locally_mapped: true,
+        }
+    };
+}
+
 const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     local!(Atom, Memory, MemoryAtomic),
     local!(Atomg, Memory, MemoryAtomic),
@@ -342,15 +355,35 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     nvidia_mapped!(Atom, [75, 80, 86, 89, 90, 100, 120], Memory, MemoryAtomic),
     nvidia_mapped!(Plop3, [75, 80, 86, 89, 90, 100, 120], IntegerMath, LogicLut),
     nvidia_mapped!(Ulop3, [75, 80, 86, 89, 90, 100, 120], IntegerMath, LogicLut),
-    nvidia_mapped!(Bgmma, [90], TensorCore, WarpGroupMma),
+    nvidia_mapped_on!(
+        Bgmma,
+        [SassArchitecture::sm(90), SassArchitecture::sm_a(90)],
+        TensorCore,
+        WarpGroupMma
+    ),
     nvidia_mapped!(Bmma, [80, 86, 89, 90], TensorCore, BitMma),
     nvidia_mapped!(Dmma, [100, 120], TensorCore, Fp64Mma),
-    nvidia_mapped!(Hgmma, [90], TensorCore, WarpGroupMma),
+    nvidia_mapped_on!(
+        Hgmma,
+        [SassArchitecture::sm(90), SassArchitecture::sm_a(90)],
+        TensorCore,
+        WarpGroupMma
+    ),
     nvidia_mapped!(Hmma, [80, 86, 89, 90, 100, 120], TensorCore, HalfMma),
-    nvidia_mapped!(Igmma, [90], TensorCore, WarpGroupMma),
+    nvidia_mapped_on!(
+        Igmma,
+        [SassArchitecture::sm(90), SassArchitecture::sm_a(90)],
+        TensorCore,
+        WarpGroupMma
+    ),
     nvidia_mapped!(Imma, [80, 86, 89, 90, 100, 120], TensorCore, IntegerMma),
     nvidia_mapped!(Omma, [100, 120], TensorCore, Fp4Mma),
-    nvidia_mapped!(Qgmma, [90], TensorCore, WarpGroupMma),
+    nvidia_mapped_on!(
+        Qgmma,
+        [SassArchitecture::sm(90), SassArchitecture::sm_a(90)],
+        TensorCore,
+        WarpGroupMma
+    ),
     nvidia_mapped!(Qmma, [100, 120], TensorCore, Fp8Mma),
     nvidia_mapped!(Ldt, [100, 120], TensorMemory, TensorLoad),
     nvidia_mapped!(Ldtm, [100, 120], TensorMemory, TensorLoadMatrix),
@@ -367,6 +400,16 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     nvidia_mapped!(Utmapf, [100, 120], TensorMemory, TensorMemoryPrefetch),
     nvidia_mapped!(Utmaredg, [100, 120], TensorMemory, TensorMemoryReduceGlobal),
     nvidia_mapped!(Utmastg, [100, 120], TensorMemory, TensorMemoryStoreGlobal),
-    nvidia_mapped!(Warpgroup, [90], WarpGroup, WarpGroupControl),
-    nvidia_mapped!(Warpgroupset, [90], WarpGroup, WarpGroupControl),
+    nvidia_mapped_on!(
+        Warpgroup,
+        [SassArchitecture::sm(90), SassArchitecture::sm_a(90)],
+        WarpGroup,
+        WarpGroupControl
+    ),
+    nvidia_mapped_on!(
+        Warpgroupset,
+        [SassArchitecture::sm(90), SassArchitecture::sm_a(90)],
+        WarpGroup,
+        WarpGroupControl
+    ),
 ];

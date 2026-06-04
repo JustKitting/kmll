@@ -1,7 +1,7 @@
 use super::kinds::PtxDecompileProbeKind;
 use super::sources::{
     SCALAR_MEMORY_ATOMIC_PTX, SCALAR_MEMORY_LOGIC_PTX, TENSOR_CORE_BMMA_PTX, TENSOR_CORE_DMMA_PTX,
-    TENSOR_CORE_HMMA_PTX, TENSOR_CORE_IMMA_PTX,
+    TENSOR_CORE_HMMA_PTX, TENSOR_CORE_IMMA_PTX, TENSOR_CORE_WGMMA_HGMMA_PTX,
 };
 
 pub const AUTO_COMPILE_ARCH: &str = "auto";
@@ -56,6 +56,13 @@ pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
             source: TENSOR_CORE_BMMA_PTX,
         },
         PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::TensorCoreWgmmaHgmma,
+            symbol: "tensor_core_wgmma_hgmma_probe",
+            behavior: "one PTX sm90a warpgroup half-precision MMA with warpgroup sync and wait",
+            default_compile_arch: "sm_90a",
+            source: TENSOR_CORE_WGMMA_HGMMA_PTX,
+        },
+        PtxDecompileProbe {
             kind: PtxDecompileProbeKind::ScalarMemoryLogic,
             symbol: "scalar_memory_logic_probe",
             behavior: "scalar PTX memory, predicate, logic, integer, and f32 fused math instructions",
@@ -85,6 +92,7 @@ pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
         PtxDecompileProbeKind::TensorCoreImma,
         PtxDecompileProbeKind::TensorCoreDmma,
         PtxDecompileProbeKind::TensorCoreBmma,
+        PtxDecompileProbeKind::TensorCoreWgmmaHgmma,
         PtxDecompileProbeKind::ScalarMemoryLogic,
         PtxDecompileProbeKind::ArchitectureSm90Scalar,
         PtxDecompileProbeKind::ScalarMemoryAtomic,

@@ -151,8 +151,22 @@ fn sass_architecture_parses_sm_spellings_and_displays_canonical_form() {
         SassArchitecture::parse("sm_120"),
         Some(SassArchitecture::sm(120))
     );
+    assert_eq!(
+        SassArchitecture::parse("sm_90a"),
+        Some(SassArchitecture::sm_a(90))
+    );
+    assert_eq!(
+        SassArchitecture::parse("sm90a"),
+        Some(SassArchitecture::sm_a(90))
+    );
     assert_eq!(SassArchitecture::sm(120).sm_number(), 120);
     assert_eq!(SassArchitecture::sm(120).to_string(), "sm120");
+    assert_eq!(SassArchitecture::sm_a(90).sm_number(), 90);
+    assert_eq!(
+        SassArchitecture::sm_a(90).suffix(),
+        Some(SassArchitectureSuffix::A)
+    );
+    assert_eq!(SassArchitecture::sm_a(90).to_string(), "sm90a");
 }
 
 #[test]
@@ -2410,6 +2424,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreBmma)
         .expect("BMMA PTX probe should exist");
+    let wgmma_hgmma_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreWgmmaHgmma)
+        .expect("WGMMA HGMMA PTX probe should exist");
     let scalar_probe = probes
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::ScalarMemoryLogic)
@@ -2431,6 +2449,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             PtxDecompileProbeKind::TensorCoreImma,
             PtxDecompileProbeKind::TensorCoreDmma,
             PtxDecompileProbeKind::TensorCoreBmma,
+            PtxDecompileProbeKind::TensorCoreWgmmaHgmma,
             PtxDecompileProbeKind::ScalarMemoryLogic,
             PtxDecompileProbeKind::ArchitectureSm90Scalar,
             PtxDecompileProbeKind::ScalarMemoryAtomic
@@ -2469,6 +2488,29 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             .contains("mma.sync.aligned.m8n8k128.row.col.s32.b1.b1.s32.and.popc")
     );
     assert!(bmma_probe.source.contains("st.global.s32"));
+    assert_eq!(wgmma_hgmma_probe.symbol, "tensor_core_wgmma_hgmma_probe");
+    assert_eq!(wgmma_hgmma_probe.default_compile_arch, "sm_90a");
+    assert!(wgmma_hgmma_probe.source.contains(".target sm_90a"));
+    assert!(
+        wgmma_hgmma_probe
+            .source
+            .contains("wgmma.mma_async.sync.aligned.m64n8k16.f16.f16.f16")
+    );
+    assert!(
+        wgmma_hgmma_probe
+            .source
+            .contains("wgmma.fence.sync.aligned")
+    );
+    assert!(
+        wgmma_hgmma_probe
+            .source
+            .contains("wgmma.commit_group.sync.aligned")
+    );
+    assert!(
+        wgmma_hgmma_probe
+            .source
+            .contains("wgmma.wait_group.sync.aligned 0")
+    );
     assert_eq!(scalar_probe.symbol, "scalar_memory_logic_probe");
     assert_eq!(scalar_probe.default_compile_arch, "sm_75");
     assert!(scalar_probe.source.contains(".target sm_75"));
