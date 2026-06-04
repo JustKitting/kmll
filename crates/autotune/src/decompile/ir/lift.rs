@@ -1,7 +1,7 @@
 use super::super::SassTarget;
 use super::super::sass::{SassInstruction, SassModule};
 use super::{
-    opcodes::{aggregate_operands, lift_kind, predicate_condition},
+    opcodes::{SassLiftInput, aggregate_operands, lift_kind, predicate_condition, raw_operands},
     types::{KernelIrFunction, KernelIrModule, KernelIrOp, SassModifier, SassOpcode, SassSymbol},
 };
 
@@ -20,13 +20,22 @@ pub fn lift_sass_module(module: &SassModule) -> KernelIrModule {
 }
 
 fn lift_instruction(instruction: &SassInstruction) -> KernelIrOp {
+    let source_opcode = SassOpcode::new(instruction.opcode.clone());
     let source_operands = aggregate_operands(instruction);
+    let raw_operands = raw_operands(instruction);
     let source_modifiers = instruction
         .modifiers
         .iter()
         .map(|modifier| SassModifier::parse(modifier.as_str()))
         .collect::<Vec<_>>();
-    let (kind, confidence) = lift_kind(instruction, &source_modifiers);
+    let lift_input = SassLiftInput {
+        instruction,
+        opcode: &source_opcode,
+        modifiers: &source_modifiers,
+        raw_operands: &raw_operands,
+        aggregate_operands: &source_operands,
+    };
+    let (kind, confidence) = lift_kind(&lift_input);
     KernelIrOp {
         address: instruction.address,
         source_position: instruction.source_position,
@@ -34,7 +43,7 @@ fn lift_instruction(instruction: &SassInstruction) -> KernelIrOp {
         predicate: instruction.predicate.as_ref().map(predicate_condition),
         kind,
         confidence,
-        source_opcode: SassOpcode::new(instruction.opcode.clone()),
+        source_opcode,
         source_modifiers,
         source_operands,
         source_text: instruction.raw.clone(),

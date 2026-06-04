@@ -26,12 +26,16 @@ pub(super) fn lift(
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
-        SassOpcodeKind::Fadd => map_register_two_scalar_operands(instruction, |dst, lhs, rhs| {
-            KernelIrOpKind::FloatAdd { dst, lhs, rhs }
-        }),
-        SassOpcodeKind::Fmul => map_register_two_scalar_operands(instruction, |dst, lhs, rhs| {
-            KernelIrOpKind::FloatMul { dst, lhs, rhs }
-        }),
+        SassOpcodeKind::Fadd => {
+            map_register_two_scalar_operands(opcode, instruction, |dst, lhs, rhs| {
+                KernelIrOpKind::FloatAdd { dst, lhs, rhs }
+            })
+        }
+        SassOpcodeKind::Fmul => {
+            map_register_two_scalar_operands(opcode, instruction, |dst, lhs, rhs| {
+                KernelIrOpKind::FloatMul { dst, lhs, rhs }
+            })
+        }
         SassOpcodeKind::Hadd2 => (
             KernelIrOpKind::PackedHalfAdd {
                 dst: register_operand(operands.first().map(String::as_str).unwrap_or_default()),
@@ -50,7 +54,7 @@ pub(super) fn lift(
         ),
         SassOpcodeKind::Ffma | SassOpcodeKind::Hfma2 => {
             let lane_bits = matches!(opcode.kind(), SassOpcodeKind::Hfma2).then_some(16);
-            map_register_three_scalar_operands(instruction, |dst, a, b, c| {
+            map_register_three_scalar_operands(opcode, instruction, |dst, a, b, c| {
                 KernelIrOpKind::FusedMultiplyAdd {
                     dst,
                     a,
@@ -61,7 +65,7 @@ pub(super) fn lift(
             })
         }
         SassOpcodeKind::Imad | SassOpcodeKind::Uimad => {
-            map_register_three_scalar_operands(instruction, |dst, a, b, c| {
+            map_register_three_scalar_operands(opcode, instruction, |dst, a, b, c| {
                 KernelIrOpKind::IntegerMad {
                     dst,
                     a,

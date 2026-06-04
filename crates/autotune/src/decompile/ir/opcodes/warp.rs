@@ -11,6 +11,7 @@ pub(super) fn lift(
 ) -> Option<LiftResult> {
     match opcode.kind() {
         SassOpcodeKind::Shfl => Some(map_warp_shuffle_operands(
+            opcode,
             instruction,
             |predicate, dst, src, offset, mask| KernelIrOpKind::WarpShuffle {
                 mode: modifiers

@@ -26,21 +26,37 @@ pub(super) fn aggregate_operands(instruction: &SassInstruction) -> Vec<Aggregate
     operands::aggregate_operands(instruction)
 }
 
-pub(super) fn lift_kind(instruction: &SassInstruction, modifiers: &[SassModifier]) -> LiftResult {
-    let operands = operands::raw_operands(instruction);
-    let aggregate_operands = operands::aggregate_operands(instruction);
-    let opcode = SassOpcode::new(instruction.opcode.clone());
-    control::lift(&opcode, instruction, &aggregate_operands)
-        .or_else(|| warp::lift(&opcode, instruction, modifiers))
-        .or_else(|| tensor::lift(&opcode, modifiers, &aggregate_operands))
-        .or_else(|| movement::lift(&opcode, instruction, &operands))
-        .or_else(|| memory::lift(&opcode, instruction, modifiers))
-        .or_else(|| math::lift(&opcode, instruction, modifiers, &operands))
-        .or_else(|| predicate::lift(&opcode, modifiers, &operands))
-        .or_else(|| bitwise::lift(&opcode, &operands))
-        .or_else(|| address::lift(&opcode, &operands))
-        .or_else(|| sync::lift(&opcode, &aggregate_operands))
-        .unwrap_or_else(|| unsupported_opcode(opcode))
+pub(super) fn raw_operands(instruction: &SassInstruction) -> Vec<String> {
+    operands::raw_operands(instruction)
+}
+
+pub(super) struct SassLiftInput<'a> {
+    pub instruction: &'a SassInstruction,
+    pub opcode: &'a SassOpcode,
+    pub modifiers: &'a [SassModifier],
+    pub raw_operands: &'a [String],
+    pub aggregate_operands: &'a [AggregateOperand],
+}
+
+pub(super) fn lift_kind(input: &SassLiftInput<'_>) -> LiftResult {
+    control::lift(input.opcode, input.instruction, input.aggregate_operands)
+        .or_else(|| warp::lift(input.opcode, input.instruction, input.modifiers))
+        .or_else(|| tensor::lift(input.opcode, input.modifiers, input.aggregate_operands))
+        .or_else(|| movement::lift(input.opcode, input.instruction, input.raw_operands))
+        .or_else(|| memory::lift(input.opcode, input.instruction, input.modifiers))
+        .or_else(|| {
+            math::lift(
+                input.opcode,
+                input.instruction,
+                input.modifiers,
+                input.raw_operands,
+            )
+        })
+        .or_else(|| predicate::lift(input.opcode, input.modifiers, input.raw_operands))
+        .or_else(|| bitwise::lift(input.opcode, input.raw_operands))
+        .or_else(|| address::lift(input.opcode, input.raw_operands))
+        .or_else(|| sync::lift(input.opcode, input.aggregate_operands))
+        .unwrap_or_else(|| unsupported_opcode(input.opcode.clone()))
 }
 
 fn unsupported_opcode(opcode: SassOpcode) -> LiftResult {

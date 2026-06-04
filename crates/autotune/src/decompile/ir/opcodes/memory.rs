@@ -13,11 +13,11 @@ pub(super) fn lift(
 ) -> Option<LiftResult> {
     Some(match opcode.kind() {
         SassOpcodeKind::Ldc | SassOpcodeKind::Ldcu | SassOpcodeKind::Uldc => {
-            lift_load_const(instruction)
+            lift_load_const(opcode, instruction)
         }
         SassOpcodeKind::Ld | SassOpcodeKind::Ldg | SassOpcodeKind::Lds | SassOpcodeKind::Ldl => {
             if instruction.operands.len() != 2 {
-                unsupported_arity(instruction, 2)
+                unsupported_arity(opcode, instruction, 2)
             } else {
                 let dst = RegisterRef::parse(instruction.operands[0].raw.clone());
                 let address = memory_address(&instruction.operands[1]);
@@ -34,7 +34,7 @@ pub(super) fn lift(
         }
         SassOpcodeKind::St | SassOpcodeKind::Stg | SassOpcodeKind::Sts | SassOpcodeKind::Stl => {
             if instruction.operands.len() != 2 {
-                unsupported_arity(instruction, 2)
+                unsupported_arity(opcode, instruction, 2)
             } else {
                 let address = memory_address(&instruction.operands[0]);
                 let value = RegisterRef::parse(instruction.operands[1].raw.clone());
@@ -53,9 +53,9 @@ pub(super) fn lift(
     })
 }
 
-fn lift_load_const(instruction: &SassInstruction) -> LiftResult {
+fn lift_load_const(opcode: &SassOpcode, instruction: &SassInstruction) -> LiftResult {
     if instruction.operands.len() != 2 {
-        return unsupported_arity(instruction, 2);
+        return unsupported_arity(opcode, instruction, 2);
     }
     (
         KernelIrOpKind::LoadConst {
@@ -66,10 +66,14 @@ fn lift_load_const(instruction: &SassInstruction) -> LiftResult {
     )
 }
 
-fn unsupported_arity(instruction: &SassInstruction, expected: usize) -> LiftResult {
+fn unsupported_arity(
+    opcode: &SassOpcode,
+    instruction: &SassInstruction,
+    expected: usize,
+) -> LiftResult {
     (
         KernelIrOpKind::Unsupported {
-            opcode: SassOpcode::new(instruction.opcode.clone()),
+            opcode: opcode.clone(),
             reason: SassUnsupportedReason::exact_operand_arity(
                 expected,
                 instruction.operands.len(),

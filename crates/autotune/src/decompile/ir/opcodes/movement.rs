@@ -15,12 +15,15 @@ pub(super) fn lift(
 ) -> Option<LiftResult> {
     Some(match opcode.kind() {
         SassOpcodeKind::Cs2r | SassOpcodeKind::S2r | SassOpcodeKind::S2ur => {
-            map_register_register_operands(instruction, |dst, special| {
+            map_register_register_operands(opcode, instruction, |dst, special| {
                 KernelIrOpKind::ReadSpecialRegister { dst, special }
             })
         }
         SassOpcodeKind::Mov | SassOpcodeKind::Umov => {
-            map_register_scalar_operands(instruction, |dst, src| KernelIrOpKind::Move { dst, src })
+            map_register_scalar_operands(opcode, instruction, |dst, src| KernelIrOpKind::Move {
+                dst,
+                src,
+            })
         }
         SassOpcodeKind::Prmt => (
             KernelIrOpKind::Permute {

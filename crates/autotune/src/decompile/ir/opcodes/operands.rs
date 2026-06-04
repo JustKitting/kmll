@@ -39,6 +39,7 @@ pub(super) fn scalar_inputs(operands: &[String]) -> Vec<ScalarOperand> {
 }
 
 pub(super) fn map_register_register_operands(
+    opcode: &SassOpcode,
     instruction: &SassInstruction,
     f: impl FnOnce(RegisterRef, RegisterRef) -> KernelIrOpKind,
 ) -> LiftResult {
@@ -51,11 +52,12 @@ pub(super) fn map_register_register_operands(
             SassMappingConfidence::OpcodeHeuristic,
         )
     } else {
-        unsupported_arity(instruction, 2)
+        unsupported_arity(opcode, instruction, 2)
     }
 }
 
 pub(super) fn map_register_scalar_operands(
+    opcode: &SassOpcode,
     instruction: &SassInstruction,
     f: impl FnOnce(RegisterRef, ScalarOperand) -> KernelIrOpKind,
 ) -> LiftResult {
@@ -68,11 +70,12 @@ pub(super) fn map_register_scalar_operands(
             SassMappingConfidence::OpcodeHeuristic,
         )
     } else {
-        unsupported_arity(instruction, 2)
+        unsupported_arity(opcode, instruction, 2)
     }
 }
 
 pub(super) fn map_register_two_scalar_operands(
+    opcode: &SassOpcode,
     instruction: &SassInstruction,
     f: impl FnOnce(RegisterRef, ScalarOperand, ScalarOperand) -> KernelIrOpKind,
 ) -> LiftResult {
@@ -86,11 +89,12 @@ pub(super) fn map_register_two_scalar_operands(
             SassMappingConfidence::OpcodeHeuristic,
         )
     } else {
-        unsupported_arity(instruction, 3)
+        unsupported_arity(opcode, instruction, 3)
     }
 }
 
 pub(super) fn map_register_three_scalar_operands(
+    opcode: &SassOpcode,
     instruction: &SassInstruction,
     f: impl FnOnce(RegisterRef, ScalarOperand, ScalarOperand, ScalarOperand) -> KernelIrOpKind,
 ) -> LiftResult {
@@ -105,11 +109,12 @@ pub(super) fn map_register_three_scalar_operands(
             SassMappingConfidence::OpcodeHeuristic,
         )
     } else {
-        unsupported_arity(instruction, 4)
+        unsupported_arity(opcode, instruction, 4)
     }
 }
 
 pub(super) fn map_warp_shuffle_operands(
+    opcode: &SassOpcode,
     instruction: &SassInstruction,
     f: impl FnOnce(
         RegisterRef,
@@ -131,14 +136,18 @@ pub(super) fn map_warp_shuffle_operands(
             SassMappingConfidence::OpcodeHeuristic,
         )
     } else {
-        unsupported_arity(instruction, 5)
+        unsupported_arity(opcode, instruction, 5)
     }
 }
 
-pub(super) fn unsupported_arity(instruction: &SassInstruction, expected: usize) -> LiftResult {
+pub(super) fn unsupported_arity(
+    opcode: &SassOpcode,
+    instruction: &SassInstruction,
+    expected: usize,
+) -> LiftResult {
     (
         KernelIrOpKind::Unsupported {
-            opcode: SassOpcode::new(instruction.opcode.clone()),
+            opcode: opcode.clone(),
             reason: SassUnsupportedReason::at_least_operand_arity(
                 expected,
                 instruction.operands.len(),
