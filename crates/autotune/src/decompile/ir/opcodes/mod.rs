@@ -38,7 +38,7 @@ pub(super) fn lift_kind(input: &SassLiftInput<'_>) -> LiftResult {
         .or_else(|| warp::lift(input.opcode, input.modifiers, input.aggregate_operands))
         .or_else(|| tensor::lift(input.opcode, input.modifiers, input.aggregate_operands))
         .or_else(|| movement::lift(input.opcode, input.aggregate_operands))
-        .or_else(|| memory::lift(input.opcode, input.instruction, input.modifiers))
+        .or_else(|| memory::lift(input.opcode, input.aggregate_operands, input.modifiers))
         .or_else(|| math::lift(input.opcode, input.modifiers, input.aggregate_operands))
         .or_else(|| predicate::lift(input.opcode, input.modifiers, input.aggregate_operands))
         .or_else(|| bitwise::lift(input.opcode, input.aggregate_operands))

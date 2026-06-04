@@ -1,26 +1,25 @@
-use super::super::super::sass::{SassInstruction, SassOperand, SassOperandKind};
 use super::super::types::{
-    KernelIrOpKind, MemoryAccessInfo, MemoryAddress, MemoryAddressKind, MemorySpace, RegisterRef,
-    SassMappingConfidence, SassMemoryModifier, SassModifier, SassOpcode, SassOpcodeKind,
-    SassUnsupportedReason,
+    AggregateOperand, AggregateOperandKind, KernelIrOpKind, MemoryAccessInfo, MemoryAddress,
+    MemoryAddressKind, MemorySpace, SassMappingConfidence, SassMemoryModifier, SassModifier,
+    SassOpcode, SassOpcodeKind, SassUnsupportedReason,
 };
-use super::LiftResult;
+use super::{LiftResult, operands::register_operand};
 
 pub(super) fn lift(
     opcode: &SassOpcode,
-    instruction: &SassInstruction,
+    operands: &[AggregateOperand],
     modifiers: &[SassModifier],
 ) -> Option<LiftResult> {
     Some(match opcode.kind() {
         SassOpcodeKind::Ldc | SassOpcodeKind::Ldcu | SassOpcodeKind::Uldc => {
-            lift_load_const(opcode, instruction)
+            lift_load_const(opcode, operands)
         }
         SassOpcodeKind::Ld | SassOpcodeKind::Ldg | SassOpcodeKind::Lds | SassOpcodeKind::Ldl => {
-            if instruction.operands.len() != 2 {
-                unsupported_arity(opcode, instruction, 2)
+            if operands.len() != 2 {
+                unsupported_arity(opcode, operands.len(), 2)
             } else {
-                let dst = RegisterRef::parse(instruction.operands[0].raw.clone());
-                let address = memory_address(&instruction.operands[1]);
+                let dst = register_operand(operands.first());
+                let address = memory_address(operands.get(1));
                 (
                     KernelIrOpKind::Load {
                         space: memory_space(opcode.kind(), &address),
@@ -33,11 +32,11 @@ pub(super) fn lift(
             }
         }
         SassOpcodeKind::St | SassOpcodeKind::Stg | SassOpcodeKind::Sts | SassOpcodeKind::Stl => {
-            if instruction.operands.len() != 2 {
-                unsupported_arity(opcode, instruction, 2)
+            if operands.len() != 2 {
+                unsupported_arity(opcode, operands.len(), 2)
             } else {
-                let address = memory_address(&instruction.operands[0]);
-                let value = RegisterRef::parse(instruction.operands[1].raw.clone());
+                let address = memory_address(operands.first());
+                let value = register_operand(operands.get(1));
                 (
                     KernelIrOpKind::Store {
                         space: memory_space(opcode.kind(), &address),
@@ -53,57 +52,37 @@ pub(super) fn lift(
     })
 }
 
-fn lift_load_const(opcode: &SassOpcode, instruction: &SassInstruction) -> LiftResult {
-    if instruction.operands.len() != 2 {
-        return unsupported_arity(opcode, instruction, 2);
+fn lift_load_const(opcode: &SassOpcode, operands: &[AggregateOperand]) -> LiftResult {
+    if operands.len() != 2 {
+        return unsupported_arity(opcode, operands.len(), 2);
     }
     (
         KernelIrOpKind::LoadConst {
-            dst: RegisterRef::parse(instruction.operands[0].raw.clone()),
-            source: memory_address(&instruction.operands[1]),
+            dst: register_operand(operands.first()),
+            source: memory_address(operands.get(1)),
         },
         SassMappingConfidence::OpcodeHeuristic,
     )
 }
 
-fn unsupported_arity(
-    opcode: &SassOpcode,
-    instruction: &SassInstruction,
-    expected: usize,
-) -> LiftResult {
+fn unsupported_arity(opcode: &SassOpcode, actual: usize, expected: usize) -> LiftResult {
     (
         KernelIrOpKind::Unsupported {
             opcode: opcode.clone(),
-            reason: SassUnsupportedReason::exact_operand_arity(
-                expected,
-                instruction.operands.len(),
-            ),
+            reason: SassUnsupportedReason::exact_operand_arity(expected, actual),
         },
         SassMappingConfidence::Unsupported,
     )
 }
 
-fn memory_address(operand: &SassOperand) -> MemoryAddress {
-    match &operand.kind {
-        SassOperandKind::ConstantMemory { bank, offset } => {
-            MemoryAddress::constant(operand.raw.clone(), bank.clone(), offset.clone())
-        }
-        SassOperandKind::DescriptorMemory {
-            descriptor,
-            address,
-            address_width,
-            offset,
-        } => MemoryAddress::descriptor(
-            operand.raw.clone(),
-            descriptor.clone(),
-            address.clone(),
-            *address_width,
-            offset.clone(),
-        ),
-        SassOperandKind::IndexedMemory { base, offset } => {
-            MemoryAddress::indexed(operand.raw.clone(), base.clone(), offset.clone())
-        }
-        _ => MemoryAddress::raw(operand.raw.clone()),
+fn memory_address(operand: Option<&AggregateOperand>) -> MemoryAddress {
+    match operand {
+        Some(AggregateOperand {
+            kind: AggregateOperandKind::Memory(address),
+            ..
+        }) => address.clone(),
+        Some(operand) => MemoryAddress::raw(operand.raw.clone()),
+        None => MemoryAddress::raw(String::new()),
     }
 }
 
