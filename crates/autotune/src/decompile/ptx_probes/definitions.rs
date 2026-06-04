@@ -2,10 +2,11 @@ use super::kinds::PtxDecompileProbeKind;
 use super::sources::{
     SCALAR_MEMORY_ATOMIC_PTX, SCALAR_MEMORY_LOGIC_PTX, TENSOR_CORE_BMMA_PTX, TENSOR_CORE_DMMA_PTX,
     TENSOR_CORE_HMMA_PTX, TENSOR_CORE_IMMA_PTX, TENSOR_CORE_SM120A_QMMA_PTX,
-    TENSOR_CORE_TCGEN05_UTCOMMA_PTX, TENSOR_CORE_TCGEN05_UTCQMMA_PTX, TENSOR_CORE_WGMMA_BGMMA_PTX,
-    TENSOR_CORE_WGMMA_HGMMA_PTX, TENSOR_CORE_WGMMA_IGMMA_PTX, TENSOR_CORE_WGMMA_QGMMA_PTX,
-    TENSOR_MEMORY_BULK_ASYNC_PTX, TENSOR_MEMORY_LDTM_PTX, TENSOR_MEMORY_STTM_PTX,
-    TENSOR_MEMORY_TMA_ASYNC_PTX, TENSOR_MEMORY_UTCCP_PTX, WARP_GROUP_REGISTER_SET_PTX,
+    TENSOR_CORE_TCGEN05_UTCHMMA_UTCIMMA_PTX, TENSOR_CORE_TCGEN05_UTCOMMA_PTX,
+    TENSOR_CORE_TCGEN05_UTCQMMA_PTX, TENSOR_CORE_WGMMA_BGMMA_PTX, TENSOR_CORE_WGMMA_HGMMA_PTX,
+    TENSOR_CORE_WGMMA_IGMMA_PTX, TENSOR_CORE_WGMMA_QGMMA_PTX, TENSOR_MEMORY_BULK_ASYNC_PTX,
+    TENSOR_MEMORY_LDTM_PTX, TENSOR_MEMORY_STTM_PTX, TENSOR_MEMORY_TMA_ASYNC_PTX,
+    TENSOR_MEMORY_UTCCP_PTX, WARP_GROUP_REGISTER_SET_PTX,
 };
 
 pub const AUTO_COMPILE_ARCH: &str = "auto";
@@ -93,6 +94,13 @@ pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
             behavior: "one PTX sm120a warp-scope FP8 MMA that disassembles to QMMA",
             default_compile_arch: "sm_120a",
             source: TENSOR_CORE_SM120A_QMMA_PTX,
+        },
+        PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::TensorCoreTcgen05UtchmmaUtcimma,
+            symbol: "tensor_core_tcgen05_utchmma_utcimma_probe",
+            behavior: "PTX sm100a tcgen05 F16 and I8 MMAs that disassemble to UTCHMMA/UTCIMMA",
+            default_compile_arch: "sm_100a",
+            source: TENSOR_CORE_TCGEN05_UTCHMMA_UTCIMMA_PTX,
         },
         PtxDecompileProbe {
             kind: PtxDecompileProbeKind::TensorCoreTcgen05Utcomma,
@@ -185,6 +193,7 @@ pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
         PtxDecompileProbeKind::TensorCoreWgmmaIgmma,
         PtxDecompileProbeKind::TensorCoreWgmmaQgmma,
         PtxDecompileProbeKind::TensorCoreSm120aQmma,
+        PtxDecompileProbeKind::TensorCoreTcgen05UtchmmaUtcimma,
         PtxDecompileProbeKind::TensorCoreTcgen05Utcomma,
         PtxDecompileProbeKind::TensorCoreTcgen05Utcqmma,
         PtxDecompileProbeKind::TensorMemoryLdtm,
