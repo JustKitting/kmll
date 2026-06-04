@@ -37,6 +37,7 @@ pub struct SassCoverageReport {
     pub files_path: PathBuf,
     pub opcode_catalog_path: PathBuf,
     pub opcode_probe_targets_path: PathBuf,
+    pub sm120_tensor_core_support_path: PathBuf,
     pub opcode_frequency_path: PathBuf,
     pub opcode_signature_frequency_path: PathBuf,
     pub semantic_patterns_path: PathBuf,
@@ -59,6 +60,7 @@ pub struct SassCoverageReport {
     pub scanned_architectures: Vec<SassArchitecture>,
     pub opcode_catalog: Vec<SassOpcodeCatalogEntry>,
     pub opcode_probe_targets: Vec<SassOpcodeProbeTarget>,
+    pub sm120_tensor_core_support: Vec<Sm120TensorCoreSupportEntry>,
     pub opcode_counts: Vec<SassOpcodeCount>,
     pub opcode_signature_counts: Vec<SassOpcodeSignatureCount>,
     pub semantic_pattern_counts: Vec<SassSemanticPatternCount>,
@@ -98,10 +100,60 @@ pub struct SassCoverageReport {
     pub locally_mapped_opcode_count: usize,
     pub known_unobserved_opcode_count: usize,
     pub opcode_probe_target_count: usize,
+    pub sm120_tensor_core_required_count: usize,
+    pub sm120_tensor_core_supported_count: usize,
+    pub sm120_tensor_core_missing_count: usize,
     pub known_unmapped_opcode_count: usize,
     pub observed_unregistered_opcode_count: usize,
     pub observed_unmapped_opcode_count: usize,
     pub unsupported_instruction_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sm120TensorCoreSupportEntry {
+    pub opcode: SassOpcode,
+    pub required_architecture: SassArchitecture,
+    pub family: Sm120TensorCoreFamily,
+    pub requirement: &'static str,
+    pub observed: bool,
+    pub locally_mapped: bool,
+    pub instruction_count: usize,
+    pub observed_architectures: Vec<SassArchitecture>,
+    pub status: Sm120TensorCoreSupportStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Sm120TensorCoreFamily {
+    WarpMma,
+    WarpMmaSm120a,
+}
+
+impl fmt::Display for Sm120TensorCoreFamily {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WarpMma => f.write_str("warp-mma"),
+            Self::WarpMmaSm120a => f.write_str("warp-mma-sm120a"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Sm120TensorCoreSupportStatus {
+    Supported,
+    MissingArchitectureArtifact,
+    MissingLifterMapping,
+    Unobserved,
+}
+
+impl fmt::Display for Sm120TensorCoreSupportStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Supported => f.write_str("supported"),
+            Self::MissingArchitectureArtifact => f.write_str("missing-architecture-artifact"),
+            Self::MissingLifterMapping => f.write_str("missing-lifter-mapping"),
+            Self::Unobserved => f.write_str("unobserved"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

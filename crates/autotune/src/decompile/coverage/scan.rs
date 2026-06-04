@@ -14,8 +14,8 @@ use super::super::{
 
 use super::catalog::{
     append_opcode_catalog_lifted_ops, append_opcode_catalog_unsupported, opcode_catalog_entries,
-    opcode_probe_targets, seed_known_opcode_catalog, sorted_opcode_counts,
-    sorted_opcode_signature_counts, sorted_semantic_pattern_counts,
+    opcode_probe_targets, seed_known_opcode_catalog, sm120_tensor_core_support,
+    sorted_opcode_counts, sorted_opcode_signature_counts, sorted_semantic_pattern_counts,
 };
 use super::render::write_coverage_reports;
 use super::types::*;
@@ -204,6 +204,7 @@ pub fn run_sass_coverage_scan(
     let scanned_architectures = scanned_architectures.into_iter().collect::<Vec<_>>();
     let opcode_probe_targets = opcode_probe_targets(&opcode_catalog, &scanned_architectures);
     let opcode_catalog = opcode_catalog_entries(opcode_catalog);
+    let sm120_tensor_core_support = sm120_tensor_core_support(&opcode_catalog);
     let opcode_counts = sorted_opcode_counts(opcode_counts);
     let opcode_signature_counts = sorted_opcode_signature_counts(opcode_signature_counts);
     let semantic_pattern_counts = sorted_semantic_pattern_counts(semantic_pattern_counts);
@@ -237,6 +238,14 @@ pub fn run_sass_coverage_scan(
         .filter(|entry| entry.known && entry.instruction_count == 0)
         .count();
     let opcode_probe_target_count = opcode_probe_targets.len();
+    let sm120_tensor_core_required_count = sm120_tensor_core_support.len();
+    let sm120_tensor_core_supported_count = sm120_tensor_core_support
+        .iter()
+        .filter(|entry| entry.status == Sm120TensorCoreSupportStatus::Supported)
+        .count();
+    let sm120_tensor_core_missing_count = sm120_tensor_core_support
+        .len()
+        .saturating_sub(sm120_tensor_core_supported_count);
     let known_unmapped_opcode_count = opcode_catalog
         .iter()
         .filter(|entry| entry.known && !entry.locally_mapped)
@@ -255,6 +264,7 @@ pub fn run_sass_coverage_scan(
     let files_path = options.output_dir.join("files.tsv");
     let opcode_catalog_path = options.output_dir.join("opcode-catalog.tsv");
     let opcode_probe_targets_path = options.output_dir.join("opcode-probe-targets.tsv");
+    let sm120_tensor_core_support_path = options.output_dir.join("sm120-tensor-core-support.tsv");
     let opcode_frequency_path = options.output_dir.join("opcode-frequency.tsv");
     let opcode_signature_frequency_path = options.output_dir.join("opcode-signature-frequency.tsv");
     let semantic_patterns_path = options.output_dir.join("semantic-patterns.tsv");
@@ -281,6 +291,7 @@ pub fn run_sass_coverage_scan(
         files_path,
         opcode_catalog_path,
         opcode_probe_targets_path,
+        sm120_tensor_core_support_path,
         opcode_frequency_path,
         opcode_signature_frequency_path,
         semantic_patterns_path,
@@ -303,6 +314,7 @@ pub fn run_sass_coverage_scan(
         scanned_architectures,
         opcode_catalog,
         opcode_probe_targets,
+        sm120_tensor_core_support,
         opcode_counts,
         opcode_signature_counts,
         semantic_pattern_counts,
@@ -342,6 +354,9 @@ pub fn run_sass_coverage_scan(
         locally_mapped_opcode_count,
         known_unobserved_opcode_count,
         opcode_probe_target_count,
+        sm120_tensor_core_required_count,
+        sm120_tensor_core_supported_count,
+        sm120_tensor_core_missing_count,
         known_unmapped_opcode_count,
         observed_unregistered_opcode_count,
         observed_unmapped_opcode_count,

@@ -464,10 +464,69 @@ tensor_core_dtype_fixture:
         /*0000*/                   HMMA.16816.F32.BF16 R8, R12, R16, R20 ;       /* 0x0 */
         /*0010*/                   HMMA.16816.F32.F16 R8, R12, R16, R20 ;        /* 0x0 */
         /*0020*/                   HMMA.1688.F32.TF32 R8, R12, R16, R20 ;        /* 0x0 */
-        /*0030*/                   OMMA.E2M1 R8, R12, R16, R20 ;                 /* 0x0 */
-        /*0040*/                   QGMMA.E4M3 R8, R12, R16, R20 ;                /* 0x0 */
-        /*0050*/                   QGMMA.E5M2 R8, R12, R16, R20 ;                /* 0x0 */
-        /*0060*/                   EXIT ;                                        /* 0x0 */
+        /*0030*/                   EXIT ;                                        /* 0x0 */
+"#;
+
+const TENSOR_CORE_SM120A_DTYPE_SASS: &str = r#"
+        .target sm_120a
+
+        .section .text.tensor_core_sm120a_dtype_fixture,"ax",@progbits
+        .global tensor_core_sm120a_dtype_fixture
+tensor_core_sm120a_dtype_fixture:
+.text.tensor_core_sm120a_dtype_fixture:
+        /*0000*/                   OMMA.E2M1 R8, R12, R16, R20 ;                 /* 0x0 */
+        /*0010*/                   QMMA.E4M3 R8, R12, R16, R20 ;                 /* 0x0 */
+        /*0020*/                   QMMA.E5M2 R8, R12, R16, R20 ;                 /* 0x0 */
+        /*0030*/                   EXIT ;                                        /* 0x0 */
+"#;
+
+const TENSOR_CORE_SM90A_WARPGROUP_DTYPE_SASS: &str = r#"
+        .target sm_90a
+
+        .section .text.tensor_core_sm90a_warpgroup_dtype_fixture,"ax",@progbits
+        .global tensor_core_sm90a_warpgroup_dtype_fixture
+tensor_core_sm90a_warpgroup_dtype_fixture:
+.text.tensor_core_sm90a_warpgroup_dtype_fixture:
+        /*0000*/                   QGMMA.E4M3 R8, R12, R16, R20 ;                /* 0x0 */
+        /*0010*/                   QGMMA.E5M2 R8, R12, R16, R20 ;                /* 0x0 */
+        /*0020*/                   EXIT ;                                        /* 0x0 */
+"#;
+
+const SM120_TENSOR_CORE_MMA_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.sm120_tensor_core_mma_fixture,"ax",@progbits
+        .global sm120_tensor_core_mma_fixture
+sm120_tensor_core_mma_fixture:
+.text.sm120_tensor_core_mma_fixture:
+        /*0000*/                   HMMA.16816.F32.F16 R8, R12, R16, R20 ;        /* 0x0 */
+        /*0010*/                   IMMA.16832.S8.S8 R8, R12, R16, R20 ;          /* 0x0 */
+        /*0020*/                   DMMA.8x8x4 R8, R12, R16, R20 ;                /* 0x0 */
+        /*0030*/                   EXIT ;                                        /* 0x0 */
+"#;
+
+const SM120A_TENSOR_CORE_MMA_SASS: &str = r#"
+        .target sm_120a
+
+        .section .text.sm120a_tensor_core_mma_fixture,"ax",@progbits
+        .global sm120a_tensor_core_mma_fixture
+sm120a_tensor_core_mma_fixture:
+.text.sm120a_tensor_core_mma_fixture:
+        /*0000*/                   QMMA.E4M3 R8, R12, R16, R20 ;                 /* 0x0 */
+        /*0010*/                   OMMA.E2M1 R8, R12, R16, R20 ;                 /* 0x0 */
+        /*0020*/                   EXIT ;                                        /* 0x0 */
+"#;
+
+const SM120_WRONG_ARCH_TENSOR_CORE_MMA_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.sm120_wrong_arch_tensor_core_mma_fixture,"ax",@progbits
+        .global sm120_wrong_arch_tensor_core_mma_fixture
+sm120_wrong_arch_tensor_core_mma_fixture:
+.text.sm120_wrong_arch_tensor_core_mma_fixture:
+        /*0000*/                   QMMA.E4M3 R8, R12, R16, R20 ;                 /* 0x0 */
+        /*0010*/                   OMMA.E2M1 R8, R12, R16, R20 ;                 /* 0x0 */
+        /*0020*/                   EXIT ;                                        /* 0x0 */
 "#;
 
 const MEMORY_ATOMIC_SASS: &str = r#"
@@ -1974,8 +2033,13 @@ fn lift_tensor_core_sass_refines_mma_element_type_from_modifiers() {
             ..
         }
     ));
+
+    let sm120a_module =
+        parse_nvidia_sass(TENSOR_CORE_SM120A_DTYPE_SASS).expect("SM120a dtype SASS should parse");
+    let sm120a_ir = lift_sass_module(&sm120a_module);
+    let sm120a_function = &sm120a_ir.functions[0];
     assert!(matches!(
-        &function.ops[3].kind,
+        &sm120a_function.ops[0].kind,
         KernelIrOpKind::TensorCoreMma {
             element_type: Some(SassTensorElementType::E2M1),
             signature: Some(SassTensorMmaSignature {
@@ -1990,7 +2054,42 @@ fn lift_tensor_core_sass_refines_mma_element_type_from_modifiers() {
         }
     ));
     assert!(matches!(
-        &function.ops[4].kind,
+        &sm120a_function.ops[1].kind,
+        KernelIrOpKind::TensorCoreMma {
+            element_type: Some(SassTensorElementType::E4M3),
+            signature: Some(SassTensorMmaSignature {
+                shape: None,
+                output_type: None,
+                lhs_type: Some(SassTensorElementType::E4M3),
+                rhs_type: Some(SassTensorElementType::E4M3),
+                accumulator_type: None,
+            }),
+            scope: Some(SassTensorScope::Warp),
+            ..
+        }
+    ));
+    assert!(matches!(
+        &sm120a_function.ops[2].kind,
+        KernelIrOpKind::TensorCoreMma {
+            element_type: Some(SassTensorElementType::E5M2),
+            signature: Some(SassTensorMmaSignature {
+                shape: None,
+                output_type: None,
+                lhs_type: Some(SassTensorElementType::E5M2),
+                rhs_type: Some(SassTensorElementType::E5M2),
+                accumulator_type: None,
+            }),
+            scope: Some(SassTensorScope::Warp),
+            ..
+        }
+    ));
+
+    let sm90a_module = parse_nvidia_sass(TENSOR_CORE_SM90A_WARPGROUP_DTYPE_SASS)
+        .expect("SM90a warpgroup dtype SASS should parse");
+    let sm90a_ir = lift_sass_module(&sm90a_module);
+    let sm90a_function = &sm90a_ir.functions[0];
+    assert!(matches!(
+        &sm90a_function.ops[0].kind,
         KernelIrOpKind::TensorCoreMma {
             element_type: Some(SassTensorElementType::E4M3),
             signature: Some(SassTensorMmaSignature {
@@ -2005,7 +2104,7 @@ fn lift_tensor_core_sass_refines_mma_element_type_from_modifiers() {
         }
     ));
     assert!(matches!(
-        &function.ops[5].kind,
+        &sm90a_function.ops[1].kind,
         KernelIrOpKind::TensorCoreMma {
             element_type: Some(SassTensorElementType::E5M2),
             signature: Some(SassTensorMmaSignature {
@@ -2606,23 +2705,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .expect("scalar memory/atomic PTX probe should exist");
 
     assert_eq!(options.compile_arch, AUTO_COMPILE_ARCH);
-    assert_eq!(
-        options.probes,
-        vec![
-            PtxDecompileProbeKind::TensorCoreHmma,
-            PtxDecompileProbeKind::TensorCoreImma,
-            PtxDecompileProbeKind::TensorCoreDmma,
-            PtxDecompileProbeKind::TensorCoreBmma,
-            PtxDecompileProbeKind::TensorCoreWgmmaHgmma,
-            PtxDecompileProbeKind::TensorCoreWgmmaBgmma,
-            PtxDecompileProbeKind::TensorCoreWgmmaIgmma,
-            PtxDecompileProbeKind::TensorCoreWgmmaQgmma,
-            PtxDecompileProbeKind::WarpGroupRegisterSet,
-            PtxDecompileProbeKind::ScalarMemoryLogic,
-            PtxDecompileProbeKind::ArchitectureSm90Scalar,
-            PtxDecompileProbeKind::ScalarMemoryAtomic
-        ]
-    );
+    assert_eq!(options.probes, all_ptx_decompile_probe_kinds());
     assert!(
         options
             .artifact_root
@@ -2916,6 +2999,9 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         report.opcode_probe_target_count,
         report.known_unobserved_opcode_count
     );
+    assert_eq!(report.sm120_tensor_core_required_count, 5);
+    assert_eq!(report.sm120_tensor_core_supported_count, 0);
+    assert_eq!(report.sm120_tensor_core_missing_count, 5);
     assert_eq!(report.known_unmapped_opcode_count, 0);
     assert!(report.observed_unregistered_opcode_count > 0);
     assert!(report.observed_unmapped_opcode_count > 0);
@@ -3123,6 +3209,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.files_path.exists());
     assert!(report.opcode_catalog_path.exists());
     assert!(report.opcode_probe_targets_path.exists());
+    assert!(report.sm120_tensor_core_support_path.exists());
     assert!(report.opcode_frequency_path.exists());
     assert!(report.opcode_signature_frequency_path.exists());
     assert!(report.semantic_patterns_path.exists());
@@ -3350,6 +3437,141 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
             .filter_map(|file| file.pattern_path.as_ref())
             .all(|path| path.exists())
     );
+    let hmma_support = report
+        .sm120_tensor_core_support
+        .iter()
+        .find(|entry| entry.opcode == SassOpcode::new("HMMA"))
+        .expect("HMMA should be part of the SM120 tensor-core support contract");
+    assert_eq!(
+        hmma_support.required_architecture,
+        SassArchitecture::sm(120)
+    );
+    assert_eq!(
+        hmma_support.status,
+        Sm120TensorCoreSupportStatus::Unobserved
+    );
+    let qmma_support = report
+        .sm120_tensor_core_support
+        .iter()
+        .find(|entry| entry.opcode == SassOpcode::new("QMMA"))
+        .expect("QMMA should be part of the SM120a tensor-core support contract");
+    assert_eq!(
+        qmma_support.required_architecture,
+        SassArchitecture::sm_a(120)
+    );
+    assert_eq!(
+        qmma_support.status,
+        Sm120TensorCoreSupportStatus::Unobserved
+    );
+    let summary = fs::read_to_string(&report.summary_path).expect("summary should read");
+    assert!(summary.contains("sm120_tensor_core_required=5"));
+    assert!(summary.contains("sm120_tensor_core_supported=0"));
+    assert!(summary.contains("sm120_tensor_core_missing=5"));
+    let support_tsv = fs::read_to_string(&report.sm120_tensor_core_support_path)
+        .expect("SM120 tensor-core support TSV should read");
+    assert!(support_tsv.starts_with(
+        "opcode\trequired_architecture\tfamily\trequirement\tobserved\tlocally_mapped"
+    ));
+    assert!(support_tsv.contains("QMMA\tsm120a"));
+}
+
+#[test]
+fn coverage_scan_requires_tensor_core_ops_on_exact_sm120_architecture() {
+    let supported_root = unique_test_dir("coverage-sm120-tensor-core-supported");
+    let supported_input = supported_root.join("input");
+    let supported_output = supported_root.join("output");
+    fs::create_dir_all(&supported_input).expect("supported input dir should be created");
+    fs::write(
+        supported_input.join("sm120-mma.sass"),
+        SM120_TENSOR_CORE_MMA_SASS,
+    )
+    .expect("SM120 tensor-core SASS should be written");
+    fs::write(
+        supported_input.join("sm120a-mma.sass"),
+        SM120A_TENSOR_CORE_MMA_SASS,
+    )
+    .expect("SM120a tensor-core SASS should be written");
+
+    let supported_report = run_sass_coverage_scan(&SassCoverageOptions {
+        root: supported_input,
+        output_dir: supported_output,
+    })
+    .expect("supported coverage scan should complete");
+
+    assert_eq!(supported_report.sm120_tensor_core_required_count, 5);
+    assert_eq!(supported_report.sm120_tensor_core_supported_count, 5);
+    assert_eq!(supported_report.sm120_tensor_core_missing_count, 0);
+    assert!(
+        supported_report
+            .sm120_tensor_core_support
+            .iter()
+            .all(|entry| {
+                entry.status == Sm120TensorCoreSupportStatus::Supported
+                    && entry.observed
+                    && entry.locally_mapped
+            })
+    );
+    let qmma_support = supported_report
+        .sm120_tensor_core_support
+        .iter()
+        .find(|entry| entry.opcode == SassOpcode::new("QMMA"))
+        .expect("QMMA support row should exist");
+    assert_eq!(
+        qmma_support.required_architecture,
+        SassArchitecture::sm_a(120)
+    );
+    assert!(
+        qmma_support
+            .observed_architectures
+            .contains(&SassArchitecture::sm_a(120))
+    );
+
+    let wrong_arch_root = unique_test_dir("coverage-sm120-tensor-core-wrong-arch");
+    let wrong_arch_input = wrong_arch_root.join("input");
+    let wrong_arch_output = wrong_arch_root.join("output");
+    fs::create_dir_all(&wrong_arch_input).expect("wrong-arch input dir should be created");
+    fs::write(
+        wrong_arch_input.join("sm120-mma.sass"),
+        SM120_TENSOR_CORE_MMA_SASS,
+    )
+    .expect("SM120 tensor-core SASS should be written");
+    fs::write(
+        wrong_arch_input.join("wrong-arch-mma.sass"),
+        SM120_WRONG_ARCH_TENSOR_CORE_MMA_SASS,
+    )
+    .expect("wrong-arch tensor-core SASS should be written");
+
+    let wrong_arch_report = run_sass_coverage_scan(&SassCoverageOptions {
+        root: wrong_arch_input,
+        output_dir: wrong_arch_output,
+    })
+    .expect("wrong-arch coverage scan should complete");
+
+    assert_eq!(wrong_arch_report.sm120_tensor_core_required_count, 5);
+    assert_eq!(wrong_arch_report.sm120_tensor_core_supported_count, 3);
+    assert_eq!(wrong_arch_report.sm120_tensor_core_missing_count, 2);
+    for opcode in ["QMMA", "OMMA"] {
+        let entry = wrong_arch_report
+            .sm120_tensor_core_support
+            .iter()
+            .find(|entry| entry.opcode == SassOpcode::new(opcode))
+            .expect("SM120a-only support row should exist");
+        assert_eq!(entry.required_architecture, SassArchitecture::sm_a(120));
+        assert_eq!(
+            entry.status,
+            Sm120TensorCoreSupportStatus::MissingArchitectureArtifact
+        );
+        assert!(
+            entry
+                .observed_architectures
+                .contains(&SassArchitecture::sm(120))
+        );
+        assert!(
+            !entry
+                .observed_architectures
+                .contains(&SassArchitecture::sm_a(120))
+        );
+    }
 }
 
 #[test]

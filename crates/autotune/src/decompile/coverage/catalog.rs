@@ -2,14 +2,15 @@ use std::collections::BTreeMap;
 
 use super::super::{
     KernelIrModule, KernelIrOpKind, KnownSassOpcode, SassArchitecture, SassLiftedModule,
-    SassLiftedOpClass, SassOpcode, SassOpcodeCatalogClass, SassSemanticPatternCategory,
-    known_sass_opcodes,
+    SassLiftedOpClass, SassOpcode, SassOpcodeCatalogClass, SassOpcodeKind,
+    SassSemanticPatternCategory, known_sass_opcodes,
 };
 
 use super::types::{
     OpcodeCatalogBuilder, SassOpcodeCatalogEntry, SassOpcodeCount, SassOpcodeProbeAction,
     SassOpcodeProbeReason, SassOpcodeProbeTarget, SassOpcodeSignature, SassOpcodeSignatureCount,
-    SassSemanticPatternCount,
+    SassSemanticPatternCount, Sm120TensorCoreFamily, Sm120TensorCoreSupportEntry,
+    Sm120TensorCoreSupportStatus,
 };
 
 pub(super) fn seed_known_opcode_catalog(
@@ -76,6 +77,88 @@ pub(super) fn opcode_catalog_entries(
     opcode_catalog
         .into_iter()
         .map(|(opcode, entry)| entry.into_entry(opcode))
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Sm120TensorCoreRequirement {
+    opcode: SassOpcodeKind,
+    required_architecture: SassArchitecture,
+    family: Sm120TensorCoreFamily,
+    requirement: &'static str,
+}
+
+const SM120_TENSOR_CORE_REQUIREMENTS: &[Sm120TensorCoreRequirement] = &[
+    Sm120TensorCoreRequirement {
+        opcode: SassOpcodeKind::Hmma,
+        required_architecture: SassArchitecture::sm(120),
+        family: Sm120TensorCoreFamily::WarpMma,
+        requirement: "half/bfloat/tf32 warp-scope tensor-core MMA",
+    },
+    Sm120TensorCoreRequirement {
+        opcode: SassOpcodeKind::Imma,
+        required_architecture: SassArchitecture::sm(120),
+        family: Sm120TensorCoreFamily::WarpMma,
+        requirement: "integer warp-scope tensor-core MMA",
+    },
+    Sm120TensorCoreRequirement {
+        opcode: SassOpcodeKind::Dmma,
+        required_architecture: SassArchitecture::sm(120),
+        family: Sm120TensorCoreFamily::WarpMma,
+        requirement: "fp64 warp-scope tensor-core MMA",
+    },
+    Sm120TensorCoreRequirement {
+        opcode: SassOpcodeKind::Qmma,
+        required_architecture: SassArchitecture::sm_a(120),
+        family: Sm120TensorCoreFamily::WarpMmaSm120a,
+        requirement: "sm120a f8/f6/f4 warp-scope tensor-core MMA",
+    },
+    Sm120TensorCoreRequirement {
+        opcode: SassOpcodeKind::Omma,
+        required_architecture: SassArchitecture::sm_a(120),
+        family: Sm120TensorCoreFamily::WarpMmaSm120a,
+        requirement: "sm120a block-scaled fp4 warp-scope tensor-core MMA",
+    },
+];
+
+pub(super) fn sm120_tensor_core_support(
+    opcode_catalog: &[SassOpcodeCatalogEntry],
+) -> Vec<Sm120TensorCoreSupportEntry> {
+    SM120_TENSOR_CORE_REQUIREMENTS
+        .iter()
+        .map(|requirement| {
+            let opcode = SassOpcode::from_kind(requirement.opcode.clone());
+            let catalog_entry = opcode_catalog.iter().find(|entry| entry.opcode == opcode);
+            let observed_architectures = catalog_entry
+                .map(|entry| entry.observed_architectures.clone())
+                .unwrap_or_default();
+            let observed = observed_architectures.contains(&requirement.required_architecture);
+            let locally_mapped = catalog_entry.is_some_and(|entry| entry.locally_mapped);
+            let instruction_count = catalog_entry
+                .map(|entry| entry.instruction_count)
+                .unwrap_or_default();
+            let status = if observed && locally_mapped {
+                Sm120TensorCoreSupportStatus::Supported
+            } else if observed {
+                Sm120TensorCoreSupportStatus::MissingLifterMapping
+            } else if instruction_count > 0 {
+                Sm120TensorCoreSupportStatus::MissingArchitectureArtifact
+            } else {
+                Sm120TensorCoreSupportStatus::Unobserved
+            };
+
+            Sm120TensorCoreSupportEntry {
+                opcode,
+                required_architecture: requirement.required_architecture,
+                family: requirement.family,
+                requirement: requirement.requirement,
+                observed,
+                locally_mapped,
+                instruction_count,
+                observed_architectures,
+                status,
+            }
+        })
         .collect()
 }
 

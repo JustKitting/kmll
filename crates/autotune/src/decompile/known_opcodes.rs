@@ -385,14 +385,24 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
         WarpGroupMma
     ),
     nvidia_mapped!(Imma, [80, 86, 89, 90, 100, 120], TensorCore, IntegerMma),
-    nvidia_mapped!(Omma, [100, 120], TensorCore, Fp4Mma),
+    nvidia_mapped_on!(
+        Omma,
+        [SassArchitecture::sm_a(100), SassArchitecture::sm_a(120)],
+        TensorCore,
+        Fp4Mma
+    ),
     nvidia_mapped_on!(
         Qgmma,
         [SassArchitecture::sm(90), SassArchitecture::sm_a(90)],
         TensorCore,
         WarpGroupMma
     ),
-    nvidia_mapped!(Qmma, [100, 120], TensorCore, Fp8Mma),
+    nvidia_mapped_on!(
+        Qmma,
+        [SassArchitecture::sm_a(100), SassArchitecture::sm_a(120)],
+        TensorCore,
+        Fp8Mma
+    ),
     // CUDA 13.2 ptxas emits LDTM/STTM for the documented tcgen05.ld/st tensor-memory
     // PTX shapes, including scalar-width .32x32b forms. Keep raw LDT/STT parser
     // support, but do not seed them as required probe targets without a concrete

@@ -64,7 +64,7 @@ pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
 
     let report = run_sass_coverage_scan(&options)?;
     println!(
-        "kernel_decompile_coverage root={} files_seen={} files_parsed={} scanned_architectures={} parse_errors={} parsed_instructions={} cfg_blocks={} cfg_edges={} dominator_blocks={} natural_loops={} regions={} dataflow_ops={} reaching_uses={} ssa_values={} def_use_edges={} value_ops={} lifted_ops={} live_ranges={} memory_accesses={} semantic_patterns={} known_opcodes={} locally_mapped_opcodes={} known_unobserved_opcodes={} opcode_probe_targets={} known_unmapped_opcodes={} observed_unregistered_opcodes={} observed_unmapped_opcodes={} unsupported_instructions={} summary_path={} files_path={} opcode_catalog_path={} opcode_probe_targets_path={} opcode_frequency_path={} opcode_signature_frequency_path={} cfg_blocks_path={} cfg_edges_path={} dominators_path={} natural_loops_path={} regions_path={} dataflow_path={} reaching_uses_path={} ssa_values_path={} def_use_edges_path={} value_ops_path={} lifted_ops_path={} live_ranges_path={} memory_accesses_path={} semantic_patterns_path={} semantic_pattern_frequency_path={} unsupported_instructions_path={}",
+        "kernel_decompile_coverage root={} files_seen={} files_parsed={} scanned_architectures={} parse_errors={} parsed_instructions={} cfg_blocks={} cfg_edges={} dominator_blocks={} natural_loops={} regions={} dataflow_ops={} reaching_uses={} ssa_values={} def_use_edges={} value_ops={} lifted_ops={} live_ranges={} memory_accesses={} semantic_patterns={} known_opcodes={} locally_mapped_opcodes={} known_unobserved_opcodes={} opcode_probe_targets={} sm120_tensor_core_required={} sm120_tensor_core_supported={} sm120_tensor_core_missing={} known_unmapped_opcodes={} observed_unregistered_opcodes={} observed_unmapped_opcodes={} unsupported_instructions={} summary_path={} files_path={} opcode_catalog_path={} opcode_probe_targets_path={} sm120_tensor_core_support_path={} opcode_frequency_path={} opcode_signature_frequency_path={} cfg_blocks_path={} cfg_edges_path={} dominators_path={} natural_loops_path={} regions_path={} dataflow_path={} reaching_uses_path={} ssa_values_path={} def_use_edges_path={} value_ops_path={} lifted_ops_path={} live_ranges_path={} memory_accesses_path={} semantic_patterns_path={} semantic_pattern_frequency_path={} unsupported_instructions_path={}",
         report.root.display(),
         report.files.len(),
         report.parsed_file_count,
@@ -89,6 +89,9 @@ pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
         report.locally_mapped_opcode_count,
         report.known_unobserved_opcode_count,
         report.opcode_probe_target_count,
+        report.sm120_tensor_core_required_count,
+        report.sm120_tensor_core_supported_count,
+        report.sm120_tensor_core_missing_count,
         report.known_unmapped_opcode_count,
         report.observed_unregistered_opcode_count,
         report.observed_unmapped_opcode_count,
@@ -97,6 +100,7 @@ pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
         report.files_path.display(),
         report.opcode_catalog_path.display(),
         report.opcode_probe_targets_path.display(),
+        report.sm120_tensor_core_support_path.display(),
         report.opcode_frequency_path.display(),
         report.opcode_signature_frequency_path.display(),
         report.cfg_blocks_path.display(),
@@ -974,7 +978,7 @@ pub(crate) fn run_kernel_decompile_fixture_coverage(args: &[String]) -> AppResul
 
     let report = run_decompile_fixture_coverage(&options)?;
     println!(
-        "kernel_decompile_fixture_coverage fixtures={} root={} files_seen={} files_parsed={} scanned_architectures={} parse_errors={} parsed_instructions={} known_opcodes={} locally_mapped_opcodes={} known_unobserved_opcodes={} opcode_probe_targets={} observed_unregistered_opcodes={} observed_unmapped_opcodes={} unsupported_instructions={} summary_path={} files_path={} opcode_catalog_path={} opcode_probe_targets_path={}",
+        "kernel_decompile_fixture_coverage fixtures={} root={} files_seen={} files_parsed={} scanned_architectures={} parse_errors={} parsed_instructions={} known_opcodes={} locally_mapped_opcodes={} known_unobserved_opcodes={} opcode_probe_targets={} sm120_tensor_core_required={} sm120_tensor_core_supported={} sm120_tensor_core_missing={} observed_unregistered_opcodes={} observed_unmapped_opcodes={} unsupported_instructions={} summary_path={} files_path={} opcode_catalog_path={} opcode_probe_targets_path={} sm120_tensor_core_support_path={}",
         report.fixture_reports.len(),
         report.coverage_report.root.display(),
         report.coverage_report.files.len(),
@@ -986,6 +990,9 @@ pub(crate) fn run_kernel_decompile_fixture_coverage(args: &[String]) -> AppResul
         report.coverage_report.locally_mapped_opcode_count,
         report.coverage_report.known_unobserved_opcode_count,
         report.coverage_report.opcode_probe_target_count,
+        report.coverage_report.sm120_tensor_core_required_count,
+        report.coverage_report.sm120_tensor_core_supported_count,
+        report.coverage_report.sm120_tensor_core_missing_count,
         report.coverage_report.observed_unregistered_opcode_count,
         report.coverage_report.observed_unmapped_opcode_count,
         report.coverage_report.unsupported_instruction_count,
@@ -993,6 +1000,10 @@ pub(crate) fn run_kernel_decompile_fixture_coverage(args: &[String]) -> AppResul
         report.coverage_report.files_path.display(),
         report.coverage_report.opcode_catalog_path.display(),
         report.coverage_report.opcode_probe_targets_path.display(),
+        report
+            .coverage_report
+            .sm120_tensor_core_support_path
+            .display(),
     );
     for fixture in report.fixture_reports {
         println!(

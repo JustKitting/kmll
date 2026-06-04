@@ -8,7 +8,8 @@ pub use super::super::{
         SassCoverageValueOp, SassOpcodeCatalogEntry, SassOpcodeCount, SassOpcodeCoverageState,
         SassOpcodeProbeAction, SassOpcodeProbeReason, SassOpcodeProbeTarget, SassOpcodeSignature,
         SassOpcodeSignatureCount, SassOpcodeSupport, SassSemanticPatternCount,
-        SassUnsupportedInstruction, run_sass_coverage_scan,
+        SassUnsupportedInstruction, Sm120TensorCoreFamily, Sm120TensorCoreSupportEntry,
+        Sm120TensorCoreSupportStatus, run_sass_coverage_scan,
     },
     coverage_compare::{
         SassCoverageComparisonOptions, SassCoverageComparisonReport, SassCoverageOpcodeChange,

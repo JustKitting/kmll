@@ -27,6 +27,10 @@ pub(super) fn write_coverage_reports(report: &SassCoverageReport) -> Result<(), 
         render_opcode_probe_targets_tsv(report).as_bytes(),
     )?;
     fs::write(
+        &report.sm120_tensor_core_support_path,
+        render_sm120_tensor_core_support_tsv(report).as_bytes(),
+    )?;
+    fs::write(
         &report.opcode_frequency_path,
         render_opcode_counts_tsv(&report.opcode_counts).as_bytes(),
     )?;
@@ -152,6 +156,24 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
     .expect("write to string");
     writeln!(
         out,
+        "sm120_tensor_core_required={}",
+        report.sm120_tensor_core_required_count
+    )
+    .expect("write to string");
+    writeln!(
+        out,
+        "sm120_tensor_core_supported={}",
+        report.sm120_tensor_core_supported_count
+    )
+    .expect("write to string");
+    writeln!(
+        out,
+        "sm120_tensor_core_missing={}",
+        report.sm120_tensor_core_missing_count
+    )
+    .expect("write to string");
+    writeln!(
+        out,
         "known_unmapped_opcodes={}",
         report.known_unmapped_opcode_count
     )
@@ -179,6 +201,12 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
         out,
         "opcode_catalog={}",
         report.opcode_catalog_path.display()
+    )
+    .expect("write to string");
+    writeln!(
+        out,
+        "sm120_tensor_core_support={}",
+        report.sm120_tensor_core_support_path.display()
     )
     .expect("write to string");
     writeln!(
@@ -213,6 +241,20 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
             .expect("write to string");
         }
     }
+    if !report.sm120_tensor_core_support.is_empty() {
+        writeln!(out).expect("write to string");
+        writeln!(out, "sm120_tensor_core_support").expect("write to string");
+        writeln!(out, "opcode\trequired_architecture\tstatus\trequirement")
+            .expect("write to string");
+        for entry in &report.sm120_tensor_core_support {
+            writeln!(
+                out,
+                "{}\t{}\t{}\t{}",
+                entry.opcode, entry.required_architecture, entry.status, entry.requirement
+            )
+            .expect("write to string");
+        }
+    }
     if !report.unsupported_instructions.is_empty() {
         writeln!(out).expect("write to string");
         writeln!(out, "unsupported_by_opcode").expect("write to string");
@@ -223,6 +265,32 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
         for count in sorted_opcode_counts(by_opcode) {
             writeln!(out, "{}\t{}", count.opcode, count.count).expect("write to string");
         }
+    }
+    out
+}
+
+fn render_sm120_tensor_core_support_tsv(report: &SassCoverageReport) -> String {
+    let mut out = String::new();
+    writeln!(
+        out,
+        "opcode\trequired_architecture\tfamily\trequirement\tobserved\tlocally_mapped\tinstruction_count\tobserved_architectures\tstatus"
+    )
+    .expect("write to string");
+    for entry in &report.sm120_tensor_core_support {
+        writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            tsv(&entry.opcode.to_string()),
+            entry.required_architecture,
+            entry.family,
+            tsv(entry.requirement),
+            entry.observed,
+            entry.locally_mapped,
+            entry.instruction_count,
+            tsv(&display_list(&entry.observed_architectures)),
+            entry.status,
+        )
+        .expect("write to string");
     }
     out
 }
