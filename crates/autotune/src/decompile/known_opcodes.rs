@@ -393,9 +393,11 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
         WarpGroupMma
     ),
     nvidia_mapped!(Qmma, [100, 120], TensorCore, Fp8Mma),
-    nvidia_mapped!(Ldt, [100, 120], TensorMemory, TensorLoad),
+    // CUDA 13.2 ptxas emits LDTM/STTM for the documented tcgen05.ld/st tensor-memory
+    // PTX shapes, including scalar-width .32x32b forms. Keep raw LDT/STT parser
+    // support, but do not seed them as required probe targets without a concrete
+    // generator or observed SASS artifact.
     nvidia_mapped!(Ldtm, [100, 120], TensorMemory, TensorLoadMatrix),
-    nvidia_mapped!(Stt, [100, 120], TensorMemory, TensorStore),
     nvidia_mapped!(Sttm, [100, 120], TensorMemory, TensorStoreMatrix),
     nvidia_mapped!(Ublkcp, [100, 120], TensorMemory, BulkCopy),
     nvidia_mapped!(Ublkpf, [100, 120], TensorMemory, BulkPrefetch),

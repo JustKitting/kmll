@@ -62,6 +62,19 @@ fn cleanup_decompile_autotune_test_root(root: &Path) {
 }
 
 #[test]
+fn known_tensor_memory_catalog_targets_documented_ldtm_sttm_shapes() {
+    let known_opcodes = known_sass_opcodes()
+        .iter()
+        .map(|known| known.opcode.clone())
+        .collect::<BTreeSet<_>>();
+
+    assert!(known_opcodes.contains(&SassOpcodeKind::Ldtm));
+    assert!(known_opcodes.contains(&SassOpcodeKind::Sttm));
+    assert!(!known_opcodes.contains(&SassOpcodeKind::Ldt));
+    assert!(!known_opcodes.contains(&SassOpcodeKind::Stt));
+}
+
+#[test]
 fn raw_aggregate_operands_capture_label_candidates_once() {
     let operand = SassOperand {
         raw: "R4 `(matvec_bf16_rows17)".to_string(),
