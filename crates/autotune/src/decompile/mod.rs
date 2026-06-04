@@ -42,6 +42,7 @@ pub use self::{
     autotune_bridge::{
         DecompiledAutotuneError, DecompiledAutotuneEvidence, DecompiledAutotuneOperation,
         DecompiledAutotuneShape, decompiled_autotune_operation,
+        decompiled_autotune_operation_with_module,
     },
     coverage::{
         SassCoverageBasicBlock, SassCoverageCfgEdge, SassCoverageDataflowOp,
@@ -254,6 +255,17 @@ pub struct DecompileAutotuneMatvecReport {
     pub auto_report_path: PathBuf,
     pub optimized_source_path: PathBuf,
     pub optimized_ptx_path: PathBuf,
+    pub optimized_cubin_path: PathBuf,
+    pub optimized_sass_path: PathBuf,
+    pub optimized_ir_path: PathBuf,
+    pub optimized_lifted_ir_path: PathBuf,
+    pub optimized_analysis_path: PathBuf,
+    pub optimized_pattern_path: PathBuf,
+    pub optimized_side_by_side_path: PathBuf,
+    pub optimized_parsed_instruction_count: usize,
+    pub optimized_unsupported_instruction_count: usize,
+    pub optimized_semantic_pattern_count: usize,
+    pub optimized_evidence: DecompiledAutotuneEvidence,
     pub best_symbol: String,
     pub best_action_ops: Vec<String>,
     pub best_action_count: usize,
@@ -447,7 +459,8 @@ pub fn run_decompile_autotune_matvec(
                 "compiled naive matvec SASS did not contain any functions",
             )
         })?;
-    let routed = decompiled_autotune_operation(
+    let routed = decompiled_autotune_operation_with_module(
+        &project_ir,
         function,
         DecompiledAutotuneShape::MatvecBf16RowMajor {
             rows: options.rows,
@@ -483,6 +496,96 @@ pub fn run_decompile_autotune_matvec(
         Some(&options.compile_arch),
         Some(&generated_store.standalone_target_root()),
     )?;
+    let optimized_sass_dir = generated_store.paths_for(best).directory.join("sass");
+    fs::create_dir_all(&optimized_sass_dir)?;
+    let optimized_cubin_path = optimized_sass_dir.join(format!(
+        "{}.{}.cubin",
+        emitted_optimized.symbol, options.compile_arch
+    ));
+    run_checked(
+        "ptxas",
+        &[
+            format!("-arch={}", options.compile_arch),
+            "-o".to_string(),
+            optimized_cubin_path.display().to_string(),
+            compiled_optimized.ptx_path.display().to_string(),
+        ],
+        &optimized_sass_dir,
+    )?;
+    let optimized_sass_path = optimized_sass_dir.join(format!(
+        "{}.{}.nvdisasm.sass",
+        emitted_optimized.symbol, options.compile_arch
+    ));
+    let optimized_sass = run_capture(
+        "nvdisasm",
+        &[optimized_cubin_path.display().to_string()],
+        &optimized_sass_dir,
+    )?;
+    fs::write(&optimized_sass_path, optimized_sass.as_bytes())?;
+    let optimized_parsed = parse_nvidia_sass(&optimized_sass)?;
+    let optimized_ir = lift_sass_module(&optimized_parsed);
+    let optimized_analysis = analyze_sass_ir(&optimized_ir);
+    let optimized_lifted = lift_sass_value_ir(&optimized_ir, &optimized_analysis);
+    let optimized_patterns = recover_sass_patterns(&optimized_ir);
+    let optimized_ir_path = optimized_sass_dir.join("lifted.ir.txt");
+    fs::write(&optimized_ir_path, optimized_ir.to_text().as_bytes())?;
+    let optimized_lifted_ir_path = optimized_sass_dir.join("lifted-value-ir.txt");
+    fs::write(
+        &optimized_lifted_ir_path,
+        optimized_lifted.to_text().as_bytes(),
+    )?;
+    let optimized_analysis_path = optimized_sass_dir.join("analysis.txt");
+    fs::write(
+        &optimized_analysis_path,
+        optimized_analysis.to_text().as_bytes(),
+    )?;
+    let optimized_pattern_path = optimized_sass_dir.join("patterns.txt");
+    fs::write(
+        &optimized_pattern_path,
+        optimized_patterns.to_text().as_bytes(),
+    )?;
+    let optimized_source_text = fs::read_to_string(&emitted_optimized.paths.source_path)?;
+    let optimized_side_by_side = render_sass_file_side_by_side(
+        &optimized_sass_path,
+        Some((
+            emitted_optimized.paths.source_path.as_path(),
+            optimized_source_text.as_str(),
+        )),
+        &optimized_sass,
+        &optimized_ir,
+    );
+    let optimized_side_by_side_path = optimized_sass_dir.join("source-sass-ir.txt");
+    fs::write(
+        &optimized_side_by_side_path,
+        optimized_side_by_side.as_bytes(),
+    )?;
+    let optimized_function = optimized_ir
+        .functions
+        .iter()
+        .find(|function| function.name.as_str() == emitted_optimized.symbol)
+        .or_else(|| optimized_ir.functions.first())
+        .ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                "compiled optimized matvec SASS did not contain any functions",
+            )
+        })?;
+    let optimized_routed = decompiled_autotune_operation_with_module(
+        &optimized_ir,
+        optimized_function,
+        DecompiledAutotuneShape::MatvecBf16RowMajor {
+            rows: options.rows,
+            cols: options.cols,
+        },
+    )
+    .map_err(|error| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "compiled optimized matvec SASS did not provide supported autotune evidence: {error:?}"
+            ),
+        )
+    })?;
     let best_action_ops = best
         .action_trace
         .iter()
@@ -519,6 +622,17 @@ pub fn run_decompile_autotune_matvec(
         auto_report_path: emitted_report.report_path,
         optimized_source_path: emitted_optimized.paths.source_path,
         optimized_ptx_path: compiled_optimized.ptx_path,
+        optimized_cubin_path,
+        optimized_sass_path,
+        optimized_ir_path,
+        optimized_lifted_ir_path,
+        optimized_analysis_path,
+        optimized_pattern_path,
+        optimized_side_by_side_path,
+        optimized_parsed_instruction_count: optimized_parsed.instruction_count(),
+        optimized_unsupported_instruction_count: optimized_ir.unsupported_instruction_count(),
+        optimized_semantic_pattern_count: optimized_patterns.pattern_count(),
+        optimized_evidence: optimized_routed.evidence,
         best_symbol: emitted_optimized.symbol,
         best_action_count: best_action_ops.len(),
         best_action_ops,

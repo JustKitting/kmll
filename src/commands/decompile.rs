@@ -322,7 +322,7 @@ pub(crate) fn run_kernel_decompile_autotune_matvec(args: &[String]) -> AppResult
 
     let report = run_decompile_autotune_matvec(&options)?;
     println!(
-        "kernel_decompile_autotune_matvec rows={} cols={} naive_symbol={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} has_bf16_descriptor_load={} has_bf16_widen={} has_f32_mul_add={} has_f32_fused_multiply_add={} has_warp_reduce_sum={} best_symbol={} best_action_count={} best_action_ops={} best_score={} explored={} rejected={} improving_steps={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} pattern_path={} side_by_side_path={} auto_report_path={} optimized_source_path={} optimized_ptx_path={}",
+        "kernel_decompile_autotune_matvec rows={} cols={} naive_symbol={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} has_bf16_descriptor_load={} has_bf16_widen={} has_f32_mul_add={} has_f32_fused_multiply_add={} has_warp_reduce_sum={} best_symbol={} best_action_count={} best_action_ops={} best_score={} explored={} rejected={} improving_steps={} optimized_parsed_instructions={} optimized_semantic_patterns={} optimized_unsupported_instructions={} optimized_has_bf16_descriptor_load={} optimized_has_bf16_widen={} optimized_has_f32_mul_add={} optimized_has_f32_fused_multiply_add={} optimized_has_warp_reduce_sum={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} pattern_path={} side_by_side_path={} auto_report_path={} optimized_source_path={} optimized_ptx_path={} optimized_cubin_path={} optimized_sass_path={} optimized_ir_path={} optimized_pattern_path={} optimized_side_by_side_path={}",
         report.rows,
         report.cols,
         report.naive_symbol,
@@ -344,6 +344,14 @@ pub(crate) fn run_kernel_decompile_autotune_matvec(args: &[String]) -> AppResult
         report.explored,
         report.rejected,
         report.improving_step_count,
+        report.optimized_parsed_instruction_count,
+        report.optimized_semantic_pattern_count,
+        report.optimized_unsupported_instruction_count,
+        report.optimized_evidence.has_bf16_descriptor_load,
+        report.optimized_evidence.has_bf16_widen,
+        report.optimized_evidence.has_f32_mul_add,
+        report.optimized_evidence.has_f32_fused_multiply_add,
+        report.optimized_evidence.has_warp_reduce_sum,
         report.source_path.display(),
         report.ptx_path.display(),
         report.cubin_path.display(),
@@ -354,6 +362,11 @@ pub(crate) fn run_kernel_decompile_autotune_matvec(args: &[String]) -> AppResult
         report.auto_report_path.display(),
         report.optimized_source_path.display(),
         report.optimized_ptx_path.display(),
+        report.optimized_cubin_path.display(),
+        report.optimized_sass_path.display(),
+        report.optimized_ir_path.display(),
+        report.optimized_pattern_path.display(),
+        report.optimized_side_by_side_path.display(),
     );
     Ok(())
 }

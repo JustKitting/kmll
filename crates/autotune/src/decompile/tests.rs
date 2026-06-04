@@ -473,21 +473,33 @@ fn generated_naive_rust_matvec_sass_routes_to_autotune_and_recompiles_best() {
     assert!(report.sass_path.exists());
     assert!(report.optimized_source_path.exists());
     assert!(report.optimized_ptx_path.exists());
+    assert!(report.optimized_cubin_path.exists());
+    assert!(report.optimized_sass_path.exists());
+    assert!(report.optimized_ir_path.exists());
+    assert!(report.optimized_pattern_path.exists());
+    assert!(report.optimized_side_by_side_path.exists());
     assert!(report.evidence.supports_bf16_row_major_matvec());
+    assert!(report.optimized_evidence.supports_bf16_row_major_matvec());
     assert!(report.parsed_instruction_count > 0);
+    assert!(report.optimized_parsed_instruction_count > 0);
     assert_eq!(report.unsupported_instruction_count, 0);
+    assert_eq!(report.optimized_unsupported_instruction_count, 0);
     assert!(report.explored > 0);
     assert!(report.improving_step_count > 0);
     assert_ne!(report.best_symbol, "matvec_bf16_naive");
     assert!(report.best_action_count > 0);
     assert!(report.best_action_ops.iter().any(|op| op == "group-top"));
     assert!(report.best_action_ops.iter().any(|op| op == "group"));
+    assert!(report.optimized_evidence.has_warp_reduce_sum);
 
     let source = fs::read_to_string(&report.source_path).expect("naive source should be readable");
     assert!(source.contains("pub fn matvec_bf16_naive("));
     let optimized_source =
         fs::read_to_string(&report.optimized_source_path).expect("best source should be readable");
     assert!(optimized_source.contains(&format!("pub fn {}(", report.best_symbol)));
+    let optimized_patterns = fs::read_to_string(&report.optimized_pattern_path)
+        .expect("best patterns should be readable");
+    assert!(optimized_patterns.contains("warp-reduce-sum"));
     cleanup_decompile_autotune_test_root(&root);
 }
 
