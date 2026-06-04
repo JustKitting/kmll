@@ -60,6 +60,8 @@ fn register_refs_canonicalize_modifier_spelling_for_identity() {
     assert_eq!(reg("-RZ"), reg("RZ"));
     assert_ne!(reg("URZ"), reg("RZ"));
     assert_eq!(reg("R13.reuse").to_string(), "R13");
+    assert!(reg("-RZ").negated);
+    assert!(reg("|R2|").absolute);
 }
 
 #[test]
@@ -432,6 +434,47 @@ fn lift_maps_control_special_register_read() {
         &op.kind,
         KernelIrOpKind::ReadSpecialRegister { dst, special }
             if dst == &reg("R6") && special == &reg("SRZ")
+    ));
+}
+
+#[test]
+fn lift_branch_condition_reads_typed_predicate_negation() {
+    const NEGATED_BRANCH_SASS: &str = r#"
+        .target sm_120
+        .section .text.negated_branch,"ax",@progbits
+        .global negated_branch
+negated_branch:
+.text.negated_branch:
+        /*0000*/                   BRA !P0, `(.L_done) ;                          /* 0x0 */
+        /*0010*/                   EXIT ;                                          /* 0x0 */
+.L_done:
+        /*0020*/                   EXIT ;                                          /* 0x0 */
+    "#;
+
+    let module = parse_nvidia_sass(NEGATED_BRANCH_SASS).expect("branch SASS should parse");
+    let ir = lift_sass_module(&module);
+    let branch = ir.functions[0]
+        .ops
+        .iter()
+        .find(|op| op.address == 0x0)
+        .expect("branch should lift");
+
+    assert!(matches!(
+        &branch.kind,
+        KernelIrOpKind::Branch {
+            condition: Some(PredicateCondition {
+                kind: PredicateConditionKind::Register {
+                    register,
+                    negated: true,
+                },
+                ..
+            }),
+            ..
+        } if register == &reg("P0")
+    ));
+    assert!(matches!(
+        &branch.source_operands[0].kind,
+        AggregateOperandKind::Register(register) if register.negated
     ));
 }
 

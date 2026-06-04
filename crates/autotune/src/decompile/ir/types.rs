@@ -1111,15 +1111,20 @@ pub enum MemorySpace {
 pub struct RegisterRef {
     pub kind: RegisterRefKind,
     pub raw: String,
+    pub negated: bool,
+    pub absolute: bool,
 }
 
 impl RegisterRef {
     pub fn parse(raw: impl Into<String>) -> Self {
         let raw = raw.into();
         let kind = parse_register_ref_kind(&raw).unwrap_or(RegisterRefKind::Raw);
+        let decorations = register_ref_decorations(&raw);
         Self {
             raw: canonical_register_ref_text(&kind, &raw),
             kind,
+            negated: decorations.negated,
+            absolute: decorations.absolute,
         }
     }
 
@@ -1159,6 +1164,8 @@ impl RegisterRef {
         Self {
             raw: canonical_register_ref_text(&kind, &raw),
             kind,
+            negated: register.negated,
+            absolute: register.absolute,
         }
     }
 
@@ -1299,6 +1306,24 @@ fn canonical_register_ref_text(kind: &RegisterRefKind, raw: &str) -> String {
         RegisterRefKind::PredicateTrue => "PT".to_string(),
         RegisterRefKind::UniformPredicateTrue => "UPT".to_string(),
         RegisterRefKind::Raw => raw.to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RegisterRefDecorations {
+    negated: bool,
+    absolute: bool,
+}
+
+fn register_ref_decorations(raw: &str) -> RegisterRefDecorations {
+    let text = raw.trim();
+    RegisterRefDecorations {
+        negated: text.starts_with('!') || text.starts_with('-'),
+        absolute: text
+            .trim_start_matches('!')
+            .trim_start_matches('-')
+            .starts_with('|')
+            && text.ends_with('|'),
     }
 }
 

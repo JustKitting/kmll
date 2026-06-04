@@ -233,7 +233,7 @@ pub(super) fn branch_condition_operand(
         Some(PredicateCondition::register(
             operand.raw.clone(),
             register.clone(),
-            operand.raw.trim_start().starts_with('!'),
+            register.negated,
         ))
     })
 }
