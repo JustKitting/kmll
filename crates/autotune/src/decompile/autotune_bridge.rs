@@ -25,6 +25,7 @@ pub struct DecompiledAutotuneEvidence {
     pub has_bf16_descriptor_load: bool,
     pub has_bf16_widen: bool,
     pub has_f32_mul_add: bool,
+    pub has_f32_fused_multiply_add: bool,
     pub has_warp_reduce_sum: bool,
 }
 
@@ -32,8 +33,7 @@ impl DecompiledAutotuneEvidence {
     pub fn supports_bf16_row_major_matvec(&self) -> bool {
         self.has_bf16_descriptor_load
             && self.has_bf16_widen
-            && self.has_f32_mul_add
-            && self.has_warp_reduce_sum
+            && (self.has_f32_mul_add || self.has_f32_fused_multiply_add)
     }
 }
 
@@ -106,6 +106,15 @@ fn matvec_bf16_row_major_evidence(function: &KernelIrFunction) -> DecompiledAuto
         }),
         has_bf16_widen: pattern_categories.contains(&SassSemanticPatternCategory::Bf16WidenBits),
         has_f32_mul_add: pattern_categories.contains(&SassSemanticPatternCategory::F32MulAddPair),
+        has_f32_fused_multiply_add: function.ops.iter().any(|op| {
+            matches!(
+                &op.kind,
+                KernelIrOpKind::FusedMultiplyAdd {
+                    lane_bits: None,
+                    ..
+                }
+            )
+        }),
         has_warp_reduce_sum: pattern_categories
             .contains(&SassSemanticPatternCategory::WarpReduceSum),
         pattern_categories,

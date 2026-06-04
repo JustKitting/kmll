@@ -1,4 +1,5 @@
 use std::{
+    env,
     error::Error,
     fmt::{self, Write as _},
     fs,
@@ -10,7 +11,10 @@ use std::{
 use nn_rust_inference::runtime;
 
 use crate::autotune::{
-    compile_standalone_kernel_crate, standalone_cargo_toml, standalone_main_source,
+    AutoOptimizeConfig, InferenceKernelRustCudaGenerator, KernelArtifactStore,
+    KernelSourceGenerator, MatvecRustCudaGenerator, MatvecSearchProblem,
+    auto_optimize_inference_kernel, compile_standalone_kernel_crate, standalone_cargo_toml,
+    standalone_main_source,
 };
 
 mod analysis;
@@ -200,6 +204,65 @@ pub struct DecompilePtxProbeReport {
     pub unsupported_instruction_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecompileAutotuneMatvecOptions {
+    pub artifact_root: PathBuf,
+    pub compile_arch: String,
+    pub rows: usize,
+    pub cols: usize,
+    pub config: AutoOptimizeConfig,
+}
+
+impl DecompileAutotuneMatvecOptions {
+    pub fn sm120_default(rows: usize, cols: usize) -> Self {
+        Self {
+            artifact_root: runtime::default_artifact_dir()
+                .join("decompile-autotune")
+                .join("matvec-bf16-row-major"),
+            compile_arch: "sm_120".to_string(),
+            rows,
+            cols,
+            config: AutoOptimizeConfig {
+                beam_width: 4,
+                max_steps: 2,
+                require_launchable: false,
+                min_score_improvement: 0.0,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecompileAutotuneMatvecReport {
+    pub rows: usize,
+    pub cols: usize,
+    pub naive_symbol: String,
+    pub source_path: PathBuf,
+    pub ptx_path: PathBuf,
+    pub cubin_path: PathBuf,
+    pub sass_path: PathBuf,
+    pub ir_path: PathBuf,
+    pub lifted_ir_path: PathBuf,
+    pub analysis_path: PathBuf,
+    pub pattern_path: PathBuf,
+    pub side_by_side_path: PathBuf,
+    pub parsed_instruction_count: usize,
+    pub unsupported_instruction_count: usize,
+    pub semantic_pattern_count: usize,
+    pub evidence: DecompiledAutotuneEvidence,
+    pub operation_name: String,
+    pub auto_report_path: PathBuf,
+    pub optimized_source_path: PathBuf,
+    pub optimized_ptx_path: PathBuf,
+    pub best_symbol: String,
+    pub best_action_ops: Vec<String>,
+    pub best_action_count: usize,
+    pub best_score: Option<f64>,
+    pub explored: usize,
+    pub rejected: usize,
+    pub improving_step_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassFileDecompileOptions {
     pub sass_path: PathBuf,
@@ -285,6 +348,185 @@ pub fn run_decompile_ptx_probes(
         reports.push(run_decompile_ptx_probe(options, probe)?);
     }
     Ok(reports)
+}
+
+pub fn run_decompile_autotune_matvec(
+    options: &DecompileAutotuneMatvecOptions,
+) -> Result<DecompileAutotuneMatvecReport, Box<dyn Error>> {
+    if options.rows == 0 || options.cols == 0 {
+        return Err(Box::new(io::Error::new(
+            ErrorKind::InvalidInput,
+            "decompile autotune matvec dimensions must be nonzero",
+        )));
+    }
+
+    let problem = MatvecSearchProblem::bf16_row_major(options.rows, options.cols);
+    let naive_candidate = problem.generated_naive_candidate();
+    let naive_source = MatvecRustCudaGenerator.source_for(&naive_candidate)?;
+    let artifact_root = absolute_path(&options.artifact_root)?;
+    let run_dir = artifact_root
+        .join(format!("{}x{}", options.rows, options.cols))
+        .join("naive");
+    let crate_dir = run_dir.join("standalone-crate");
+    let source_path = crate_dir.join("src").join("main.rs");
+    let cargo_toml_path = crate_dir.join("Cargo.toml");
+    let package_stem = format!(
+        "nn_rust_decompile_autotune_matvec_{}x{}_naive",
+        options.rows, options.cols
+    );
+    fs::create_dir_all(
+        source_path
+            .parent()
+            .expect("source path should have a parent"),
+    )?;
+    fs::write(&cargo_toml_path, standalone_cargo_toml(&package_stem))?;
+    fs::write(&source_path, standalone_main_source(&naive_source.source))?;
+
+    let ptx_output_dir = run_dir.join("ptx");
+    let target_dir = artifact_root.join("standalone-target");
+    let compiled = compile_standalone_kernel_crate(
+        &crate_dir,
+        &ptx_output_dir,
+        &package_stem,
+        Some(&options.compile_arch),
+        Some(&target_dir),
+    )?;
+
+    let cubin_path = run_dir.join(format!(
+        "{}.{}.cubin",
+        naive_source.symbol, options.compile_arch
+    ));
+    run_checked(
+        "ptxas",
+        &[
+            format!("-arch={}", options.compile_arch),
+            "-o".to_string(),
+            cubin_path.display().to_string(),
+            compiled.ptx_path.display().to_string(),
+        ],
+        &run_dir,
+    )?;
+
+    let sass_path = run_dir.join(format!(
+        "{}.{}.nvdisasm.sass",
+        naive_source.symbol, options.compile_arch
+    ));
+    let sass = run_capture("nvdisasm", &[cubin_path.display().to_string()], &run_dir)?;
+    fs::write(&sass_path, sass.as_bytes())?;
+
+    let parsed = parse_nvidia_sass(&sass)?;
+    let project_ir = lift_sass_module(&parsed);
+    let analysis = analyze_sass_ir(&project_ir);
+    let lifted = lift_sass_value_ir(&project_ir, &analysis);
+    let patterns = recover_sass_patterns(&project_ir);
+    let ir_path = run_dir.join("lifted.ir.txt");
+    fs::write(&ir_path, project_ir.to_text().as_bytes())?;
+    let lifted_ir_path = run_dir.join("lifted-value-ir.txt");
+    fs::write(&lifted_ir_path, lifted.to_text().as_bytes())?;
+    let analysis_path = run_dir.join("analysis.txt");
+    fs::write(&analysis_path, analysis.to_text().as_bytes())?;
+    let pattern_path = run_dir.join("patterns.txt");
+    fs::write(&pattern_path, patterns.to_text().as_bytes())?;
+    let side_by_side = render_sass_file_side_by_side(
+        &sass_path,
+        Some((&source_path, &naive_source.source)),
+        &sass,
+        &project_ir,
+    );
+    let side_by_side_path = run_dir.join("source-sass-ir.txt");
+    fs::write(&side_by_side_path, side_by_side.as_bytes())?;
+
+    let function = project_ir
+        .functions
+        .iter()
+        .find(|function| function.name.as_str() == naive_source.symbol)
+        .or_else(|| project_ir.functions.first())
+        .ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                "compiled naive matvec SASS did not contain any functions",
+            )
+        })?;
+    let routed = decompiled_autotune_operation(
+        function,
+        DecompiledAutotuneShape::MatvecBf16RowMajor {
+            rows: options.rows,
+            cols: options.cols,
+        },
+    )
+    .map_err(|error| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "compiled naive matvec SASS did not provide supported autotune evidence: {error:?}"
+            ),
+        )
+    })?;
+
+    let optimization = auto_optimize_inference_kernel(&routed.operation, options.config)?;
+    let best = optimization.best_candidate().ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            "decompiled matvec autotune did not produce any candidates",
+        )
+    })?;
+    let generated_store = KernelArtifactStore::new(artifact_root.join("generated"));
+    let auto_report = optimization.auto_optimization_report(options.config);
+    let emitted_report = generated_store.emit_auto_search_report(&auto_report)?;
+    let emitted_optimized =
+        generated_store.emit_standalone_crate(best, &InferenceKernelRustCudaGenerator)?;
+    let optimized_output_dir = generated_store.paths_for(best).directory.join("ptx");
+    let compiled_optimized = compile_standalone_kernel_crate(
+        &emitted_optimized.paths.crate_dir,
+        &optimized_output_dir,
+        &emitted_optimized.package_name,
+        Some(&options.compile_arch),
+        Some(&generated_store.standalone_target_root()),
+    )?;
+    let best_action_ops = best
+        .action_trace
+        .iter()
+        .map(|action| action.op.label().to_string())
+        .collect::<Vec<_>>();
+    let improving_step_count = optimization
+        .result
+        .steps
+        .iter()
+        .filter(|step| {
+            step.improvement
+                .is_some_and(|improvement| improvement > 0.0)
+        })
+        .count();
+
+    Ok(DecompileAutotuneMatvecReport {
+        rows: options.rows,
+        cols: options.cols,
+        naive_symbol: naive_source.symbol,
+        source_path,
+        ptx_path: compiled.ptx_path,
+        cubin_path,
+        sass_path,
+        ir_path,
+        lifted_ir_path,
+        analysis_path,
+        pattern_path,
+        side_by_side_path,
+        parsed_instruction_count: parsed.instruction_count(),
+        unsupported_instruction_count: project_ir.unsupported_instruction_count(),
+        semantic_pattern_count: patterns.pattern_count(),
+        evidence: routed.evidence,
+        operation_name: routed.operation.name,
+        auto_report_path: emitted_report.report_path,
+        optimized_source_path: emitted_optimized.paths.source_path,
+        optimized_ptx_path: compiled_optimized.ptx_path,
+        best_symbol: emitted_optimized.symbol,
+        best_action_count: best_action_ops.len(),
+        best_action_ops,
+        best_score: best.score.map(|score| score.value),
+        explored: optimization.result.explored,
+        rejected: optimization.result.rejected,
+        improving_step_count,
+    })
 }
 
 pub fn run_sass_file_decompile(
@@ -554,6 +796,14 @@ fn run_capture(
         ))));
     }
     Ok(String::from_utf8(output.stdout)?)
+}
+
+fn absolute_path(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(env::current_dir()?.join(path))
+    }
 }
 
 pub fn render_side_by_side(

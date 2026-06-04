@@ -1,16 +1,17 @@
 use std::path::PathBuf;
 
+use nn_rust_autotune::AutoOptimizeConfig;
 use nn_rust_autotune::decompile::{
-    DecompileFixtureCoverageOptions, DecompileFixtureOptions, DecompilePtxProbeOptions,
-    PtxDecompileProbeKind, SassCoverageComparisonOptions, SassCoverageOptions,
-    SassFileDecompileOptions, SimpleKernelFixtureKind, all_ptx_decompile_probe_kinds,
-    all_simple_kernel_fixture_kinds, run_decompile_fixture_coverage, run_decompile_fixtures,
-    run_decompile_ptx_probes, run_sass_coverage_comparison, run_sass_coverage_scan,
-    run_sass_file_decompile,
+    DecompileAutotuneMatvecOptions, DecompileFixtureCoverageOptions, DecompileFixtureOptions,
+    DecompilePtxProbeOptions, PtxDecompileProbeKind, SassCoverageComparisonOptions,
+    SassCoverageOptions, SassFileDecompileOptions, SimpleKernelFixtureKind,
+    all_ptx_decompile_probe_kinds, all_simple_kernel_fixture_kinds, run_decompile_autotune_matvec,
+    run_decompile_fixture_coverage, run_decompile_fixtures, run_decompile_ptx_probes,
+    run_sass_coverage_comparison, run_sass_coverage_scan, run_sass_file_decompile,
 };
 use nn_rust_inference::runtime;
 
-use crate::{AppResult, invalid_input, parse_required_flag_value};
+use crate::{AppResult, invalid_input, parse_required_flag_value, parse_required_usize};
 
 const DECOMPILE_FIXTURES_USAGE: &str =
     "kernel-decompile-fixtures [--fixture NAME|all] [--artifact-root PATH] [--compile-arch sm_120]";
@@ -19,6 +20,7 @@ const DECOMPILE_PTX_PROBES_USAGE: &str =
 const DECOMPILE_FIXTURE_COVERAGE_USAGE: &str = "kernel-decompile-fixture-coverage [--fixture NAME|all] [--artifact-root PATH] [--compile-arch sm_120] [--out-dir PATH]";
 const DECOMPILE_SASS_USAGE: &str =
     "kernel-decompile-sass SASS_PATH [--source PATH] [--out-dir PATH]";
+const DECOMPILE_AUTOTUNE_MATVEC_USAGE: &str = "kernel-decompile-autotune-matvec ROWS COLS [--artifact-root PATH] [--compile-arch sm_120] [--beam-width N] [--max-steps N] [--min-score-improvement VALUE] [--require-launchable]";
 const DECOMPILE_COVERAGE_USAGE: &str =
     "kernel-decompile-coverage [ROOT] [--root PATH] [--out-dir PATH]";
 const DECOMPILE_COVERAGE_COMPARE_USAGE: &str =
@@ -251,6 +253,107 @@ pub(crate) fn run_kernel_decompile_sass(args: &[String]) -> AppResult<()> {
         report.analysis_path.display(),
         report.pattern_path.display(),
         report.side_by_side_path.display(),
+    );
+    Ok(())
+}
+
+pub(crate) fn run_kernel_decompile_autotune_matvec(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let rows = parse_required_usize(args, &mut index, "rows", "kernel-decompile-autotune-matvec")?;
+    let cols = parse_required_usize(args, &mut index, "cols", "kernel-decompile-autotune-matvec")?;
+    let mut options = DecompileAutotuneMatvecOptions::sm120_default(rows, cols);
+    let mut config = AutoOptimizeConfig {
+        beam_width: 4,
+        max_steps: 2,
+        require_launchable: false,
+        min_score_improvement: 0.0,
+    };
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--artifact-root" => {
+                options.artifact_root = PathBuf::from(parse_required_flag_value(
+                    args,
+                    &mut index,
+                    "--artifact-root",
+                )?);
+            }
+            "--compile-arch" => {
+                options.compile_arch =
+                    parse_required_flag_value(args, &mut index, "--compile-arch")?.to_string();
+            }
+            "--beam-width" => {
+                let value = parse_required_flag_value(args, &mut index, "--beam-width")?;
+                config.beam_width = value.parse().map_err(|error| {
+                    invalid_input(format!("invalid --beam-width {value:?}: {error}"))
+                })?;
+            }
+            "--max-steps" => {
+                let value = parse_required_flag_value(args, &mut index, "--max-steps")?;
+                config.max_steps = value.parse().map_err(|error| {
+                    invalid_input(format!("invalid --max-steps {value:?}: {error}"))
+                })?;
+            }
+            "--min-score-improvement" => {
+                let value = parse_required_flag_value(args, &mut index, "--min-score-improvement")?;
+                config.min_score_improvement = value.parse().map_err(|error| {
+                    invalid_input(format!(
+                        "invalid --min-score-improvement {value:?}: {error}"
+                    ))
+                })?;
+            }
+            "--require-launchable" => {
+                config.require_launchable = true;
+                index += 1;
+            }
+            flag if flag.starts_with("--") => {
+                return Err(invalid_input(format!(
+                    "kernel-decompile-autotune-matvec unknown argument {flag:?}; usage: {DECOMPILE_AUTOTUNE_MATVEC_USAGE}"
+                )));
+            }
+            extra => {
+                return Err(invalid_input(format!(
+                    "kernel-decompile-autotune-matvec unexpected argument {extra:?}; usage: {DECOMPILE_AUTOTUNE_MATVEC_USAGE}"
+                )));
+            }
+        }
+    }
+    options.config = config;
+
+    let report = run_decompile_autotune_matvec(&options)?;
+    println!(
+        "kernel_decompile_autotune_matvec rows={} cols={} naive_symbol={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} has_bf16_descriptor_load={} has_bf16_widen={} has_f32_mul_add={} has_f32_fused_multiply_add={} has_warp_reduce_sum={} best_symbol={} best_action_count={} best_action_ops={} best_score={} explored={} rejected={} improving_steps={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} pattern_path={} side_by_side_path={} auto_report_path={} optimized_source_path={} optimized_ptx_path={}",
+        report.rows,
+        report.cols,
+        report.naive_symbol,
+        report.parsed_instruction_count,
+        report.semantic_pattern_count,
+        report.unsupported_instruction_count,
+        report.evidence.has_bf16_descriptor_load,
+        report.evidence.has_bf16_widen,
+        report.evidence.has_f32_mul_add,
+        report.evidence.has_f32_fused_multiply_add,
+        report.evidence.has_warp_reduce_sum,
+        report.best_symbol,
+        report.best_action_count,
+        report.best_action_ops.join(","),
+        report
+            .best_score
+            .map(|score| score.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        report.explored,
+        report.rejected,
+        report.improving_step_count,
+        report.source_path.display(),
+        report.ptx_path.display(),
+        report.cubin_path.display(),
+        report.sass_path.display(),
+        report.ir_path.display(),
+        report.pattern_path.display(),
+        report.side_by_side_path.display(),
+        report.auto_report_path.display(),
+        report.optimized_source_path.display(),
+        report.optimized_ptx_path.display(),
     );
     Ok(())
 }

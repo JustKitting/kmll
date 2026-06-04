@@ -319,6 +319,21 @@ unsupported_fixture:
         /*0010*/                   EXIT ;                                        /* 0x0 */
 "#;
 
+const SERIAL_BF16_MATVEC_SLICE: &str = r#"
+        .target sm_120
+
+        .section .text.matvec_bf16_serial,"ax",@progbits
+        .global matvec_bf16_serial
+matvec_bf16_serial:
+.text.matvec_bf16_serial:
+        /*0000*/                   LD.E.U16 R2, desc[UR4][R0.64] ;               /* 0x0 */
+        /*0010*/                   IMAD.U32 R2, R2, 0x10000, RZ ;                /* 0x0 */
+        /*0020*/                   FMUL R3, R2, R4 ;                             /* 0x0 */
+        /*0030*/                   FADD R5, R3, R5 ;                             /* 0x0 */
+        /*0040*/                   ST.E desc[UR8][R0.64], R5 ;                   /* 0x0 */
+        /*0050*/                   EXIT ;                                        /* 0x0 */
+"#;
+
 #[test]
 fn decompiled_matvec_types_route_to_autotune_generation_and_emit_crate() {
     let module = parse_nvidia_sass(ROWS17_SLICE).expect("rows17 slice should parse");
@@ -369,6 +384,26 @@ fn decompiled_matvec_types_route_to_autotune_generation_and_emit_crate() {
 }
 
 #[test]
+fn serial_decompiled_matvec_evidence_does_not_require_warp_reduce() {
+    let module = parse_nvidia_sass(SERIAL_BF16_MATVEC_SLICE).expect("serial slice should parse");
+    let ir = lift_sass_module(&module);
+    let routed = decompiled_autotune_operation(
+        &ir.functions[0],
+        DecompiledAutotuneShape::MatvecBf16RowMajor {
+            rows: 128,
+            cols: 256,
+        },
+    )
+    .expect("serial bf16 matvec evidence should route into autotune");
+
+    assert!(routed.evidence.has_bf16_descriptor_load);
+    assert!(routed.evidence.has_bf16_widen);
+    assert!(routed.evidence.has_f32_mul_add);
+    assert!(!routed.evidence.has_warp_reduce_sum);
+    assert!(routed.evidence.supports_bf16_row_major_matvec());
+}
+
+#[test]
 #[ignore = "runs cargo oxide build for generated standalone crate"]
 fn decompiled_matvec_autotune_candidate_recompiles() {
     let module = parse_nvidia_sass(ROWS17_SLICE).expect("rows17 slice should parse");
@@ -410,6 +445,49 @@ fn decompiled_matvec_autotune_candidate_recompiles() {
 
     assert!(compiled.ptx_path.exists());
     assert!(compiled.ptx_path.starts_with(&output_dir));
+    cleanup_decompile_autotune_test_root(&root);
+}
+
+#[test]
+#[ignore = "builds Rust-CUDA naive matvec, disassembles SASS, autotunes, and recompiles best candidate"]
+fn generated_naive_rust_matvec_sass_routes_to_autotune_and_recompiles_best() {
+    let root = decompile_autotune_test_root();
+    let report = run_decompile_autotune_matvec(&DecompileAutotuneMatvecOptions {
+        artifact_root: root.clone(),
+        compile_arch: "sm_120".to_string(),
+        rows: 128,
+        cols: 256,
+        config: AutoOptimizeConfig {
+            beam_width: 4,
+            max_steps: 2,
+            require_launchable: false,
+            min_score_improvement: 0.0,
+        },
+    })
+    .expect("generated naive Rust matvec should decompile, autotune, and recompile");
+
+    assert_eq!(report.naive_symbol, "matvec_bf16_naive");
+    assert!(report.source_path.starts_with(&root));
+    assert!(report.ptx_path.exists());
+    assert!(report.cubin_path.exists());
+    assert!(report.sass_path.exists());
+    assert!(report.optimized_source_path.exists());
+    assert!(report.optimized_ptx_path.exists());
+    assert!(report.evidence.supports_bf16_row_major_matvec());
+    assert!(report.parsed_instruction_count > 0);
+    assert_eq!(report.unsupported_instruction_count, 0);
+    assert!(report.explored > 0);
+    assert!(report.improving_step_count > 0);
+    assert_ne!(report.best_symbol, "matvec_bf16_naive");
+    assert!(report.best_action_count > 0);
+    assert!(report.best_action_ops.iter().any(|op| op == "group-top"));
+    assert!(report.best_action_ops.iter().any(|op| op == "group"));
+
+    let source = fs::read_to_string(&report.source_path).expect("naive source should be readable");
+    assert!(source.contains("pub fn matvec_bf16_naive("));
+    let optimized_source =
+        fs::read_to_string(&report.optimized_source_path).expect("best source should be readable");
+    assert!(optimized_source.contains(&format!("pub fn {}(", report.best_symbol)));
     cleanup_decompile_autotune_test_root(&root);
 }
 
