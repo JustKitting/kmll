@@ -5,8 +5,8 @@ use super::sources::{
     TENSOR_CORE_TCGEN05_UTCHMMA_UTCIMMA_PTX, TENSOR_CORE_TCGEN05_UTCOMMA_PTX,
     TENSOR_CORE_TCGEN05_UTCQMMA_PTX, TENSOR_CORE_WGMMA_BGMMA_PTX, TENSOR_CORE_WGMMA_HGMMA_PTX,
     TENSOR_CORE_WGMMA_IGMMA_PTX, TENSOR_CORE_WGMMA_QGMMA_PTX, TENSOR_MEMORY_BULK_ASYNC_PTX,
-    TENSOR_MEMORY_LDTM_PTX, TENSOR_MEMORY_STTM_PTX, TENSOR_MEMORY_TMA_ASYNC_PTX,
-    TENSOR_MEMORY_UTCCP_PTX, WARP_GROUP_REGISTER_SET_PTX,
+    TENSOR_MEMORY_BULK_REDUCE_PTX, TENSOR_MEMORY_LDTM_PTX, TENSOR_MEMORY_STTM_PTX,
+    TENSOR_MEMORY_TMA_ASYNC_PTX, TENSOR_MEMORY_UTCCP_PTX, WARP_GROUP_REGISTER_SET_PTX,
 };
 
 pub const AUTO_COMPILE_ARCH: &str = "auto";
@@ -145,6 +145,13 @@ pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
             source: TENSOR_MEMORY_BULK_ASYNC_PTX,
         },
         PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::TensorMemoryBulkReduce,
+            symbol: "tensor_memory_bulk_reduce_probe",
+            behavior: "PTX sm120 non-tensor cp.reduce.async.bulk forms that disassemble to UBLKRED",
+            default_compile_arch: "sm_120",
+            source: TENSOR_MEMORY_BULK_REDUCE_PTX,
+        },
+        PtxDecompileProbe {
             kind: PtxDecompileProbeKind::TensorMemoryTmaAsync,
             symbol: "tensor_memory_tma_async_probe",
             behavior: "PTX sm120 tensor TMA load, prefetch, store, and reduce forms that disassemble to UTMA*",
@@ -200,6 +207,7 @@ pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
         PtxDecompileProbeKind::TensorMemorySttm,
         PtxDecompileProbeKind::TensorMemoryUtccp,
         PtxDecompileProbeKind::TensorMemoryBulkAsync,
+        PtxDecompileProbeKind::TensorMemoryBulkReduce,
         PtxDecompileProbeKind::TensorMemoryTmaAsync,
         PtxDecompileProbeKind::WarpGroupRegisterSet,
         PtxDecompileProbeKind::ScalarMemoryLogic,

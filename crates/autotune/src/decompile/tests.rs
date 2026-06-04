@@ -2507,6 +2507,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorMemoryBulkAsync)
         .expect("bulk async tensor-memory PTX probe should exist");
+    let bulk_reduce_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorMemoryBulkReduce)
+        .expect("bulk reduce tensor-memory PTX probe should exist");
     let tma_async_probe = probes
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorMemoryTmaAsync)
@@ -2705,6 +2709,17 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             .source
             .contains("cp.async.bulk.global.shared::cta.bulk_group")
     );
+    assert_eq!(bulk_reduce_probe.symbol, "tensor_memory_bulk_reduce_probe");
+    assert_eq!(bulk_reduce_probe.default_compile_arch, "sm_120");
+    assert!(bulk_reduce_probe.source.contains(".target sm_120"));
+    assert!(
+        bulk_reduce_probe
+            .source
+            .contains("cp.reduce.async.bulk.global.shared::cta.bulk_group.add.u32")
+    );
+    assert!(bulk_reduce_probe.source.contains(
+        "cp.reduce.async.bulk.shared::cluster.shared::cta.mbarrier::complete_tx::bytes.add.u32"
+    ));
     assert_eq!(tma_async_probe.symbol, "tensor_memory_tma_async_probe");
     assert_eq!(tma_async_probe.default_compile_arch, "sm_120");
     assert!(tma_async_probe.source.contains(".target sm_120"));

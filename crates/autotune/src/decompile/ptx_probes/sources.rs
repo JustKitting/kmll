@@ -543,6 +543,44 @@ pub(super) const TENSOR_MEMORY_BULK_ASYNC_PTX: &str = r#".version 9.2
 }
 "#;
 
+pub(super) const TENSOR_MEMORY_BULK_REDUCE_PTX: &str = r#".version 9.2
+.target sm_120
+.address_size 64
+
+.visible .entry tensor_memory_bulk_reduce_probe(
+    .param .u64 tensor_memory_bulk_reduce_probe_out
+)
+{
+    .reg .b32 %r<12>;
+    .reg .b64 %rd<12>;
+    .shared .align 16 .b8 tensor_memory_bulk_reduce_probe_smem[1024];
+    .shared .align 16 .b8 tensor_memory_bulk_reduce_probe_smem_b[1024];
+    .shared .align 8 .b8 tensor_memory_bulk_reduce_probe_mbar[8];
+
+    ld.param.u64 %rd0, [tensor_memory_bulk_reduce_probe_out];
+
+    mov.u64 %rd1, tensor_memory_bulk_reduce_probe_smem;
+    cvta.to.shared.u64 %rd2, %rd1;
+    cvt.u32.u64 %r0, %rd2;
+
+    mov.u64 %rd3, tensor_memory_bulk_reduce_probe_smem_b;
+    cvta.to.shared.u64 %rd4, %rd3;
+    cvt.u32.u64 %r1, %rd4;
+
+    mov.u64 %rd5, tensor_memory_bulk_reduce_probe_mbar;
+    cvta.to.shared.u64 %rd6, %rd5;
+    cvt.u32.u64 %r2, %rd6;
+
+    mov.u32 %r3, 128;
+
+    cp.reduce.async.bulk.global.shared::cta.bulk_group.add.u32 [%rd0], [%r0], %r3;
+    cp.reduce.async.bulk.shared::cluster.shared::cta.mbarrier::complete_tx::bytes.add.u32 [%r1], [%r0], %r3, [%r2];
+    cp.async.bulk.commit_group;
+
+    ret;
+}
+"#;
+
 pub(super) const TENSOR_MEMORY_TMA_ASYNC_PTX: &str = r#".version 9.2
 .target sm_120
 .address_size 64

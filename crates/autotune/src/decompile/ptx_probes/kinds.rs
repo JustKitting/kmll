@@ -16,6 +16,7 @@ pub enum PtxDecompileProbeKind {
     TensorMemorySttm,
     TensorMemoryUtccp,
     TensorMemoryBulkAsync,
+    TensorMemoryBulkReduce,
     TensorMemoryTmaAsync,
     WarpGroupRegisterSet,
     ScalarMemoryLogic,
@@ -42,6 +43,7 @@ impl PtxDecompileProbeKind {
             Self::TensorMemorySttm => "tensor-memory-sttm",
             Self::TensorMemoryUtccp => "tensor-memory-utccp",
             Self::TensorMemoryBulkAsync => "tensor-memory-bulk-async",
+            Self::TensorMemoryBulkReduce => "tensor-memory-bulk-reduce",
             Self::TensorMemoryTmaAsync => "tensor-memory-tma-async",
             Self::WarpGroupRegisterSet => "warpgroup-register-set",
             Self::ScalarMemoryLogic => "scalar-memory-logic",
@@ -117,6 +119,11 @@ impl PtxDecompileProbeKind {
             | "ublk"
             | "ublkcp"
             | "ublkpf" => Some(Self::TensorMemoryBulkAsync),
+            "tensor-memory-bulk-reduce"
+            | "tensor_memory_bulk_reduce"
+            | "bulk-reduce"
+            | "bulk_reduce"
+            | "ublkred" => Some(Self::TensorMemoryBulkReduce),
             "tensor-memory-tma-async"
             | "tensor_memory_tma_async"
             | "tma-async"
