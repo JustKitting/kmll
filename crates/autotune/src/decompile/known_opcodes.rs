@@ -314,6 +314,7 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     local!(Lea, Address, AddressCalc),
     local!(Lop3, IntegerMath, LogicLut),
     local!(Mov, DataMovement, Move),
+    local!(Movm, DataMovement, Move),
     local!(Nop, NoOp, NoOp),
     local!(Plop3, IntegerMath, LogicLut),
     local!(Prmt, DataMovement, Permute),

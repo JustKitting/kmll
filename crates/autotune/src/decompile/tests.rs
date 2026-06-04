@@ -300,6 +300,45 @@ select_convert_fixture:
     );
 }
 
+#[test]
+fn lift_matrix_move_op_is_typed() {
+    const MOVM_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.movm_fixture,"ax",@progbits
+        .global movm_fixture
+movm_fixture:
+.text.movm_fixture:
+        /*0000*/                   MOVM.U4TO8.M832 R4, RZ ;                    /* 0x0 */
+        /*0010*/                   EXIT ;                                       /* 0x0 */
+"#;
+
+    let module = parse_nvidia_sass(MOVM_SASS).expect("MOVM SASS should parse");
+    let ir = lift_sass_module(&module);
+    assert_eq!(ir.unsupported_instruction_count(), 0);
+    let movm = &ir.functions[0].ops[0];
+
+    assert_eq!(movm.source_opcode.kind(), &SassOpcodeKind::Movm);
+    assert!(movm.source_modifiers.iter().any(|modifier| {
+        matches!(modifier.kind(), SassModifierKind::Raw(raw) if raw == "U4TO8")
+    }));
+    assert!(movm.source_modifiers.iter().any(|modifier| {
+        matches!(modifier.kind(), SassModifierKind::Raw(raw) if raw == "M832")
+    }));
+    assert!(matches!(
+        &movm.kind,
+        KernelIrOpKind::Move { dst, src }
+            if dst == &reg("R4") && src == &scalar("RZ")
+    ));
+
+    let analysis = analyze_sass_ir(&ir);
+    assert_eq!(
+        analysis.functions[0].dataflow[0].defines.as_slice(),
+        &[reg("R4")]
+    );
+    assert!(analysis.functions[0].dataflow[0].uses.is_empty());
+}
+
 const SIMPLE_SASS: &str = r#"
         .target sm_120
 
@@ -2339,6 +2378,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreDmma)
         .expect("DMMA PTX probe should exist");
+    let bmma_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreBmma)
+        .expect("BMMA PTX probe should exist");
     let scalar_probe = probes
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::ScalarMemoryLogic)
@@ -2355,6 +2398,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             PtxDecompileProbeKind::TensorCoreHmma,
             PtxDecompileProbeKind::TensorCoreImma,
             PtxDecompileProbeKind::TensorCoreDmma,
+            PtxDecompileProbeKind::TensorCoreBmma,
             PtxDecompileProbeKind::ScalarMemoryLogic,
             PtxDecompileProbeKind::ScalarMemoryAtomic
         ]
@@ -2381,6 +2425,13 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             .contains("mma.sync.aligned.m8n8k4.row.col.f64.f64.f64.f64")
     );
     assert!(dmma_probe.source.contains("st.global.f64"));
+    assert_eq!(bmma_probe.symbol, "tensor_core_bmma_probe");
+    assert!(
+        bmma_probe
+            .source
+            .contains("mma.sync.aligned.m8n8k128.row.col.s32.b1.b1.s32.and.popc")
+    );
+    assert!(bmma_probe.source.contains("st.global.s32"));
     assert_eq!(scalar_probe.symbol, "scalar_memory_logic_probe");
     assert!(scalar_probe.source.contains(".target sm_75"));
     assert!(scalar_probe.source.contains("ld.global.nc.u32"));

@@ -16,7 +16,7 @@ pub(super) fn lift(opcode: &SassOpcode, operands: &[AggregateOperand]) -> Option
                 KernelIrOpKind::ReadSpecialRegister { dst, special }
             })
         }
-        SassOpcodeKind::Mov | SassOpcodeKind::Umov => {
+        SassOpcodeKind::Mov | SassOpcodeKind::Movm | SassOpcodeKind::Umov => {
             map_register_scalar_operands(opcode, operands, |dst, src| KernelIrOpKind::Move {
                 dst,
                 src,

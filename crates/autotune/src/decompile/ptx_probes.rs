@@ -3,6 +3,7 @@ pub enum PtxDecompileProbeKind {
     TensorCoreHmma,
     TensorCoreImma,
     TensorCoreDmma,
+    TensorCoreBmma,
     ScalarMemoryLogic,
     ScalarMemoryAtomic,
 }
@@ -13,6 +14,7 @@ impl PtxDecompileProbeKind {
             Self::TensorCoreHmma => "tensor-core-hmma",
             Self::TensorCoreImma => "tensor-core-imma",
             Self::TensorCoreDmma => "tensor-core-dmma",
+            Self::TensorCoreBmma => "tensor-core-bmma",
             Self::ScalarMemoryLogic => "scalar-memory-logic",
             Self::ScalarMemoryAtomic => "scalar-memory-atomic",
         }
@@ -23,6 +25,7 @@ impl PtxDecompileProbeKind {
             "tensor-core-hmma" | "tensor_core_hmma" | "hmma" => Some(Self::TensorCoreHmma),
             "tensor-core-imma" | "tensor_core_imma" | "imma" => Some(Self::TensorCoreImma),
             "tensor-core-dmma" | "tensor_core_dmma" | "dmma" => Some(Self::TensorCoreDmma),
+            "tensor-core-bmma" | "tensor_core_bmma" | "bmma" => Some(Self::TensorCoreBmma),
             "scalar-memory-logic" | "scalar_memory_logic" | "scalar" => {
                 Some(Self::ScalarMemoryLogic)
             }
@@ -63,6 +66,12 @@ pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
             source: TENSOR_CORE_DMMA_PTX,
         },
         PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::TensorCoreBmma,
+            symbol: "tensor_core_bmma_probe",
+            behavior: "one PTX single-bit tensor-core MMA kept alive by a global s32 store",
+            source: TENSOR_CORE_BMMA_PTX,
+        },
+        PtxDecompileProbe {
             kind: PtxDecompileProbeKind::ScalarMemoryLogic,
             symbol: "scalar_memory_logic_probe",
             behavior: "scalar PTX memory, predicate, logic, integer, and f32 fused math instructions",
@@ -82,6 +91,7 @@ pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
         PtxDecompileProbeKind::TensorCoreHmma,
         PtxDecompileProbeKind::TensorCoreImma,
         PtxDecompileProbeKind::TensorCoreDmma,
+        PtxDecompileProbeKind::TensorCoreBmma,
         PtxDecompileProbeKind::ScalarMemoryLogic,
         PtxDecompileProbeKind::ScalarMemoryAtomic,
     ]
@@ -184,6 +194,35 @@ const TENSOR_CORE_DMMA_PTX: &str = r#".version 8.0
         {%d0, %d1};
 
     st.global.f64 [%rd0], %d0;
+    ret;
+}
+"#;
+
+const TENSOR_CORE_BMMA_PTX: &str = r#".version 8.0
+.target sm_80
+.address_size 64
+
+.visible .entry tensor_core_bmma_probe(
+    .param .u64 tensor_core_bmma_probe_out
+)
+{
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<2>;
+
+    ld.param.u64 %rd0, [tensor_core_bmma_probe_out];
+
+    mov.b32 %r0, 0xffffffff;
+    mov.b32 %r1, 0xaaaaaaaa;
+    mov.s32 %r2, 0;
+    mov.s32 %r3, 0;
+
+    mma.sync.aligned.m8n8k128.row.col.s32.b1.b1.s32.and.popc
+        {%r2, %r3},
+        {%r0},
+        {%r1},
+        {%r2, %r3};
+
+    st.global.s32 [%rd0], %r2;
     ret;
 }
 "#;
