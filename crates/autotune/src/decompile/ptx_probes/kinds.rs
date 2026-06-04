@@ -5,6 +5,7 @@ pub enum PtxDecompileProbeKind {
     TensorCoreDmma,
     TensorCoreBmma,
     ScalarMemoryLogic,
+    ArchitectureSm90Scalar,
     ScalarMemoryAtomic,
 }
 
@@ -16,6 +17,7 @@ impl PtxDecompileProbeKind {
             Self::TensorCoreDmma => "tensor-core-dmma",
             Self::TensorCoreBmma => "tensor-core-bmma",
             Self::ScalarMemoryLogic => "scalar-memory-logic",
+            Self::ArchitectureSm90Scalar => "architecture-sm90-scalar",
             Self::ScalarMemoryAtomic => "scalar-memory-atomic",
         }
     }
@@ -28,6 +30,9 @@ impl PtxDecompileProbeKind {
             "tensor-core-bmma" | "tensor_core_bmma" | "bmma" => Some(Self::TensorCoreBmma),
             "scalar-memory-logic" | "scalar_memory_logic" | "scalar" => {
                 Some(Self::ScalarMemoryLogic)
+            }
+            "architecture-sm90-scalar" | "architecture_sm90_scalar" | "sm90-scalar" | "sm90" => {
+                Some(Self::ArchitectureSm90Scalar)
             }
             "scalar-memory-atomic" | "scalar_memory_atomic" | "atomic" => {
                 Some(Self::ScalarMemoryAtomic)

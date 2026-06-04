@@ -63,6 +63,13 @@ pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
             source: SCALAR_MEMORY_LOGIC_PTX,
         },
         PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::ArchitectureSm90Scalar,
+            symbol: "scalar_memory_logic_probe",
+            behavior: "sm90 scalar SASS architecture scan probe using memory, integer, predicate, and f32 math",
+            default_compile_arch: "sm_90",
+            source: SCALAR_MEMORY_LOGIC_PTX,
+        },
+        PtxDecompileProbe {
             kind: PtxDecompileProbeKind::ScalarMemoryAtomic,
             symbol: "scalar_memory_atomic_probe",
             behavior: "scalar PTX atomics, reductions, volatile local memory, and predicate composition",
@@ -79,6 +86,7 @@ pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
         PtxDecompileProbeKind::TensorCoreDmma,
         PtxDecompileProbeKind::TensorCoreBmma,
         PtxDecompileProbeKind::ScalarMemoryLogic,
+        PtxDecompileProbeKind::ArchitectureSm90Scalar,
         PtxDecompileProbeKind::ScalarMemoryAtomic,
     ]
 }

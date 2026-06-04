@@ -16,7 +16,10 @@ pub(super) fn lift(
     operands: &[AggregateOperand],
 ) -> Option<LiftResult> {
     Some(match opcode.kind() {
-        SassOpcodeKind::Iadd | SassOpcodeKind::Iadd3 | SassOpcodeKind::Uiadd3 => (
+        SassOpcodeKind::Iadd
+        | SassOpcodeKind::Iadd3
+        | SassOpcodeKind::Uiadd3
+        | SassOpcodeKind::Viadd => (
             KernelIrOpKind::IntegerAdd {
                 dst: register_operand(operands.first()),
                 inputs: scalar_inputs(operand_tail(operands)),

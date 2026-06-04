@@ -1571,6 +1571,34 @@ fn lifted_value_ir_classifies_ops_and_keeps_ssa_refs() {
 }
 
 #[test]
+fn lift_vector_integer_add_is_typed() {
+    let sass = r#"
+        .target sm_90
+        .section .text.viadd_fixture,"ax",@progbits
+        .global viadd_fixture
+viadd_fixture:
+.text.viadd_fixture:
+        /*0000*/                   VIADD R1, R1, 0xfffffe00 ; /* 0x0 */
+        /*0010*/                   EXIT ; /* 0x0 */
+    "#;
+
+    let module = parse_nvidia_sass(sass).expect("VIADD SASS should parse");
+    let ir = lift_sass_module(&module);
+    assert!(matches!(
+        &ir.functions[0].ops[0].kind,
+        KernelIrOpKind::IntegerAdd {
+            dst,
+            inputs,
+            width_bits: None
+        } if dst == &reg("R1") && inputs.as_slice() == [scalar("R1"), scalar("0xfffffe00")]
+    ));
+    assert_eq!(
+        ir.functions[0].ops[0].source_opcode.kind(),
+        &SassOpcodeKind::Viadd
+    );
+}
+
+#[test]
 fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
     let module = parse_nvidia_sass(ROWS17_SLICE).expect("rows17 slice should parse");
     let ir = lift_sass_module(&module);
@@ -2386,6 +2414,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::ScalarMemoryLogic)
         .expect("scalar memory/logic PTX probe should exist");
+    let sm90_scalar_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::ArchitectureSm90Scalar)
+        .expect("sm90 scalar PTX probe should exist");
     let atomic_probe = probes
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::ScalarMemoryAtomic)
@@ -2400,6 +2432,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             PtxDecompileProbeKind::TensorCoreDmma,
             PtxDecompileProbeKind::TensorCoreBmma,
             PtxDecompileProbeKind::ScalarMemoryLogic,
+            PtxDecompileProbeKind::ArchitectureSm90Scalar,
             PtxDecompileProbeKind::ScalarMemoryAtomic
         ]
     );
@@ -2446,6 +2479,11 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
     assert!(scalar_probe.source.contains("and.pred"));
     assert!(scalar_probe.source.contains("fma.rn.f32"));
     assert!(scalar_probe.source.contains("setp.gt.f32"));
+    assert_eq!(sm90_scalar_probe.symbol, "scalar_memory_logic_probe");
+    assert_eq!(sm90_scalar_probe.default_compile_arch, "sm_90");
+    assert!(sm90_scalar_probe.source.contains(".target sm_75"));
+    assert!(sm90_scalar_probe.source.contains("ld.global.nc.u32"));
+    assert!(sm90_scalar_probe.source.contains("fma.rn.f32"));
     assert_eq!(atomic_probe.symbol, "scalar_memory_atomic_probe");
     assert_eq!(atomic_probe.default_compile_arch, "sm_75");
     assert!(atomic_probe.source.contains(".target sm_75"));

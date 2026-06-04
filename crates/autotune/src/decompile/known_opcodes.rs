@@ -338,6 +338,7 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     local!(Ulop3, IntegerMath, LogicLut),
     local!(Umov, DataMovement, Move),
     local!(Ushf, IntegerMath, Shift),
+    local!(Viadd, IntegerMath, IntegerAdd),
     nvidia_mapped!(Atom, [75, 80, 86, 89, 90, 100, 120], Memory, MemoryAtomic),
     nvidia_mapped!(Plop3, [75, 80, 86, 89, 90, 100, 120], IntegerMath, LogicLut),
     nvidia_mapped!(Ulop3, [75, 80, 86, 89, 90, 100, 120], IntegerMath, LogicLut),
