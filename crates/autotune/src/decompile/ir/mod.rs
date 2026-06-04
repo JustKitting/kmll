@@ -10,9 +10,9 @@ pub use self::{
         MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemoryAddressImmediateKind,
         MemoryAddressKind, MemorySpace, PredicateCondition, PredicateConditionKind, RegisterRef,
         RegisterRefKind, SassCompareDType, SassComparisonKind, SassMappingConfidence,
-        SassMemoryModifier, SassModifier, SassModifierKind, SassOpcode, SassOpcodeKind,
-        SassOperandArityExpectation, SassSymbol, SassSyncKind, SassTensorElementType,
-        SassTensorMmaShape, SassTensorMmaSignature, SassTensorScope, SassUnsupportedReason,
-        SassWarpShuffleMode, ScalarOperand, ScalarOperandKind,
+        SassMemoryAtomicOp, SassMemoryModifier, SassModifier, SassModifierKind, SassOpcode,
+        SassOpcodeKind, SassOperandArityExpectation, SassSymbol, SassSyncKind,
+        SassTensorElementType, SassTensorMmaShape, SassTensorMmaSignature, SassTensorScope,
+        SassUnsupportedReason, SassWarpShuffleMode, ScalarOperand, ScalarOperandKind,
     },
 };

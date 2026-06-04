@@ -618,6 +618,7 @@ impl KernelIrOpDef for KernelIrOp {
             | KernelIrOpKind::Move { dst, .. }
             | KernelIrOpKind::LoadConst { dst, .. }
             | KernelIrOpKind::Load { dst, .. }
+            | KernelIrOpKind::MemoryAtomic { dst, .. }
             | KernelIrOpKind::IntegerAdd { dst, .. }
             | KernelIrOpKind::FloatAdd { dst, .. }
             | KernelIrOpKind::FloatMul { dst, .. }
@@ -632,6 +633,7 @@ impl KernelIrOpDef for KernelIrOp {
             | KernelIrOpKind::Permute { dst, .. }
             | KernelIrOpKind::AddressCalc { dst, .. } => Some(dst),
             KernelIrOpKind::Store { .. }
+            | KernelIrOpKind::MemoryReduction { .. }
             | KernelIrOpKind::TensorCoreMma { .. }
             | KernelIrOpKind::TensorCoreMemory { .. }
             | KernelIrOpKind::TensorMemoryAccess { .. }

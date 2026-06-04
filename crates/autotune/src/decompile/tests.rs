@@ -308,6 +308,18 @@ tensor_core_dtype_fixture:
         /*0060*/                   EXIT ;                                        /* 0x0 */
 "#;
 
+const MEMORY_ATOMIC_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.memory_atomic_fixture,"ax",@progbits
+        .global memory_atomic_fixture
+memory_atomic_fixture:
+.text.memory_atomic_fixture:
+        /*0000*/                   ATOM.E.ADD.U32 R8, [R2], R4 ;                /* 0x0 */
+        /*0010*/                   RED.E.MAX.S32 [R6], R8 ;                     /* 0x0 */
+        /*0020*/                   EXIT ;                                       /* 0x0 */
+"#;
+
 const UNSUPPORTED_SASS: &str = r#"
         .target sm_120
 
@@ -1124,6 +1136,119 @@ fn analysis_recovers_structured_memory_accesses() {
     assert!(text.contains("memory_accesses"));
     assert!(text.contains("0x0010: load descriptor value=R2 addr=desc[UR4][R0.64]"));
     assert!(text.contains("base=UR4"));
+}
+
+#[test]
+fn lift_memory_atom_and_reduction_ops_are_typed() {
+    let module = parse_nvidia_sass(MEMORY_ATOMIC_SASS).expect("atomic SASS should parse");
+    let ir = lift_sass_module(&module);
+    let function = &ir.functions[0];
+
+    assert_eq!(ir.unsupported_instruction_count(), 0);
+    assert!(matches!(
+        &function.ops[0].kind,
+        KernelIrOpKind::MemoryAtomic {
+            dst,
+            address,
+            values,
+            operation: Some(SassMemoryAtomicOp::Add),
+            space: MemorySpace::Global,
+            access,
+        } if dst == &reg("R8")
+            && values.as_slice() == [scalar("R4")]
+            && access.width_bits == Some(32)
+            && access.modifiers.as_slice() == [
+                SassMemoryModifier::E,
+                SassMemoryModifier::Raw("ADD".to_string()),
+                SassMemoryModifier::Unsigned(32),
+            ]
+            && matches!(
+                &address.kind,
+                MemoryAddressKind::Indexed { base, offset: None } if base == &reg("R2")
+            )
+    ));
+    assert_eq!(function.ops[0].source_opcode.kind(), &SassOpcodeKind::Atom);
+    assert_eq!(
+        function.ops[0].source_modifiers[1].kind(),
+        &SassModifierKind::Add
+    );
+    assert!(matches!(
+        &function.ops[1].kind,
+        KernelIrOpKind::MemoryReduction {
+            address,
+            values,
+            operation: Some(SassMemoryAtomicOp::Max),
+            space: MemorySpace::Global,
+            access,
+        } if values.as_slice() == [scalar("R8")]
+            && access.width_bits == Some(32)
+            && matches!(
+                &address.kind,
+                MemoryAddressKind::Indexed { base, offset: None } if base == &reg("R6")
+            )
+    ));
+    assert_eq!(function.ops[1].source_opcode.kind(), &SassOpcodeKind::Red);
+    assert_eq!(
+        function.ops[1].source_modifiers[1].kind(),
+        &SassModifierKind::Max
+    );
+
+    let analysis = analyze_sass_ir(&ir);
+    let analyzed = &analysis.functions[0];
+    let atomic_flow = analyzed
+        .dataflow
+        .iter()
+        .find(|op| op.address == 0)
+        .expect("atomic op dataflow should exist");
+    assert_eq!(atomic_flow.defines, [reg("R8")]);
+    assert_eq!(atomic_flow.uses, [reg("R2"), reg("R4")]);
+    let reduction_flow = analyzed
+        .dataflow
+        .iter()
+        .find(|op| op.address == 0x10)
+        .expect("reduction op dataflow should exist");
+    assert_eq!(reduction_flow.defines, []);
+    assert_eq!(reduction_flow.uses, [reg("R6"), reg("R8")]);
+
+    let atomic_access = analyzed
+        .memory_accesses
+        .iter()
+        .find(|access| access.address == 0)
+        .expect("atomic memory access should exist");
+    assert_eq!(atomic_access.kind, SassMemoryAccessKind::Atomic);
+    assert_eq!(atomic_access.value_register, reg("R8"));
+    let reduction_access = analyzed
+        .memory_accesses
+        .iter()
+        .find(|access| access.address == 0x10)
+        .expect("reduction memory access should exist");
+    assert_eq!(reduction_access.kind, SassMemoryAccessKind::Reduction);
+    assert_eq!(reduction_access.value_register, reg("R8"));
+
+    let lifted = lift_sass_value_ir(&ir, &analysis);
+    let atomic = &lifted.functions[0].ops[0];
+    assert_eq!(atomic.class, SassLiftedOpClass::Memory);
+    assert_eq!(atomic.kind, SassLiftedOpKind::MemoryAtomic);
+    assert!(matches!(
+        &atomic.semantics,
+        SassLiftedSemantics::MemoryAtomic {
+            dst,
+            operation: Some(SassMemoryAtomicOp::Add),
+            ..
+        } if dst == &reg("R8")
+    ));
+    assert!(atomic.semantics.to_string().contains("memory-atomic"));
+
+    let reduction = &lifted.functions[0].ops[1];
+    assert_eq!(reduction.class, SassLiftedOpClass::Memory);
+    assert_eq!(reduction.kind, SassLiftedOpKind::MemoryReduction);
+    assert!(matches!(
+        &reduction.semantics,
+        SassLiftedSemantics::MemoryReduction {
+            operation: Some(SassMemoryAtomicOp::Max),
+            ..
+        }
+    ));
 }
 
 #[test]

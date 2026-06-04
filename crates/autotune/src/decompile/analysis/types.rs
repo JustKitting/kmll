@@ -301,6 +301,8 @@ pub enum SassValueOpKind {
     LoadConst,
     Load,
     Store,
+    MemoryAtomic,
+    MemoryReduction,
     IntegerAdd,
     FloatAdd,
     FloatMul,
@@ -335,6 +337,8 @@ impl SassValueOpKind {
             KernelIrOpKind::LoadConst { .. } => Self::LoadConst,
             KernelIrOpKind::Load { .. } => Self::Load,
             KernelIrOpKind::Store { .. } => Self::Store,
+            KernelIrOpKind::MemoryAtomic { .. } => Self::MemoryAtomic,
+            KernelIrOpKind::MemoryReduction { .. } => Self::MemoryReduction,
             KernelIrOpKind::IntegerAdd { .. } => Self::IntegerAdd,
             KernelIrOpKind::FloatAdd { .. } => Self::FloatAdd,
             KernelIrOpKind::FloatMul { .. } => Self::FloatMul,
@@ -371,6 +375,8 @@ impl fmt::Display for SassValueOpKind {
             Self::LoadConst => f.write_str("load-const"),
             Self::Load => f.write_str("load"),
             Self::Store => f.write_str("store"),
+            Self::MemoryAtomic => f.write_str("memory-atomic"),
+            Self::MemoryReduction => f.write_str("memory-reduction"),
             Self::IntegerAdd => f.write_str("integer-add"),
             Self::FloatAdd => f.write_str("float-add"),
             Self::FloatMul => f.write_str("float-mul"),
@@ -533,6 +539,8 @@ pub enum SassMemoryAccessKind {
     Load,
     Store,
     LoadConst,
+    Atomic,
+    Reduction,
 }
 
 impl fmt::Display for SassMemoryAccessKind {
@@ -541,6 +549,8 @@ impl fmt::Display for SassMemoryAccessKind {
             Self::Load => f.write_str("load"),
             Self::Store => f.write_str("store"),
             Self::LoadConst => f.write_str("load-const"),
+            Self::Atomic => f.write_str("atomic"),
+            Self::Reduction => f.write_str("reduction"),
         }
     }
 }

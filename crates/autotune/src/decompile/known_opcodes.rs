@@ -114,6 +114,8 @@ pub enum SassOpcodeCatalogKind {
     LoadConst,
     LogicLut,
     Move,
+    MemoryAtomic,
+    MemoryReduction,
     NoOp,
     PackedHalfAdd,
     PackedHalfMul,
@@ -162,6 +164,8 @@ impl From<SassLiftedOpKind> for SassOpcodeCatalogKind {
             SassLiftedOpKind::LoadConst => Self::LoadConst,
             SassLiftedOpKind::LogicLut => Self::LogicLut,
             SassLiftedOpKind::Move => Self::Move,
+            SassLiftedOpKind::MemoryAtomic => Self::MemoryAtomic,
+            SassLiftedOpKind::MemoryReduction => Self::MemoryReduction,
             SassLiftedOpKind::NoOp => Self::NoOp,
             SassLiftedOpKind::PackedHalfAdd => Self::PackedHalfAdd,
             SassLiftedOpKind::PackedHalfMul => Self::PackedHalfMul,
@@ -207,6 +211,8 @@ impl fmt::Display for SassOpcodeCatalogKind {
             Self::LoadConst => f.write_str("load-const"),
             Self::LogicLut => f.write_str("logic-lut"),
             Self::Move => f.write_str("move"),
+            Self::MemoryAtomic => f.write_str("memory-atomic"),
+            Self::MemoryReduction => f.write_str("memory-reduction"),
             Self::NoOp => f.write_str("no-op"),
             Self::PackedHalfAdd => f.write_str("packed-half-add"),
             Self::PackedHalfMul => f.write_str("packed-half-mul"),
@@ -271,6 +277,7 @@ macro_rules! nvidia_mapped {
 }
 
 const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
+    local!(Atom, Memory, MemoryAtomic),
     local!(Bar, Synchronization, Sync),
     local!(Bra, ControlFlow, Branch),
     local!(Bssy, Synchronization, Sync),
@@ -301,6 +308,7 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     local!(Nop, NoOp, NoOp),
     local!(Plop3, IntegerMath, LogicLut),
     local!(Prmt, DataMovement, Permute),
+    local!(Red, Memory, MemoryReduction),
     local!(Ret, ControlFlow, Return),
     local!(S2r, DataMovement, SpecialRead),
     local!(S2ur, DataMovement, SpecialRead),

@@ -1,7 +1,7 @@
 use super::{
     super::{
         KernelIrFunction, KernelIrOp, KernelIrOpKind, MemoryAddress, MemorySpace, RegisterRef,
-        SassModifier,
+        SassModifier, ScalarOperand,
     },
     types::{SassMemoryAccess, SassMemoryAccessKind},
 };
@@ -45,6 +45,34 @@ pub(super) fn analyze_memory_accesses(function: &KernelIrFunction) -> Vec<SassMe
                 value,
                 address,
             )),
+            KernelIrOpKind::MemoryAtomic {
+                dst,
+                address,
+                space,
+                access,
+                ..
+            } => Some(memory_access(
+                op,
+                SassMemoryAccessKind::Atomic,
+                *space,
+                access.width_bits,
+                dst,
+                address,
+            )),
+            KernelIrOpKind::MemoryReduction {
+                address,
+                values,
+                space,
+                access,
+                ..
+            } => Some(memory_access(
+                op,
+                SassMemoryAccessKind::Reduction,
+                *space,
+                access.width_bits,
+                &first_value_register(values),
+                address,
+            )),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -77,6 +105,18 @@ fn memory_access(
         offset: address.offset().cloned(),
         source_text: op.source_text.clone(),
     }
+}
+
+fn first_value_register(values: &[ScalarOperand]) -> RegisterRef {
+    values
+        .iter()
+        .find_map(|value| value.as_register().cloned())
+        .unwrap_or_else(|| {
+            values
+                .first()
+                .map(|value| RegisterRef::parse(value.raw.clone()))
+                .unwrap_or_else(|| RegisterRef::parse(String::new()))
+        })
 }
 
 fn memory_width_bits(modifiers: &[SassModifier]) -> Option<u32> {

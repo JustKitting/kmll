@@ -367,6 +367,26 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
             push_register_refs(address.registers(), &mut uses);
             push_register_refs([value.clone()], &mut uses);
         }
+        KernelIrOpKind::MemoryAtomic {
+            dst,
+            address,
+            values,
+            ..
+        } => {
+            push_register_refs([dst.clone()], &mut defines);
+            push_register_refs(address.registers(), &mut uses);
+            for value in values {
+                push_register_refs(value.registers(), &mut uses);
+            }
+        }
+        KernelIrOpKind::MemoryReduction {
+            address, values, ..
+        } => {
+            push_register_refs(address.registers(), &mut uses);
+            for value in values {
+                push_register_refs(value.registers(), &mut uses);
+            }
+        }
         KernelIrOpKind::IntegerAdd { dst, inputs, .. }
         | KernelIrOpKind::PackedHalfAdd { dst, inputs, .. }
         | KernelIrOpKind::PackedHalfMul { dst, inputs, .. }

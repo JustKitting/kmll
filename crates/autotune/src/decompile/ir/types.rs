@@ -196,6 +196,7 @@ impl fmt::Display for SassTensorMmaShape {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SassModifierKind {
     E,
+    Add,
     UnsignedWidth(u32),
     SignedWidth(u32),
     Width(u32),
@@ -224,6 +225,14 @@ pub enum SassModifierKind {
     Low,
     Carry,
     And,
+    Or,
+    Xor,
+    Min,
+    Max,
+    Inc,
+    Dec,
+    Exch,
+    Cas,
     Wide,
     Up,
     Down,
@@ -237,6 +246,7 @@ impl SassModifierKind {
         let raw = raw.into();
         match raw.as_str() {
             "E" => return Self::E,
+            "ADD" => return Self::Add,
             "F16" | "FP16" => return Self::F16,
             "BF16" => return Self::Bf16,
             "F32" | "FP32" => return Self::F32,
@@ -261,6 +271,14 @@ impl SassModifierKind {
             "LO" | "LOW" => return Self::Low,
             "X" => return Self::Carry,
             "AND" => return Self::And,
+            "OR" => return Self::Or,
+            "XOR" => return Self::Xor,
+            "MIN" => return Self::Min,
+            "MAX" => return Self::Max,
+            "INC" => return Self::Inc,
+            "DEC" => return Self::Dec,
+            "EXCH" => return Self::Exch,
+            "CAS" => return Self::Cas,
             "WIDE" => return Self::Wide,
             "UP" => return Self::Up,
             "DOWN" => return Self::Down,
@@ -286,6 +304,7 @@ impl SassModifierKind {
         match self {
             Self::UnsignedWidth(bits) | Self::SignedWidth(bits) | Self::Width(bits) => Some(*bits),
             Self::E
+            | Self::Add
             | Self::TensorShape(_)
             | Self::F16
             | Self::Bf16
@@ -311,6 +330,14 @@ impl SassModifierKind {
             | Self::Low
             | Self::Carry
             | Self::And
+            | Self::Or
+            | Self::Xor
+            | Self::Min
+            | Self::Max
+            | Self::Inc
+            | Self::Dec
+            | Self::Exch
+            | Self::Cas
             | Self::Wide
             | Self::Up
             | Self::Down
@@ -323,6 +350,7 @@ impl SassModifierKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SassOpcodeKind {
+    Atom,
     Bar,
     Bra,
     Bssy,
@@ -354,6 +382,7 @@ pub enum SassOpcodeKind {
     Plop3,
     Prmt,
     Ret,
+    Red,
     S2r,
     S2ur,
     Shf,
@@ -404,6 +433,7 @@ impl SassOpcodeKind {
     pub fn parse(raw: impl Into<String>) -> Self {
         let raw = raw.into();
         match raw.as_str() {
+            "ATOM" => Self::Atom,
             "BAR" => Self::Bar,
             "BRA" => Self::Bra,
             "BSSY" => Self::Bssy,
@@ -435,6 +465,7 @@ impl SassOpcodeKind {
             "PLOP3" => Self::Plop3,
             "PRMT" => Self::Prmt,
             "RET" => Self::Ret,
+            "RED" => Self::Red,
             "S2R" => Self::S2r,
             "S2UR" => Self::S2ur,
             "SHF" => Self::Shf,
@@ -484,6 +515,7 @@ impl SassOpcodeKind {
 
     pub fn as_str(&self) -> &str {
         match self {
+            Self::Atom => "ATOM",
             Self::Bar => "BAR",
             Self::Bra => "BRA",
             Self::Bssy => "BSSY",
@@ -515,6 +547,7 @@ impl SassOpcodeKind {
             Self::Plop3 => "PLOP3",
             Self::Prmt => "PRMT",
             Self::Ret => "RET",
+            Self::Red => "RED",
             Self::S2r => "S2R",
             Self::S2ur => "S2UR",
             Self::Shf => "SHF",
@@ -586,6 +619,21 @@ pub enum KernelIrOpKind {
     Store {
         address: MemoryAddress,
         value: RegisterRef,
+        space: MemorySpace,
+        access: MemoryAccessInfo,
+    },
+    MemoryAtomic {
+        dst: RegisterRef,
+        address: MemoryAddress,
+        values: Vec<ScalarOperand>,
+        operation: Option<SassMemoryAtomicOp>,
+        space: MemorySpace,
+        access: MemoryAccessInfo,
+    },
+    MemoryReduction {
+        address: MemoryAddress,
+        values: Vec<ScalarOperand>,
+        operation: Option<SassMemoryAtomicOp>,
         space: MemorySpace,
         access: MemoryAccessInfo,
     },
@@ -1726,6 +1774,61 @@ impl fmt::Display for MemorySpace {
 pub struct MemoryAccessInfo {
     pub width_bits: Option<u32>,
     pub modifiers: Vec<SassMemoryModifier>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassMemoryAtomicOp {
+    Add,
+    Min,
+    Max,
+    Inc,
+    Dec,
+    And,
+    Or,
+    Xor,
+    Exchange,
+    CompareAndSwap,
+    Raw(String),
+}
+
+impl SassMemoryAtomicOp {
+    pub fn from_modifier(modifier: &SassModifier) -> Option<Self> {
+        Some(match modifier.kind() {
+            SassModifierKind::Add => Self::Add,
+            SassModifierKind::Min => Self::Min,
+            SassModifierKind::Max => Self::Max,
+            SassModifierKind::Inc => Self::Inc,
+            SassModifierKind::Dec => Self::Dec,
+            SassModifierKind::And => Self::And,
+            SassModifierKind::Or => Self::Or,
+            SassModifierKind::Xor => Self::Xor,
+            SassModifierKind::Exch => Self::Exchange,
+            SassModifierKind::Cas => Self::CompareAndSwap,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Add => "ADD",
+            Self::Min => "MIN",
+            Self::Max => "MAX",
+            Self::Inc => "INC",
+            Self::Dec => "DEC",
+            Self::And => "AND",
+            Self::Or => "OR",
+            Self::Xor => "XOR",
+            Self::Exchange => "EXCH",
+            Self::CompareAndSwap => "CAS",
+            Self::Raw(raw) => raw,
+        }
+    }
+}
+
+impl fmt::Display for SassMemoryAtomicOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

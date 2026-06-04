@@ -2,9 +2,9 @@ use std::fmt;
 
 use super::super::{
     AggregateOperand, ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace,
-    PredicateCondition, RegisterRef, SassCompareDType, SassComparisonKind, SassMemoryModifier,
-    SassOpcode, SassSyncKind, SassTensorElementType, SassTensorMmaSignature, SassTensorScope,
-    SassUnsupportedReason, SassWarpShuffleMode, ScalarOperand,
+    PredicateCondition, RegisterRef, SassCompareDType, SassComparisonKind, SassMemoryAtomicOp,
+    SassMemoryModifier, SassOpcode, SassSyncKind, SassTensorElementType, SassTensorMmaSignature,
+    SassTensorScope, SassUnsupportedReason, SassWarpShuffleMode, ScalarOperand,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +32,23 @@ pub enum SassLiftedSemantics {
         space: MemorySpace,
         address: MemoryAddress,
         value: RegisterRef,
+        width_bits: Option<u32>,
+        modifiers: Vec<SassMemoryModifier>,
+    },
+    MemoryAtomic {
+        space: MemorySpace,
+        dst: RegisterRef,
+        address: MemoryAddress,
+        values: Vec<ScalarOperand>,
+        operation: Option<SassMemoryAtomicOp>,
+        width_bits: Option<u32>,
+        modifiers: Vec<SassMemoryModifier>,
+    },
+    MemoryReduction {
+        space: MemorySpace,
+        address: MemoryAddress,
+        values: Vec<ScalarOperand>,
+        operation: Option<SassMemoryAtomicOp>,
         width_bits: Option<u32>,
         modifiers: Vec<SassMemoryModifier>,
     },
@@ -181,6 +198,37 @@ impl fmt::Display for SassLiftedSemantics {
             } => write!(
                 f,
                 "store(space={space},address={address},value={value},width={},modifiers=[{}])",
+                option_u32(*width_bits),
+                format_display_list(modifiers)
+            ),
+            Self::MemoryAtomic {
+                space,
+                dst,
+                address,
+                values,
+                operation,
+                width_bits,
+                modifiers,
+            } => write!(
+                f,
+                "memory-atomic(space={space},dst={dst},address={address},values=[{}],operation={},width={},modifiers=[{}])",
+                format_display_list(values),
+                option_display(operation.as_ref()),
+                option_u32(*width_bits),
+                format_display_list(modifiers)
+            ),
+            Self::MemoryReduction {
+                space,
+                address,
+                values,
+                operation,
+                width_bits,
+                modifiers,
+            } => write!(
+                f,
+                "memory-reduction(space={space},address={address},values=[{}],operation={},width={},modifiers=[{}])",
+                format_display_list(values),
+                option_display(operation.as_ref()),
                 option_u32(*width_bits),
                 format_display_list(modifiers)
             ),
@@ -378,6 +426,36 @@ pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
             space: *space,
             address: address.clone(),
             value: value.clone(),
+            width_bits: access.width_bits,
+            modifiers: access.modifiers.clone(),
+        },
+        KernelIrOpKind::MemoryAtomic {
+            dst,
+            address,
+            values,
+            operation,
+            space,
+            access,
+        } => SassLiftedSemantics::MemoryAtomic {
+            space: *space,
+            dst: dst.clone(),
+            address: address.clone(),
+            values: values.clone(),
+            operation: operation.clone(),
+            width_bits: access.width_bits,
+            modifiers: access.modifiers.clone(),
+        },
+        KernelIrOpKind::MemoryReduction {
+            address,
+            values,
+            operation,
+            space,
+            access,
+        } => SassLiftedSemantics::MemoryReduction {
+            space: *space,
+            address: address.clone(),
+            values: values.clone(),
+            operation: operation.clone(),
             width_bits: access.width_bits,
             modifiers: access.modifiers.clone(),
         },

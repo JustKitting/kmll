@@ -15,6 +15,12 @@ pub(super) fn classify_op(kind: &KernelIrOpKind) -> (SassLiftedOpClass, SassLift
         }
         KernelIrOpKind::Load { .. } => (SassLiftedOpClass::Memory, SassLiftedOpKind::Load),
         KernelIrOpKind::Store { .. } => (SassLiftedOpClass::Memory, SassLiftedOpKind::Store),
+        KernelIrOpKind::MemoryAtomic { .. } => {
+            (SassLiftedOpClass::Memory, SassLiftedOpKind::MemoryAtomic)
+        }
+        KernelIrOpKind::MemoryReduction { .. } => {
+            (SassLiftedOpClass::Memory, SassLiftedOpKind::MemoryReduction)
+        }
         KernelIrOpKind::IntegerAdd { .. } => {
             (SassLiftedOpClass::IntegerMath, SassLiftedOpKind::IntegerAdd)
         }
