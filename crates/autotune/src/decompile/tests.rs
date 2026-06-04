@@ -2447,6 +2447,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreWgmmaQgmma)
         .expect("WGMMA QGMMA PTX probe should exist");
+    let tcgen05_utcomma_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreTcgen05Utcomma)
+        .expect("tcgen05 UTCOMMA PTX probe should exist");
     let tcgen05_utcqmma_probe = probes
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreTcgen05Utcqmma)
@@ -2566,6 +2570,18 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             .source
             .contains("wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3")
     );
+    assert_eq!(
+        tcgen05_utcomma_probe.symbol,
+        "tensor_core_tcgen05_utcomma_probe"
+    );
+    assert_eq!(tcgen05_utcomma_probe.default_compile_arch, "sm_100a");
+    assert!(tcgen05_utcomma_probe.source.contains(".target sm_100a"));
+    assert!(
+        tcgen05_utcomma_probe
+            .source
+            .contains("tcgen05.mma.cta_group::1.kind::mxf4.block_scale.block32")
+    );
+    assert!(tcgen05_utcomma_probe.source.contains("st.global.u32"));
     assert_eq!(
         tcgen05_utcqmma_probe.symbol,
         "tensor_core_tcgen05_utcqmma_probe"

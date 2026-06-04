@@ -8,6 +8,7 @@ pub enum PtxDecompileProbeKind {
     TensorCoreWgmmaBgmma,
     TensorCoreWgmmaIgmma,
     TensorCoreWgmmaQgmma,
+    TensorCoreTcgen05Utcomma,
     TensorCoreTcgen05Utcqmma,
     TensorMemoryLdtm,
     TensorMemorySttm,
@@ -29,6 +30,7 @@ impl PtxDecompileProbeKind {
             Self::TensorCoreWgmmaBgmma => "tensor-core-wgmma-bgmma",
             Self::TensorCoreWgmmaIgmma => "tensor-core-wgmma-igmma",
             Self::TensorCoreWgmmaQgmma => "tensor-core-wgmma-qgmma",
+            Self::TensorCoreTcgen05Utcomma => "tensor-core-tcgen05-utcomma",
             Self::TensorCoreTcgen05Utcqmma => "tensor-core-tcgen05-utcqmma",
             Self::TensorMemoryLdtm => "tensor-memory-ldtm",
             Self::TensorMemorySttm => "tensor-memory-sttm",
@@ -66,6 +68,11 @@ impl PtxDecompileProbeKind {
             | "wgmma-qgmma"
             | "wgmma_qgmma"
             | "qgmma" => Some(Self::TensorCoreWgmmaQgmma),
+            "tensor-core-tcgen05-utcomma"
+            | "tensor_core_tcgen05_utcomma"
+            | "tcgen05-utcomma"
+            | "tcgen05_utcomma"
+            | "utcomma" => Some(Self::TensorCoreTcgen05Utcomma),
             "tensor-core-tcgen05-utcqmma"
             | "tensor_core_tcgen05_utcqmma"
             | "tcgen05-utcqmma"

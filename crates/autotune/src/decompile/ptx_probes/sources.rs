@@ -320,6 +320,45 @@ pub(super) const TENSOR_CORE_TCGEN05_UTCQMMA_PTX: &str = r#".version 9.2
 }
 "#;
 
+pub(super) const TENSOR_CORE_TCGEN05_UTCOMMA_PTX: &str = r#".version 9.2
+.target sm_100a
+.address_size 64
+
+.visible .entry tensor_core_tcgen05_utcomma_probe(
+    .param .u64 tensor_core_tcgen05_utcomma_probe_out,
+    .param .u64 tensor_core_tcgen05_utcomma_probe_desc_a,
+    .param .u64 tensor_core_tcgen05_utcomma_probe_desc_b,
+    .param .u32 tensor_core_tcgen05_utcomma_probe_tmem_c,
+    .param .u32 tensor_core_tcgen05_utcomma_probe_scale_c,
+    .param .u64 tensor_core_tcgen05_utcomma_probe_idesc_e,
+    .param .u32 tensor_core_tcgen05_utcomma_probe_tsfa,
+    .param .u32 tensor_core_tcgen05_utcomma_probe_tsfb
+)
+{
+    .reg .pred %p<2>;
+    .reg .b32 %r<16>;
+    .reg .b64 %rd<8>;
+
+    ld.param.u64 %rd0, [tensor_core_tcgen05_utcomma_probe_out];
+    ld.param.u64 %rd1, [tensor_core_tcgen05_utcomma_probe_desc_a];
+    ld.param.u64 %rd2, [tensor_core_tcgen05_utcomma_probe_desc_b];
+    ld.param.u32 %r0, [tensor_core_tcgen05_utcomma_probe_tmem_c];
+    ld.param.u32 %r1, [tensor_core_tcgen05_utcomma_probe_scale_c];
+    ld.param.u64 %rd3, [tensor_core_tcgen05_utcomma_probe_idesc_e];
+    ld.param.u32 %r2, [tensor_core_tcgen05_utcomma_probe_tsfa];
+    ld.param.u32 %r3, [tensor_core_tcgen05_utcomma_probe_tsfb];
+
+    shr.u64 %rd4, %rd3, 32;
+    cvt.u32.u64 %r4, %rd4;
+    setp.ne.b32 %p0, %r1, 0;
+
+    tcgen05.mma.cta_group::1.kind::mxf4.block_scale.block32 [%r0], %rd1, %rd2, %r4, [%r2], [%r3], %p0;
+
+    st.global.u32 [%rd0], %r0;
+    ret;
+}
+"#;
+
 pub(super) const TENSOR_MEMORY_LDTM_PTX: &str = r#".version 9.2
 .target sm_100a
 .address_size 64
