@@ -37,6 +37,24 @@ fn is_label_target(target: &Option<ControlTarget>, expected: &str) -> bool {
 }
 
 #[test]
+fn raw_aggregate_operands_capture_label_candidates_once() {
+    let operand = SassOperand {
+        raw: "R4 `(matvec_bf16_rows17)".to_string(),
+        kind: SassOperandKind::Raw,
+    };
+    let aggregate = AggregateOperand::from_sass_operand(&operand);
+
+    assert!(matches!(
+        &aggregate.kind,
+        AggregateOperandKind::Raw {
+            registers,
+            label: Some(label),
+        } if registers.as_slice() == [reg("R4")]
+            && label.as_str() == "matvec_bf16_rows17"
+    ));
+}
+
+#[test]
 fn register_refs_canonicalize_modifier_spelling_for_identity() {
     assert_eq!(reg("R13.reuse"), reg("R13"));
     assert_eq!(reg("-RZ"), reg("RZ"));
@@ -911,7 +929,7 @@ fn lift_tensor_core_sass_keeps_known_op_families_typed() {
     assert!(matches!(
         &function.ops[1].kind,
         KernelIrOpKind::TensorCoreMemory { operands, .. }
-            if matches!(&operands[1].kind, AggregateOperandKind::Raw { registers }
+            if matches!(&operands[1].kind, AggregateOperandKind::Raw { registers, .. }
                 if registers.as_slice() == [reg("UR4")])
     ));
     assert!(matches!(

@@ -1,4 +1,4 @@
-use super::super::super::sass::{SassInstruction, SassPredicate, label_in_text};
+use super::super::super::sass::{SassInstruction, SassPredicate};
 use super::super::types::{
     AggregateOperand, AggregateOperandKind, ControlTarget, ImmediateValue, KernelIrOpKind,
     PredicateCondition, RegisterRef, RegisterRefKind, SassMappingConfidence, SassOpcode,
@@ -197,8 +197,13 @@ pub(super) fn target_operand(operands: &[AggregateOperand]) -> Option<ControlTar
                 .map(|address| ControlTarget::address(raw.clone(), address))
                 .or_else(|| Some(ControlTarget::raw(raw)))
         }
-        _ => label_in_text(&operand.raw)
-            .map(|label| ControlTarget::label(operand.raw.clone(), label)),
+        AggregateOperandKind::Raw {
+            label: Some(label), ..
+        } => Some(ControlTarget::label(
+            operand.raw.clone(),
+            label.as_str().to_string(),
+        )),
+        _ => None,
     })
 }
 

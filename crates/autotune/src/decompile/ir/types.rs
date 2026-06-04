@@ -6,7 +6,7 @@ use std::{
 
 use super::super::SassTarget;
 use super::super::sass::{
-    RegisterClass, SassOperand, SassOperandKind, SassRegister, SassSourcePosition,
+    RegisterClass, SassOperand, SassOperandKind, SassRegister, SassSourcePosition, label_in_text,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1430,9 +1430,7 @@ impl AggregateOperand {
             ),
             SassOperandKind::Immediate(immediate) => parse_immediate_operand(immediate)
                 .map(AggregateOperandKind::Immediate)
-                .unwrap_or_else(|| AggregateOperandKind::Raw {
-                    registers: RegisterRef::extract_all(&raw),
-                }),
+                .unwrap_or_else(|| raw_aggregate_operand(&raw)),
             SassOperandKind::ConstantMemory { bank, offset } => AggregateOperandKind::Memory(
                 MemoryAddress::constant(raw.clone(), bank.clone(), offset.clone()),
             ),
@@ -1454,9 +1452,7 @@ impl AggregateOperand {
             SassOperandKind::Label(label) => {
                 AggregateOperandKind::Label(SassSymbol::new(label.clone()))
             }
-            SassOperandKind::Raw => AggregateOperandKind::Raw {
-                registers: RegisterRef::extract_all(&raw),
-            },
+            SassOperandKind::Raw => raw_aggregate_operand(&raw),
         };
         Self { kind, raw }
     }
@@ -1465,7 +1461,7 @@ impl AggregateOperand {
         match &self.kind {
             AggregateOperandKind::Register(register) => vec![register.clone()],
             AggregateOperandKind::Memory(address) => address.registers(),
-            AggregateOperandKind::Raw { registers } => registers.clone(),
+            AggregateOperandKind::Raw { registers, .. } => registers.clone(),
             AggregateOperandKind::Immediate(_) | AggregateOperandKind::Label(_) => Vec::new(),
         }
     }
@@ -1483,7 +1479,17 @@ pub enum AggregateOperandKind {
     Immediate(ImmediateValue),
     Memory(MemoryAddress),
     Label(SassSymbol),
-    Raw { registers: Vec<RegisterRef> },
+    Raw {
+        registers: Vec<RegisterRef>,
+        label: Option<SassSymbol>,
+    },
+}
+
+fn raw_aggregate_operand(raw: &str) -> AggregateOperandKind {
+    AggregateOperandKind::Raw {
+        registers: RegisterRef::extract_all(raw),
+        label: label_in_text(raw).map(SassSymbol::new),
+    }
 }
 
 fn parse_immediate_operand(raw: &str) -> Option<ImmediateValue> {
