@@ -1490,6 +1490,19 @@ impl AggregateOperand {
             AggregateOperandKind::Immediate(_) | AggregateOperandKind::Label(_) => Vec::new(),
         }
     }
+
+    pub fn single_register(&self) -> Option<&RegisterRef> {
+        match &self.kind {
+            AggregateOperandKind::Register(register) => Some(register),
+            AggregateOperandKind::Raw { registers, .. } => match registers.as_slice() {
+                [register] => Some(register),
+                _ => None,
+            },
+            AggregateOperandKind::Immediate(_)
+            | AggregateOperandKind::Memory(_)
+            | AggregateOperandKind::Label(_) => None,
+        }
+    }
 }
 
 impl fmt::Display for AggregateOperand {

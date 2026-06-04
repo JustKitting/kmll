@@ -52,6 +52,7 @@ fn raw_aggregate_operands_capture_label_candidates_once() {
         } if registers.as_slice() == [reg("R4")]
             && label.as_str() == "matvec_bf16_rows17"
     ));
+    assert_eq!(aggregate.single_register(), Some(&reg("R4")));
 }
 
 #[test]

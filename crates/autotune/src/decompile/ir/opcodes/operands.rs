@@ -16,11 +16,10 @@ pub(super) fn aggregate_operands(instruction: &SassInstruction) -> Vec<Aggregate
 
 pub(super) fn register_operand(operand: Option<&AggregateOperand>) -> RegisterRef {
     match operand {
-        Some(AggregateOperand {
-            kind: AggregateOperandKind::Register(register),
-            ..
-        }) => register.clone(),
-        Some(operand) => RegisterRef::parse(operand.raw.clone()),
+        Some(operand) => operand
+            .single_register()
+            .cloned()
+            .unwrap_or_else(|| RegisterRef::parse(operand.raw.clone())),
         None => RegisterRef::parse(String::new()),
     }
 }
