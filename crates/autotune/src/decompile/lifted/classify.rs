@@ -10,6 +10,13 @@ pub(super) fn classify_op(kind: &KernelIrOpKind) -> (SassLiftedOpClass, SassLift
             SassLiftedOpKind::SpecialRead,
         ),
         KernelIrOpKind::Move { .. } => (SassLiftedOpClass::DataMovement, SassLiftedOpKind::Move),
+        KernelIrOpKind::Select { .. } => {
+            (SassLiftedOpClass::DataMovement, SassLiftedOpKind::Select)
+        }
+        KernelIrOpKind::NumericConvert { .. } => (
+            SassLiftedOpClass::FloatMath,
+            SassLiftedOpKind::NumericConvert,
+        ),
         KernelIrOpKind::LoadConst { .. } => {
             (SassLiftedOpClass::Memory, SassLiftedOpKind::LoadConst)
         }

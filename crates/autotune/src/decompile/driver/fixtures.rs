@@ -9,9 +9,10 @@ use crate::autotune::{
 };
 
 use super::super::{
-    SassCoverageOptions, SimpleKernelFixture, analyze_sass_ir, driver_support::render_side_by_side,
-    driver_support::run_capture, driver_support::run_checked, lift_sass_module, lift_sass_value_ir,
-    parse_nvidia_sass, recover_sass_patterns, run_sass_coverage_scan, simple_kernel_fixtures,
+    SassCoverageOptions, SimpleKernelFixture, analyze_sass_ir, driver_support::absolute_path,
+    driver_support::render_side_by_side, driver_support::run_capture, driver_support::run_checked,
+    lift_sass_module, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
+    run_sass_coverage_scan, simple_kernel_fixtures,
 };
 use super::types::{
     DecompileFixtureCoverageOptions, DecompileFixtureCoverageReport, DecompileFixtureOptions,
@@ -22,6 +23,7 @@ pub fn run_decompile_fixtures(
     options: &DecompileFixtureOptions,
 ) -> Result<Vec<DecompileFixtureReport>, Box<dyn Error>> {
     let mut reports = Vec::new();
+    let artifact_root = absolute_path(&options.artifact_root)?;
     let fixtures = simple_kernel_fixtures();
     for requested in &options.fixtures {
         let fixture = fixtures
@@ -33,7 +35,7 @@ pub fn run_decompile_fixtures(
                     format!("unknown decompile fixture {}", requested.name()),
                 )
             })?;
-        reports.push(run_decompile_fixture(options, fixture)?);
+        reports.push(run_decompile_fixture(options, &artifact_root, fixture)?);
     }
     Ok(reports)
 }
@@ -41,9 +43,10 @@ pub fn run_decompile_fixtures(
 pub fn run_decompile_fixture_coverage(
     options: &DecompileFixtureCoverageOptions,
 ) -> Result<DecompileFixtureCoverageReport, Box<dyn Error>> {
+    let artifact_root = absolute_path(&options.fixture_options.artifact_root)?;
     let fixture_reports = run_decompile_fixtures(&options.fixture_options)?;
     let coverage_report = run_sass_coverage_scan(&SassCoverageOptions {
-        root: options.fixture_options.artifact_root.clone(),
+        root: artifact_root,
         output_dir: options.coverage_output_dir.clone(),
     })?;
     Ok(DecompileFixtureCoverageReport {
@@ -54,9 +57,10 @@ pub fn run_decompile_fixture_coverage(
 
 fn run_decompile_fixture(
     options: &DecompileFixtureOptions,
+    artifact_root: &std::path::Path,
     fixture: &SimpleKernelFixture,
 ) -> Result<DecompileFixtureReport, Box<dyn Error>> {
-    let fixture_dir = options.artifact_root.join(fixture.kind.name());
+    let fixture_dir = artifact_root.join(fixture.kind.name());
     let crate_dir = fixture_dir.join("standalone-crate");
     let source_path = crate_dir.join("src").join("main.rs");
     let cargo_toml_path = crate_dir.join("Cargo.toml");
@@ -73,7 +77,7 @@ fn run_decompile_fixture(
     fs::write(&source_path, standalone_main_source(fixture.source))?;
 
     let ptx_output_dir = fixture_dir.join("ptx");
-    let target_dir = options.artifact_root.join("standalone-target");
+    let target_dir = artifact_root.join("standalone-target");
     let compiled = compile_standalone_kernel_crate(
         &crate_dir,
         &ptx_output_dir,

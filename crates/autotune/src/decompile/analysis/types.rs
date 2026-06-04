@@ -298,6 +298,8 @@ impl fmt::Display for SassRegionKind {
 pub enum SassValueOpKind {
     SpecialRead,
     Move,
+    Select,
+    NumericConvert,
     LoadConst,
     Load,
     Store,
@@ -334,6 +336,8 @@ impl SassValueOpKind {
         match kind {
             KernelIrOpKind::ReadSpecialRegister { .. } => Self::SpecialRead,
             KernelIrOpKind::Move { .. } => Self::Move,
+            KernelIrOpKind::Select { .. } => Self::Select,
+            KernelIrOpKind::NumericConvert { .. } => Self::NumericConvert,
             KernelIrOpKind::LoadConst { .. } => Self::LoadConst,
             KernelIrOpKind::Load { .. } => Self::Load,
             KernelIrOpKind::Store { .. } => Self::Store,
@@ -372,6 +376,8 @@ impl fmt::Display for SassValueOpKind {
         match self {
             Self::SpecialRead => f.write_str("special-read"),
             Self::Move => f.write_str("move"),
+            Self::Select => f.write_str("select"),
+            Self::NumericConvert => f.write_str("numeric-convert"),
             Self::LoadConst => f.write_str("load-const"),
             Self::Load => f.write_str("load"),
             Self::Store => f.write_str("store"),

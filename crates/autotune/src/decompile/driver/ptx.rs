@@ -5,8 +5,8 @@ use std::{
 };
 
 use super::super::{
-    PtxDecompileProbe, driver_support::run_capture, driver_support::run_checked, lift_sass_module,
-    parse_nvidia_sass, ptx_decompile_probes,
+    PtxDecompileProbe, driver_support::absolute_path, driver_support::run_capture,
+    driver_support::run_checked, lift_sass_module, parse_nvidia_sass, ptx_decompile_probes,
 };
 use super::types::{DecompilePtxProbeOptions, DecompilePtxProbeReport};
 
@@ -14,6 +14,7 @@ pub fn run_decompile_ptx_probes(
     options: &DecompilePtxProbeOptions,
 ) -> Result<Vec<DecompilePtxProbeReport>, Box<dyn Error>> {
     let mut reports = Vec::new();
+    let artifact_root = absolute_path(&options.artifact_root)?;
     let probes = ptx_decompile_probes();
     for requested in &options.probes {
         let probe = probes
@@ -25,16 +26,17 @@ pub fn run_decompile_ptx_probes(
                     format!("unknown PTX decompile probe {}", requested.name()),
                 )
             })?;
-        reports.push(run_decompile_ptx_probe(options, probe)?);
+        reports.push(run_decompile_ptx_probe(options, &artifact_root, probe)?);
     }
     Ok(reports)
 }
 
 fn run_decompile_ptx_probe(
     options: &DecompilePtxProbeOptions,
+    artifact_root: &std::path::Path,
     probe: &PtxDecompileProbe,
 ) -> Result<DecompilePtxProbeReport, Box<dyn Error>> {
-    let probe_dir = options.artifact_root.join(probe.kind.name());
+    let probe_dir = artifact_root.join(probe.kind.name());
     fs::create_dir_all(&probe_dir)?;
     let ptx_path = probe_dir.join(format!("{}.ptx", probe.symbol));
     fs::write(&ptx_path, probe.source.as_bytes())?;

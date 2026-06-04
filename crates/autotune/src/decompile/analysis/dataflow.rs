@@ -355,6 +355,21 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
             push_register_refs([dst.clone()], &mut defines);
             push_register_refs(src.registers(), &mut uses);
         }
+        KernelIrOpKind::Select {
+            dst,
+            true_value,
+            false_value,
+            predicate,
+        } => {
+            push_register_refs([dst.clone()], &mut defines);
+            push_register_refs(true_value.registers(), &mut uses);
+            push_register_refs(false_value.registers(), &mut uses);
+            push_register_refs([predicate.clone()], &mut uses);
+        }
+        KernelIrOpKind::NumericConvert { dst, src, .. } => {
+            push_register_refs([dst.clone()], &mut defines);
+            push_register_refs(src.registers(), &mut uses);
+        }
         KernelIrOpKind::LoadConst { dst, source } => {
             push_register_refs([dst.clone()], &mut defines);
             push_register_refs(source.registers(), &mut uses);

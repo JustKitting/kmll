@@ -3,8 +3,9 @@ use std::fmt;
 use super::super::{
     AggregateOperand, ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace,
     PredicateCondition, RegisterRef, SassCompareDType, SassComparisonKind, SassMemoryAtomicOp,
-    SassMemoryModifier, SassOpcode, SassSyncKind, SassTensorElementType, SassTensorMmaSignature,
-    SassTensorScope, SassUnsupportedReason, SassWarpShuffleMode, ScalarOperand,
+    SassMemoryModifier, SassNumericDType, SassOpcode, SassSyncKind, SassTensorElementType,
+    SassTensorMmaSignature, SassTensorScope, SassUnsupportedReason, SassWarpShuffleMode,
+    ScalarOperand,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +17,18 @@ pub enum SassLiftedSemantics {
     Move {
         dst: RegisterRef,
         src: ScalarOperand,
+    },
+    Select {
+        dst: RegisterRef,
+        true_value: ScalarOperand,
+        false_value: ScalarOperand,
+        predicate: RegisterRef,
+    },
+    NumericConvert {
+        dst: RegisterRef,
+        src: ScalarOperand,
+        dst_dtype: Option<SassNumericDType>,
+        src_dtype: Option<SassNumericDType>,
     },
     LoadConst {
         dst: RegisterRef,
@@ -174,6 +187,26 @@ impl fmt::Display for SassLiftedSemantics {
                 write!(f, "special-read(dst={dst},special={special})")
             }
             Self::Move { dst, src } => write!(f, "move(dst={dst},src={src})"),
+            Self::Select {
+                dst,
+                true_value,
+                false_value,
+                predicate,
+            } => write!(
+                f,
+                "select(dst={dst},true={true_value},false={false_value},predicate={predicate})"
+            ),
+            Self::NumericConvert {
+                dst,
+                src,
+                dst_dtype,
+                src_dtype,
+            } => write!(
+                f,
+                "numeric-convert(dst={dst},src={src},dst-dtype={},src-dtype={})",
+                option_display(dst_dtype.as_ref()),
+                option_display(src_dtype.as_ref())
+            ),
             Self::LoadConst { dst, source } => {
                 write!(f, "load-const(dst={dst},source={source})")
             }
@@ -400,6 +433,28 @@ pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
         KernelIrOpKind::Move { dst, src } => SassLiftedSemantics::Move {
             dst: dst.clone(),
             src: src.clone(),
+        },
+        KernelIrOpKind::Select {
+            dst,
+            true_value,
+            false_value,
+            predicate,
+        } => SassLiftedSemantics::Select {
+            dst: dst.clone(),
+            true_value: true_value.clone(),
+            false_value: false_value.clone(),
+            predicate: predicate.clone(),
+        },
+        KernelIrOpKind::NumericConvert {
+            dst,
+            src,
+            dst_dtype,
+            src_dtype,
+        } => SassLiftedSemantics::NumericConvert {
+            dst: dst.clone(),
+            src: src.clone(),
+            dst_dtype: dst_dtype.clone(),
+            src_dtype: src_dtype.clone(),
         },
         KernelIrOpKind::LoadConst { dst, source } => SassLiftedSemantics::LoadConst {
             dst: dst.clone(),

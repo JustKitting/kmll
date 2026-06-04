@@ -616,6 +616,8 @@ impl KernelIrOpDef for KernelIrOp {
         match &self.kind {
             KernelIrOpKind::ReadSpecialRegister { dst, .. }
             | KernelIrOpKind::Move { dst, .. }
+            | KernelIrOpKind::Select { dst, .. }
+            | KernelIrOpKind::NumericConvert { dst, .. }
             | KernelIrOpKind::LoadConst { dst, .. }
             | KernelIrOpKind::Load { dst, .. }
             | KernelIrOpKind::MemoryAtomic { dst, .. }

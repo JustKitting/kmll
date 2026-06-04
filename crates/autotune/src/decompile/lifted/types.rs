@@ -114,6 +114,8 @@ impl fmt::Display for SassLiftedOpClass {
 pub enum SassLiftedOpKind {
     SpecialRead,
     Move,
+    Select,
+    NumericConvert,
     LoadConst,
     Load,
     Store,
@@ -150,6 +152,8 @@ impl fmt::Display for SassLiftedOpKind {
         match self {
             Self::SpecialRead => f.write_str("special-read"),
             Self::Move => f.write_str("move"),
+            Self::Select => f.write_str("select"),
+            Self::NumericConvert => f.write_str("numeric-convert"),
             Self::LoadConst => f.write_str("load-const"),
             Self::Load => f.write_str("load"),
             Self::Store => f.write_str("store"),

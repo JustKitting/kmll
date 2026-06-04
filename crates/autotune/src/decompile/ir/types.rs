@@ -367,6 +367,7 @@ pub enum SassOpcodeKind {
     Hmul2,
     Iadd,
     Iadd3,
+    I2fp,
     Imad,
     Isetp,
     Ld,
@@ -385,6 +386,7 @@ pub enum SassOpcodeKind {
     Red,
     S2r,
     S2ur,
+    Sel,
     Shf,
     Shfl,
     St,
@@ -450,6 +452,7 @@ impl SassOpcodeKind {
             "HMUL2" => Self::Hmul2,
             "IADD" => Self::Iadd,
             "IADD3" => Self::Iadd3,
+            "I2FP" => Self::I2fp,
             "IMAD" => Self::Imad,
             "ISETP" => Self::Isetp,
             "LD" => Self::Ld,
@@ -468,6 +471,7 @@ impl SassOpcodeKind {
             "RED" => Self::Red,
             "S2R" => Self::S2r,
             "S2UR" => Self::S2ur,
+            "SEL" => Self::Sel,
             "SHF" => Self::Shf,
             "SHFL" => Self::Shfl,
             "ST" => Self::St,
@@ -532,6 +536,7 @@ impl SassOpcodeKind {
             Self::Hmul2 => "HMUL2",
             Self::Iadd => "IADD",
             Self::Iadd3 => "IADD3",
+            Self::I2fp => "I2FP",
             Self::Imad => "IMAD",
             Self::Isetp => "ISETP",
             Self::Ld => "LD",
@@ -550,6 +555,7 @@ impl SassOpcodeKind {
             Self::Red => "RED",
             Self::S2r => "S2R",
             Self::S2ur => "S2UR",
+            Self::Sel => "SEL",
             Self::Shf => "SHF",
             Self::Shfl => "SHFL",
             Self::St => "ST",
@@ -605,6 +611,18 @@ pub enum KernelIrOpKind {
     Move {
         dst: RegisterRef,
         src: ScalarOperand,
+    },
+    Select {
+        dst: RegisterRef,
+        true_value: ScalarOperand,
+        false_value: ScalarOperand,
+        predicate: RegisterRef,
+    },
+    NumericConvert {
+        dst: RegisterRef,
+        src: ScalarOperand,
+        dst_dtype: Option<SassNumericDType>,
+        src_dtype: Option<SassNumericDType>,
     },
     LoadConst {
         dst: RegisterRef,
@@ -1079,6 +1097,77 @@ impl SassComparisonKind {
 }
 
 impl fmt::Display for SassComparisonKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassNumericDType {
+    U8,
+    S8,
+    U16,
+    S16,
+    U32,
+    S32,
+    U64,
+    S64,
+    F16,
+    Bf16,
+    F32,
+    F64,
+    Tf32,
+    Fp4,
+    Fp8,
+    Raw(String),
+}
+
+impl SassNumericDType {
+    pub fn from_modifier(modifier: &SassModifierKind) -> Option<Self> {
+        match modifier {
+            SassModifierKind::UnsignedWidth(8) => Some(Self::U8),
+            SassModifierKind::SignedWidth(8) => Some(Self::S8),
+            SassModifierKind::UnsignedWidth(16) => Some(Self::U16),
+            SassModifierKind::SignedWidth(16) => Some(Self::S16),
+            SassModifierKind::UnsignedWidth(32) => Some(Self::U32),
+            SassModifierKind::SignedWidth(32) => Some(Self::S32),
+            SassModifierKind::UnsignedWidth(64) => Some(Self::U64),
+            SassModifierKind::SignedWidth(64) => Some(Self::S64),
+            SassModifierKind::F16 => Some(Self::F16),
+            SassModifierKind::Bf16 => Some(Self::Bf16),
+            SassModifierKind::F32 => Some(Self::F32),
+            SassModifierKind::F64 => Some(Self::F64),
+            SassModifierKind::Tf32 => Some(Self::Tf32),
+            SassModifierKind::Fp4 => Some(Self::Fp4),
+            SassModifierKind::Fp8 => Some(Self::Fp8),
+            SassModifierKind::Raw(raw) => Some(Self::Raw(raw.clone())),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::U8 => "U8",
+            Self::S8 => "S8",
+            Self::U16 => "U16",
+            Self::S16 => "S16",
+            Self::U32 => "U32",
+            Self::S32 => "S32",
+            Self::U64 => "U64",
+            Self::S64 => "S64",
+            Self::F16 => "F16",
+            Self::Bf16 => "BF16",
+            Self::F32 => "F32",
+            Self::F64 => "F64",
+            Self::Tf32 => "TF32",
+            Self::Fp4 => "FP4",
+            Self::Fp8 => "FP8",
+            Self::Raw(raw) => raw,
+        }
+    }
+}
+
+impl fmt::Display for SassNumericDType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }

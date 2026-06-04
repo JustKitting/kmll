@@ -3,6 +3,7 @@ pub enum PtxDecompileProbeKind {
     TensorCoreHmma,
     TensorCoreImma,
     TensorCoreDmma,
+    ScalarMemoryLogic,
 }
 
 impl PtxDecompileProbeKind {
@@ -11,6 +12,7 @@ impl PtxDecompileProbeKind {
             Self::TensorCoreHmma => "tensor-core-hmma",
             Self::TensorCoreImma => "tensor-core-imma",
             Self::TensorCoreDmma => "tensor-core-dmma",
+            Self::ScalarMemoryLogic => "scalar-memory-logic",
         }
     }
 
@@ -19,6 +21,9 @@ impl PtxDecompileProbeKind {
             "tensor-core-hmma" | "tensor_core_hmma" | "hmma" => Some(Self::TensorCoreHmma),
             "tensor-core-imma" | "tensor_core_imma" | "imma" => Some(Self::TensorCoreImma),
             "tensor-core-dmma" | "tensor_core_dmma" | "dmma" => Some(Self::TensorCoreDmma),
+            "scalar-memory-logic" | "scalar_memory_logic" | "scalar" => {
+                Some(Self::ScalarMemoryLogic)
+            }
             _ => None,
         }
     }
@@ -52,6 +57,12 @@ pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
             behavior: "one PTX fp64 tensor-core MMA kept alive by a global f64 store",
             source: TENSOR_CORE_DMMA_PTX,
         },
+        PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::ScalarMemoryLogic,
+            symbol: "scalar_memory_logic_probe",
+            behavior: "scalar PTX memory, predicate, logic, integer, and f32 fused math instructions",
+            source: SCALAR_MEMORY_LOGIC_PTX,
+        },
     ]
 }
 
@@ -60,6 +71,7 @@ pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
         PtxDecompileProbeKind::TensorCoreHmma,
         PtxDecompileProbeKind::TensorCoreImma,
         PtxDecompileProbeKind::TensorCoreDmma,
+        PtxDecompileProbeKind::ScalarMemoryLogic,
     ]
 }
 
@@ -160,6 +172,55 @@ const TENSOR_CORE_DMMA_PTX: &str = r#".version 8.0
         {%d0, %d1};
 
     st.global.f64 [%rd0], %d0;
+    ret;
+}
+"#;
+
+const SCALAR_MEMORY_LOGIC_PTX: &str = r#".version 8.0
+.target sm_80
+.address_size 64
+
+.visible .entry scalar_memory_logic_probe(
+    .param .u64 scalar_memory_logic_probe_out,
+    .param .u64 scalar_memory_logic_probe_in
+)
+{
+    .reg .pred %p<4>;
+    .reg .b32 %r<24>;
+    .reg .b64 %rd<8>;
+    .reg .f32 %f<8>;
+    .local .align 4 .b8 scalar_memory_logic_probe_local[512];
+
+    ld.param.u64 %rd0, [scalar_memory_logic_probe_out];
+    ld.param.u64 %rd1, [scalar_memory_logic_probe_in];
+
+    mov.u32 %r0, %tid.x;
+    and.b32 %r1, %r0, 31;
+    shl.b32 %r2, %r1, 2;
+    cvt.u64.u32 %rd2, %r2;
+    mov.u64 %rd3, scalar_memory_logic_probe_local;
+    add.u64 %rd4, %rd3, %rd2;
+
+    ld.global.nc.u32 %r3, [%rd1];
+    add.s32 %r4, %r3, %r1;
+    add.s32 %r5, %r4, 17;
+    lop3.b32 %r6, %r3, %r4, %r5, 0x96;
+
+    st.local.u32 [%rd4], %r6;
+    ld.local.u32 %r7, [%rd4];
+
+    setp.gt.u32 %p0, %r7, %r5;
+    setp.ne.u32 %p1, %r7, %r3;
+    and.pred %p2, %p0, %p1;
+    selp.u32 %r8, %r7, %r5, %p2;
+
+    cvt.rn.f32.u32 %f0, %r8;
+    mov.f32 %f1, 0f3f800000;
+    fma.rn.f32 %f2, %f0, %f1, %f0;
+    setp.gt.f32 %p3, %f2, %f0;
+    selp.u32 %r9, %r8, %r3, %p3;
+
+    st.global.u32 [%rd0], %r9;
     ret;
 }
 "#;

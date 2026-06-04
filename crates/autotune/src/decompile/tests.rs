@@ -205,6 +205,76 @@ bad_arity_fixture:
     ));
 }
 
+#[test]
+fn lift_select_and_integer_to_float_ops_are_typed() {
+    const SELECT_CONVERT_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.select_convert_fixture,"ax",@progbits
+        .global select_convert_fixture
+select_convert_fixture:
+.text.select_convert_fixture:
+        /*0000*/                   SEL R6, R7, R6, P0 ;                         /* 0x0 */
+        /*0010*/                   I2FP.F32.U32 R4, R6 ;                        /* 0x0 */
+        /*0020*/                   EXIT ;                                       /* 0x0 */
+"#;
+
+    let module = parse_nvidia_sass(SELECT_CONVERT_SASS).expect("SASS should parse");
+    let ir = lift_sass_module(&module);
+    assert_eq!(ir.unsupported_instruction_count(), 0);
+    let function = &ir.functions[0];
+
+    let select = &function.ops[0];
+    assert_eq!(select.source_opcode.kind(), &SassOpcodeKind::Sel);
+    assert!(matches!(
+        &select.kind,
+        KernelIrOpKind::Select {
+            dst,
+            true_value,
+            false_value,
+            predicate,
+        } if dst == &reg("R6")
+            && true_value == &scalar("R7")
+            && false_value == &scalar("R6")
+            && predicate == &reg("P0")
+    ));
+
+    let convert = &function.ops[1];
+    assert_eq!(convert.source_opcode.kind(), &SassOpcodeKind::I2fp);
+    assert!(matches!(
+        &convert.kind,
+        KernelIrOpKind::NumericConvert {
+            dst,
+            src,
+            dst_dtype: Some(SassNumericDType::F32),
+            src_dtype: Some(SassNumericDType::U32),
+        } if dst == &reg("R4") && src == &scalar("R6")
+    ));
+
+    let analysis = analyze_sass_ir(&ir);
+    let dataflow = &analysis.functions[0].dataflow;
+    assert_eq!(dataflow[0].defines.as_slice(), &[reg("R6")]);
+    assert_eq!(
+        dataflow[0].uses.iter().cloned().collect::<BTreeSet<_>>(),
+        [reg("P0"), reg("R6"), reg("R7")].into_iter().collect()
+    );
+    assert_eq!(dataflow[1].defines.as_slice(), &[reg("R4")]);
+    assert_eq!(dataflow[1].uses.as_slice(), &[reg("R6")]);
+
+    let lifted = lift_sass_value_ir(&ir, &analysis);
+    assert_eq!(lifted.functions[0].ops[0].kind, SassLiftedOpKind::Select);
+    assert_eq!(
+        lifted.functions[0].ops[1].kind,
+        SassLiftedOpKind::NumericConvert
+    );
+    assert!(
+        lifted.functions[0].ops[1]
+            .semantics
+            .to_string()
+            .contains("dst-dtype=F32,src-dtype=U32")
+    );
+}
+
 const SIMPLE_SASS: &str = r#"
         .target sm_120
 
@@ -2167,6 +2237,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreDmma)
         .expect("DMMA PTX probe should exist");
+    let scalar_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::ScalarMemoryLogic)
+        .expect("scalar memory/logic PTX probe should exist");
 
     assert_eq!(options.compile_arch, "sm_120");
     assert_eq!(
@@ -2174,7 +2248,8 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         vec![
             PtxDecompileProbeKind::TensorCoreHmma,
             PtxDecompileProbeKind::TensorCoreImma,
-            PtxDecompileProbeKind::TensorCoreDmma
+            PtxDecompileProbeKind::TensorCoreDmma,
+            PtxDecompileProbeKind::ScalarMemoryLogic
         ]
     );
     assert!(
@@ -2199,6 +2274,14 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             .contains("mma.sync.aligned.m8n8k4.row.col.f64.f64.f64.f64")
     );
     assert!(dmma_probe.source.contains("st.global.f64"));
+    assert_eq!(scalar_probe.symbol, "scalar_memory_logic_probe");
+    assert!(scalar_probe.source.contains("ld.global.nc.u32"));
+    assert!(scalar_probe.source.contains("st.local.u32"));
+    assert!(scalar_probe.source.contains("ld.local.u32"));
+    assert!(scalar_probe.source.contains("lop3.b32"));
+    assert!(scalar_probe.source.contains("and.pred"));
+    assert!(scalar_probe.source.contains("fma.rn.f32"));
+    assert!(scalar_probe.source.contains("setp.gt.f32"));
 }
 
 #[test]
