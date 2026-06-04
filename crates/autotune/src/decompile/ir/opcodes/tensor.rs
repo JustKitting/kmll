@@ -159,10 +159,11 @@ fn modifier_tensor_element_type(modifier: &SassModifierKind) -> Option<SassTenso
         SassModifierKind::F32 => Some(SassTensorElementType::Fp32),
         SassModifierKind::F64 => Some(SassTensorElementType::Fp64),
         SassModifierKind::Tf32 => Some(SassTensorElementType::Tf32),
-        SassModifierKind::Fp4 | SassModifierKind::E2M1 => Some(SassTensorElementType::Fp4),
-        SassModifierKind::Fp8 | SassModifierKind::E4M3 | SassModifierKind::E5M2 => {
-            Some(SassTensorElementType::Fp8)
-        }
+        SassModifierKind::Fp4 => Some(SassTensorElementType::Fp4),
+        SassModifierKind::E2M1 => Some(SassTensorElementType::E2M1),
+        SassModifierKind::Fp8 => Some(SassTensorElementType::Fp8),
+        SassModifierKind::E4M3 => Some(SassTensorElementType::E4M3),
+        SassModifierKind::E5M2 => Some(SassTensorElementType::E5M2),
         _ => None,
     }
 }

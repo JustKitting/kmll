@@ -207,7 +207,8 @@ tensor_core_dtype_fixture:
         /*0020*/                   HMMA.1688.F32.TF32 R8, R12, R16, R20 ;        /* 0x0 */
         /*0030*/                   OMMA.E2M1 R8, R12, R16, R20 ;                 /* 0x0 */
         /*0040*/                   QGMMA.E4M3 R8, R12, R16, R20 ;                /* 0x0 */
-        /*0050*/                   EXIT ;                                        /* 0x0 */
+        /*0050*/                   QGMMA.E5M2 R8, R12, R16, R20 ;                /* 0x0 */
+        /*0060*/                   EXIT ;                                        /* 0x0 */
 "#;
 
 const UNSUPPORTED_SASS: &str = r#"
@@ -961,12 +962,12 @@ fn lift_tensor_core_sass_refines_mma_element_type_from_modifiers() {
     assert!(matches!(
         &function.ops[3].kind,
         KernelIrOpKind::TensorCoreMma {
-            element_type: Some(SassTensorElementType::Fp4),
+            element_type: Some(SassTensorElementType::E2M1),
             signature: Some(SassTensorMmaSignature {
                 shape: None,
                 output_type: None,
-                lhs_type: Some(SassTensorElementType::Fp4),
-                rhs_type: Some(SassTensorElementType::Fp4),
+                lhs_type: Some(SassTensorElementType::E2M1),
+                rhs_type: Some(SassTensorElementType::E2M1),
                 accumulator_type: None,
             }),
             scope: Some(SassTensorScope::Warp),
@@ -976,12 +977,27 @@ fn lift_tensor_core_sass_refines_mma_element_type_from_modifiers() {
     assert!(matches!(
         &function.ops[4].kind,
         KernelIrOpKind::TensorCoreMma {
-            element_type: Some(SassTensorElementType::Fp8),
+            element_type: Some(SassTensorElementType::E4M3),
             signature: Some(SassTensorMmaSignature {
                 shape: None,
                 output_type: None,
-                lhs_type: Some(SassTensorElementType::Fp8),
-                rhs_type: Some(SassTensorElementType::Fp8),
+                lhs_type: Some(SassTensorElementType::E4M3),
+                rhs_type: Some(SassTensorElementType::E4M3),
+                accumulator_type: None,
+            }),
+            scope: Some(SassTensorScope::WarpGroup),
+            ..
+        }
+    ));
+    assert!(matches!(
+        &function.ops[5].kind,
+        KernelIrOpKind::TensorCoreMma {
+            element_type: Some(SassTensorElementType::E5M2),
+            signature: Some(SassTensorMmaSignature {
+                shape: None,
+                output_type: None,
+                lhs_type: Some(SassTensorElementType::E5M2),
+                rhs_type: Some(SassTensorElementType::E5M2),
                 accumulator_type: None,
             }),
             scope: Some(SassTensorScope::WarpGroup),

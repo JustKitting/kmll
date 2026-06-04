@@ -794,7 +794,10 @@ pub enum SassTensorElementType {
     Half,
     Integer,
     Fp4,
+    E2M1,
     Fp8,
+    E4M3,
+    E5M2,
     Raw(String),
 }
 
@@ -811,7 +814,10 @@ impl SassTensorElementType {
             "half" => Self::Half,
             "integer" => Self::Integer,
             "fp4" => Self::Fp4,
+            "e2m1" => Self::E2M1,
             "fp8" => Self::Fp8,
+            "e4m3" => Self::E4M3,
+            "e5m2" => Self::E5M2,
             _ => Self::Raw(raw),
         }
     }
@@ -827,7 +833,10 @@ impl SassTensorElementType {
             Self::Half => "half",
             Self::Integer => "integer",
             Self::Fp4 => "fp4",
+            Self::E2M1 => "e2m1",
             Self::Fp8 => "fp8",
+            Self::E4M3 => "e4m3",
+            Self::E5M2 => "e5m2",
             Self::Raw(raw) => raw,
         }
     }
