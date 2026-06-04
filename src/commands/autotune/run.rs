@@ -1,17 +1,20 @@
 use nn_rust_autotune::{
-    AutoOptimizeConfig, CachedInferenceKernelAutoOptimize, GemmF32Bf16MeasuredAutotuneScorer,
-    InferenceKernelAutoOptimize, InferenceKernelRustCudaGenerator, KernelArtifactStore,
+    AutoOptimizeConfig, CachedAutoOptimizeResult, CachedInferenceKernelAutoOptimize,
+    GemmF32Bf16MeasuredAutotuneScorer, InferenceKernelAutoOptimize,
+    InferenceKernelRustCudaGenerator, KernelActionSearchProblem, KernelArtifactStore,
     KernelAutotuneMeasureOptions, KernelCandidateMetadata, KernelExpansionPolicy,
-    KernelOptimizationCacheKey, MatvecBf16MeasuredAutotuneScorer, TensorCoreOpFamily,
-    TensorCoreSearchSpace, auto_optimize_inference_kernel_with_selection_cache_and_policy,
-    auto_optimize_inference_kernel_with_selection_cache_and_policy_scorer, cached_measured_score,
+    KernelMetadataSearchProblem, KernelOptimizationCacheKey, MatvecBf16MeasuredAutotuneScorer,
+    TensorCoreOpFamily, TensorCoreSearchSpace, Top1Bf16MeasuredAutotuneScorer,
+    Top1Bf16SearchProblem, auto_optimize_inference_kernel_with_selection_cache_and_policy,
+    auto_optimize_inference_kernel_with_selection_cache_and_policy_scorer,
+    auto_optimize_metadata_with_selection_cache_and_policy, cached_measured_score,
     compile_standalone_kernel_crate,
 };
 use nn_rust_profiling::TypedOperationSpec;
 
 use super::{
     operation::{gemm_autotune_operation, matvec_autotune_operation},
-    options::{AutotuneCliOptions, GEMM_USAGE, MATVEC_USAGE},
+    options::{AutotuneCliOptions, GEMM_USAGE, MATVEC_USAGE, TOP1_USAGE},
     output::{
         print_kernel_candidate, print_kernel_expansion_policy, print_selection_cache_status,
         print_selection_cache_write,
@@ -101,6 +104,41 @@ pub(crate) fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         config,
         &options,
     )
+}
+
+pub(crate) fn run_kernel_autotune_top1_bf16(args: &[String]) -> AppResult<()> {
+    let mut index = 0;
+    let rows = parse_required_usize(args, &mut index, "rows", "kernel-autotune-top1-bf16")?;
+    let cols = parse_required_usize(args, &mut index, "cols", "kernel-autotune-top1-bf16")?;
+    if rows == 0 || cols == 0 {
+        return Err(invalid_input(
+            "kernel-autotune-top1-bf16 dimensions must be nonzero",
+        ));
+    }
+
+    let options =
+        AutotuneCliOptions::parse(args, &mut index, "kernel-autotune-top1-bf16", TOP1_USAGE)?;
+    if options.allow_generated || options.emit_crate || options.compile {
+        return Err(invalid_input(
+            "kernel-autotune-top1-bf16 only supports existing production launch plans",
+        ));
+    }
+    let config = options.config();
+    let policy = options.policy();
+    let store = options.store();
+    let problem = Top1Bf16SearchProblem::row_major(rows, cols);
+    let cached = run_top1_bf16_search(&problem, rows, cols, &options, config, policy, &store)?;
+    let best =
+        cached.result.best.as_ref().ok_or_else(|| {
+            invalid_input("kernel-autotune-top1-bf16 did not produce any candidates")
+        })?;
+
+    println!(
+        "kernel_autotune_top1_bf16 rows={rows} cols={cols} beam_width={} max_depth={} min_score_improvement={} measure={}",
+        options.beam_width, options.max_depth, options.min_score_improvement, options.measure
+    );
+    print_top1_search_result(&cached, policy);
+    emit_top1_requested_artifacts(&store, &problem, best, &cached, config, &options)
 }
 
 pub(crate) fn run_kernel_autotune_tensor_core_space(args: &[String]) -> AppResult<()> {
@@ -276,6 +314,69 @@ fn run_matvec_search(
     )
 }
 
+fn run_top1_bf16_search(
+    problem: &Top1Bf16SearchProblem,
+    rows: usize,
+    cols: usize,
+    options: &AutotuneCliOptions,
+    config: AutoOptimizeConfig,
+    policy: KernelExpansionPolicy,
+    store: &KernelArtifactStore,
+) -> AppResult<CachedAutoOptimizeResult> {
+    let score_namespace = options.score_namespace();
+    if !options.measure {
+        return Ok(auto_optimize_metadata_with_selection_cache_and_policy(
+            store,
+            problem,
+            config,
+            policy,
+            &score_namespace,
+            |candidate| problem.score(candidate),
+        )?);
+    }
+
+    let (stream, module) = cuda_handles()?;
+    let measure_options = KernelAutotuneMeasureOptions {
+        repeat_count: options.measure_repeat_count,
+        warmup_count: options.measure_warmup_count,
+        compile_arch: options.compile_arch.clone(),
+    };
+    let mut bench =
+        Top1Bf16MeasuredAutotuneScorer::new(&stream, &module, rows, cols, measure_options)?;
+    let mut first_measure_error = None;
+    let mut score_cache_error = None;
+    let cached = auto_optimize_metadata_with_selection_cache_and_policy(
+        store,
+        problem,
+        config,
+        policy,
+        &score_namespace,
+        |candidate| {
+            cached_measured_score(
+                store,
+                &score_namespace,
+                candidate,
+                &mut first_measure_error,
+                &mut score_cache_error,
+                |candidate| bench.score_candidate(candidate),
+            )
+        },
+    )?;
+    if let Some(error) = score_cache_error {
+        return Err(invalid_input(format!(
+            "kernel-autotune-top1-bf16 score cache failed: {error}"
+        )));
+    }
+    if cached.result.best.is_none()
+        && let Some(error) = first_measure_error
+    {
+        return Err(invalid_input(format!(
+            "kernel-autotune-top1-bf16 measured search did not produce a candidate; first measurement error: {error}"
+        )));
+    }
+    Ok(cached)
+}
+
 fn finish_measured_search(
     cached: CachedInferenceKernelAutoOptimize,
     score_cache_error: Option<String>,
@@ -316,6 +417,94 @@ fn print_search_result(cached: &CachedInferenceKernelAutoOptimize, policy: Kerne
     for (rank, candidate) in result.beam.iter().enumerate() {
         print_kernel_candidate(rank, candidate);
     }
+}
+
+fn print_top1_search_result(cached: &CachedAutoOptimizeResult, policy: KernelExpansionPolicy) {
+    let result = &cached.result;
+    print_kernel_expansion_policy(policy);
+    println!(
+        "search explored={} rejected={} duplicates={} beam_len={} steps={} exit={}",
+        result.explored,
+        result.rejected,
+        result.duplicates,
+        result.beam.len(),
+        result.steps.len(),
+        result.exit_reason.label()
+    );
+    print_selection_cache_status(&cached.cache_key, &cached.cache_status);
+    if let Some(emitted) = &cached.cache_write {
+        print_selection_cache_write(&cached.cache_key, emitted);
+    }
+    for (rank, candidate) in result.beam.iter().enumerate() {
+        print_kernel_candidate(rank, candidate);
+    }
+}
+
+fn emit_top1_requested_artifacts(
+    store: &KernelArtifactStore,
+    problem: &Top1Bf16SearchProblem,
+    best: &KernelCandidateMetadata,
+    cached: &CachedAutoOptimizeResult,
+    config: AutoOptimizeConfig,
+    options: &AutotuneCliOptions,
+) -> AppResult<()> {
+    if !options.emit {
+        return Ok(());
+    }
+    let emitted = store.emit_metadata(best)?;
+    println!(
+        "emitted_metadata rank=0 artifact_key={} manifest_path={} manifest_bytes={}",
+        emitted.artifact_key.hex(),
+        emitted.paths.manifest_path.display(),
+        emitted.manifest_bytes
+    );
+    let emitted_selection = store.emit_selection_for_candidate(best)?;
+    println!(
+        "emitted_selection rank=0 artifact_key={} selection_path={} selection_bytes={}",
+        emitted_selection.artifact_key,
+        emitted_selection.selection_path.display(),
+        emitted_selection.selection_bytes
+    );
+    let emitted_cached_selection =
+        store.emit_selection_cache_for_candidate(&cached.cache_key, best)?;
+    println!(
+        "emitted_selection_cache cache_key={} artifact_key={} selection_path={} selection_bytes={}",
+        cached.cache_key.hex(),
+        emitted_cached_selection.artifact_key,
+        emitted_cached_selection.selection_path.display(),
+        emitted_cached_selection.selection_bytes
+    );
+    let report = cached.result.auto_optimization_report_with_action_space(
+        problem.family(),
+        config,
+        &problem.search_space(),
+    );
+    let emitted_report = store.emit_auto_search_report(&report)?;
+    println!(
+        "emitted_auto_search_report report_key={} report_path={} report_bytes={} visual_svg_path={} visual_svg_bytes={} visual_html_path={} visual_html_bytes={}",
+        emitted_report.report_key.hex(),
+        emitted_report.report_path.display(),
+        emitted_report.report_bytes,
+        emitted_report
+            .visual_svg_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        emitted_report
+            .visual_svg_bytes
+            .map(|bytes| bytes.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        emitted_report
+            .visual_html_path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        emitted_report
+            .visual_html_bytes
+            .map(|bytes| bytes.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    Ok(())
 }
 
 fn emit_requested_artifacts(

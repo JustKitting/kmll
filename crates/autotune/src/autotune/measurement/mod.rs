@@ -6,6 +6,7 @@ mod gemm;
 mod gemm_launch;
 mod matvec;
 mod matvec_launch;
+mod top1;
 mod validation;
 
 pub use self::{
@@ -13,6 +14,7 @@ pub use self::{
     compile::{CompiledStandaloneKernelCrate, compile_standalone_kernel_crate},
     gemm::GemmF32Bf16MeasuredAutotuneScorer,
     matvec::MatvecBf16MeasuredAutotuneScorer,
+    top1::Top1Bf16MeasuredAutotuneScorer,
 };
 
 pub type KernelAutotuneMeasureResult<T> = Result<T, Box<dyn Error>>;

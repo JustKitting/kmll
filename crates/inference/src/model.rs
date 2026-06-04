@@ -5110,7 +5110,7 @@ pub enum Bf16Top1Plan {
 
 impl Default for Bf16Top1Plan {
     fn default() -> Self {
-        Self::Rows4
+        Self::Rows8
     }
 }
 
@@ -10593,7 +10593,7 @@ fn output_top1_from_hidden_bf16_into(
             partial_logits,
             packed_out,
         )?,
-        Bf16Top1Plan::Rows4 => ops::linear_top1_bf16(
+        Bf16Top1Plan::Rows4 => ops::linear_top1_bf16_rows4(
             stream,
             module,
             normed,

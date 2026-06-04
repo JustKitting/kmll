@@ -91,6 +91,9 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         "kernel-autotune-matvec" | "matvec-autotune" => {
             commands::autotune::run_kernel_autotune_matvec(&args)
         }
+        "kernel-autotune-top1-bf16" | "top1-bf16-autotune" => {
+            commands::autotune::run_kernel_autotune_top1_bf16(&args)
+        }
         "kernel-autotune-tensor-core-space" | "tensor-core-space" => {
             commands::autotune::run_kernel_autotune_tensor_core_space(&args)
         }
@@ -269,7 +272,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         "ministral-chat-exported-compare" => run_ministral_chat_exported_compare(&args),
         "ministral-chat-compare" => run_ministral_chat_compare(&args),
         other => Err(invalid_input(format!(
-            "unknown command {other:?}; expected `smoke`, `smoke-workers`, `gemm-stress`, `kernel-autotune-gemm`, `kernel-autotune-matvec`, `ministral-gemm-stress`, `decode-matvec-bench`, `logit-stress`, `attention-stress`, \
+            "unknown command {other:?}; expected `smoke`, `smoke-workers`, `gemm-stress`, `kernel-autotune-gemm`, `kernel-autotune-matvec`, `kernel-autotune-top1-bf16`, `ministral-gemm-stress`, `decode-matvec-bench`, `logit-stress`, `attention-stress`, \
              `kernel-matvec-instructions`, `kernel-autotune-tensor-core-space`, `kernel-decompile-fixtures`, `kernel-decompile-ptx-probes`, `kernel-decompile-fixture-coverage`, `kernel-decompile-coverage`, `kernel-decompile-coverage-compare`, `kernel-decompile-sass`, `kernel-decompile-autotune-matvec`, `kernel-decompile-autotune-gemm`, `kernel-decompile-autotune-sass`, \
              `ministral-bf16-prefill-bench`, `ministral-bf16-decode-bench`, \
              `ministral-exported-decode-bench`, `ministral-exported-prefill-compare`, \
@@ -1469,7 +1472,7 @@ impl DecodeTop1BenchVariant {
         match self {
             Self::Rows1 => "linear-top1-bf16-rows1-interleaved",
             Self::Rows2 => "linear-top1-bf16-rows2-interleaved",
-            Self::Rows4 => "linear-top1-bf16-interleaved",
+            Self::Rows4 => "linear-top1-bf16-rows4-interleaved",
             Self::Rows8 => "linear-top1-bf16-rows8-interleaved",
         }
     }
@@ -1546,7 +1549,7 @@ fn launch_decode_linear_top1_bf16_variant(
             partial_logits,
             packed,
         )?,
-        DecodeTop1BenchVariant::Rows4 => ops::linear_top1_bf16(
+        DecodeTop1BenchVariant::Rows4 => ops::linear_top1_bf16_rows4(
             stream,
             module,
             input,
@@ -9788,8 +9791,8 @@ fn parse_bf16_top1_plan(value: &str) -> AppResult<Bf16Top1Plan> {
     match value {
         "rows1" | "row1" | "1" => Ok(Bf16Top1Plan::Rows1),
         "rows2" | "row2" | "2" => Ok(Bf16Top1Plan::Rows2),
-        "rows4" | "row4" | "4" | "default" => Ok(Bf16Top1Plan::Rows4),
-        "rows8" | "row8" | "8" => Ok(Bf16Top1Plan::Rows8),
+        "rows4" | "row4" | "4" => Ok(Bf16Top1Plan::Rows4),
+        "rows8" | "row8" | "8" | "default" => Ok(Bf16Top1Plan::Rows8),
         other => Err(invalid_input(format!(
             "unknown BF16 top1 plan {other:?}; expected rows1, rows2, rows4, or rows8"
         ))),

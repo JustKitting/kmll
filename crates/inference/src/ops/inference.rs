@@ -23,6 +23,7 @@ use crate::kernels::inference::*;
 use crate::rowwise_scaled::DeviceRowwiseScaledI8Matrix;
 
 type DefaultMatvecPlan = RowMajorWarpRows4MatvecPlan;
+type DefaultTop1Bf16Plan = RowMajorWarpRows8MatvecPlan;
 type DefaultRmsNormPlan = BlockRmsNorm256Plan;
 type DefaultLogitSelectionPlan = BlockLogitSelection256Plan;
 
@@ -251,7 +252,7 @@ impl CudaLinearWeight for DeviceRowwiseScaledI8Matrix {
 }
 
 pub fn linear_top1_bf16_partial_count(rows: usize) -> usize {
-    DefaultMatvecPlan::grid_rows(rows) as usize
+    RowMajorWarpRowMatvecPlan::grid_rows(rows) as usize
 }
 
 pub fn linear_top1_i8_scaled_partial_count(rows: usize) -> usize {
@@ -274,7 +275,27 @@ pub fn linear_top1_bf16(
     partial_logits: &mut DeviceBuffer<f32>,
     packed_out: &mut DeviceBuffer<u64>,
 ) -> Result<(), DriverError> {
-    linear_top1_bf16_with_plan::<DefaultMatvecPlan>(
+    linear_top1_bf16_with_plan::<DefaultTop1Bf16Plan>(
+        stream,
+        module,
+        input,
+        weight,
+        partial_tokens,
+        partial_logits,
+        packed_out,
+    )
+}
+
+pub fn linear_top1_bf16_rows4(
+    stream: &Arc<CudaStream>,
+    module: &Arc<CudaModule>,
+    input: &DeviceBuffer<f32>,
+    weight: &DeviceBuffer<Bf16>,
+    partial_tokens: &mut DeviceBuffer<u32>,
+    partial_logits: &mut DeviceBuffer<f32>,
+    packed_out: &mut DeviceBuffer<u64>,
+) -> Result<(), DriverError> {
+    linear_top1_bf16_with_plan::<RowMajorWarpRows4MatvecPlan>(
         stream,
         module,
         input,

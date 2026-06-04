@@ -10,6 +10,8 @@ pub(super) const GEMM_USAGE: &str = "kernel-autotune-gemm M N K [--allow-generat
 
 pub(super) const MATVEC_USAGE: &str = "kernel-autotune-matvec ROWS COLS [--allow-generated] [--measure] [--measure-repeat N] [--measure-warmup N] [--emit] [--emit-crate] [--compile] [--compile-arch sm_120] [--beam-width N] [--max-depth N] [--min-score-improvement VALUE] [--max-threads-per-block N|none] [--max-shared-memory-bytes N|none] [--max-accumulator-elements-per-thread N|none] [--max-output-elements-per-thread N|none] [--max-load-elements-per-block N|none] [--artifact-root PATH]";
 
+pub(super) const TOP1_USAGE: &str = "kernel-autotune-top1-bf16 ROWS COLS [--measure] [--measure-repeat N] [--measure-warmup N] [--emit] [--beam-width N] [--max-depth N] [--min-score-improvement VALUE] [--artifact-root PATH]";
+
 #[derive(Debug, Clone)]
 pub(super) struct AutotuneCliOptions {
     pub(super) beam_width: usize,
