@@ -1,34 +1,31 @@
-use super::super::super::sass::SassInstruction;
-use super::super::types::{KernelIrOpKind, SassMappingConfidence, SassOpcode, SassOpcodeKind};
+use super::super::types::{
+    AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassOpcode, SassOpcodeKind,
+};
 use super::{
     LiftResult,
     operands::{
-        map_register_register_operands, map_register_scalar_operands, register_operand,
-        scalar_inputs,
+        map_register_register_operands, map_register_scalar_operands, operand_tail,
+        register_operand, scalar_inputs,
     },
 };
 
-pub(super) fn lift(
-    opcode: &SassOpcode,
-    instruction: &SassInstruction,
-    operands: &[String],
-) -> Option<LiftResult> {
+pub(super) fn lift(opcode: &SassOpcode, operands: &[AggregateOperand]) -> Option<LiftResult> {
     Some(match opcode.kind() {
         SassOpcodeKind::Cs2r | SassOpcodeKind::S2r | SassOpcodeKind::S2ur => {
-            map_register_register_operands(opcode, instruction, |dst, special| {
+            map_register_register_operands(opcode, operands, |dst, special| {
                 KernelIrOpKind::ReadSpecialRegister { dst, special }
             })
         }
         SassOpcodeKind::Mov | SassOpcodeKind::Umov => {
-            map_register_scalar_operands(opcode, instruction, |dst, src| KernelIrOpKind::Move {
+            map_register_scalar_operands(opcode, operands, |dst, src| KernelIrOpKind::Move {
                 dst,
                 src,
             })
         }
         SassOpcodeKind::Prmt => (
             KernelIrOpKind::Permute {
-                dst: register_operand(operands.first().map(String::as_str).unwrap_or_default()),
-                inputs: scalar_inputs(&operands.iter().skip(1).cloned().collect::<Vec<_>>()),
+                dst: register_operand(operands.first()),
+                inputs: scalar_inputs(operand_tail(operands)),
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),

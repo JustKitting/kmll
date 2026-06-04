@@ -1,7 +1,7 @@
 use super::super::SassTarget;
 use super::super::sass::{SassInstruction, SassModule};
 use super::{
-    opcodes::{SassLiftInput, aggregate_operands, lift_kind, predicate_condition, raw_operands},
+    opcodes::{SassLiftInput, aggregate_operands, lift_kind, predicate_condition},
     types::{KernelIrFunction, KernelIrModule, KernelIrOp, SassModifier, SassOpcode, SassSymbol},
 };
 
@@ -22,7 +22,6 @@ pub fn lift_sass_module(module: &SassModule) -> KernelIrModule {
 fn lift_instruction(instruction: &SassInstruction) -> KernelIrOp {
     let source_opcode = SassOpcode::new(instruction.opcode.clone());
     let source_operands = aggregate_operands(instruction);
-    let raw_operands = raw_operands(instruction);
     let source_modifiers = instruction
         .modifiers
         .iter()
@@ -32,7 +31,6 @@ fn lift_instruction(instruction: &SassInstruction) -> KernelIrOp {
         instruction,
         opcode: &source_opcode,
         modifiers: &source_modifiers,
-        raw_operands: &raw_operands,
         aggregate_operands: &source_operands,
     };
     let (kind, confidence) = lift_kind(&lift_input);

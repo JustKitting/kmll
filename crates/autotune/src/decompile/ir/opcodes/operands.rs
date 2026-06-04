@@ -2,18 +2,11 @@ use super::super::super::sass::{
     RegisterClass, SassInstruction, SassOperandKind, SassPredicate, SassRegister, label_in_text,
 };
 use super::super::types::{
-    AggregateOperand, ControlTarget, KernelIrOpKind, PredicateCondition, RegisterRef,
-    SassMappingConfidence, SassOpcode, SassUnsupportedReason, ScalarOperand,
+    AggregateOperand, AggregateOperandKind, ControlTarget, KernelIrOpKind, PredicateCondition,
+    RegisterRef, SassMappingConfidence, SassOpcode, SassUnsupportedReason, ScalarOperand,
+    ScalarOperandKind,
 };
 use super::LiftResult;
-
-pub(super) fn raw_operands(instruction: &SassInstruction) -> Vec<String> {
-    instruction
-        .operands
-        .iter()
-        .map(|operand| operand.raw.clone())
-        .collect()
-}
 
 pub(super) fn aggregate_operands(instruction: &SassInstruction) -> Vec<AggregateOperand> {
     instruction
@@ -23,99 +16,127 @@ pub(super) fn aggregate_operands(instruction: &SassInstruction) -> Vec<Aggregate
         .collect()
 }
 
-pub(super) fn register_operand(raw: &str) -> RegisterRef {
-    RegisterRef::parse(raw.to_string())
+pub(super) fn register_operand(operand: Option<&AggregateOperand>) -> RegisterRef {
+    match operand {
+        Some(AggregateOperand {
+            kind: AggregateOperandKind::Register(register),
+            ..
+        }) => register.clone(),
+        Some(operand) => RegisterRef::parse(operand.raw.clone()),
+        None => RegisterRef::parse(String::new()),
+    }
 }
 
-pub(super) fn scalar_operand(raw: &str) -> ScalarOperand {
-    ScalarOperand::parse(raw.to_string())
+pub(super) fn scalar_operand(operand: Option<&AggregateOperand>) -> ScalarOperand {
+    match operand {
+        Some(AggregateOperand {
+            kind: AggregateOperandKind::Register(register),
+            raw,
+        }) => ScalarOperand {
+            kind: ScalarOperandKind::Register(register.clone()),
+            raw: raw.clone(),
+        },
+        Some(AggregateOperand {
+            kind: AggregateOperandKind::Immediate(immediate),
+            raw,
+        }) => ScalarOperand {
+            kind: ScalarOperandKind::Immediate(immediate.clone()),
+            raw: raw.clone(),
+        },
+        Some(operand) => ScalarOperand::parse(operand.raw.clone()),
+        None => ScalarOperand::parse(String::new()),
+    }
 }
 
-pub(super) fn scalar_inputs(operands: &[String]) -> Vec<ScalarOperand> {
+pub(super) fn scalar_inputs(operands: &[AggregateOperand]) -> Vec<ScalarOperand> {
     operands
         .iter()
-        .map(|operand| scalar_operand(operand))
+        .map(|operand| scalar_operand(Some(operand)))
         .collect()
+}
+
+pub(super) fn operand_tail(operands: &[AggregateOperand]) -> &[AggregateOperand] {
+    operands.get(1..).unwrap_or(&[])
 }
 
 pub(super) fn map_register_register_operands(
     opcode: &SassOpcode,
-    instruction: &SassInstruction,
+    operands: &[AggregateOperand],
     f: impl FnOnce(RegisterRef, RegisterRef) -> KernelIrOpKind,
 ) -> LiftResult {
-    if instruction.operands.len() == 2 {
+    if operands.len() == 2 {
         (
             f(
-                register_operand(&instruction.operands[0].raw),
-                register_operand(&instruction.operands[1].raw),
+                register_operand(operands.first()),
+                register_operand(operands.get(1)),
             ),
             SassMappingConfidence::OpcodeHeuristic,
         )
     } else {
-        unsupported_arity(opcode, instruction, 2)
+        unsupported_arity(opcode, operands.len(), 2)
     }
 }
 
 pub(super) fn map_register_scalar_operands(
     opcode: &SassOpcode,
-    instruction: &SassInstruction,
+    operands: &[AggregateOperand],
     f: impl FnOnce(RegisterRef, ScalarOperand) -> KernelIrOpKind,
 ) -> LiftResult {
-    if instruction.operands.len() == 2 {
+    if operands.len() == 2 {
         (
             f(
-                register_operand(&instruction.operands[0].raw),
-                scalar_operand(&instruction.operands[1].raw),
+                register_operand(operands.first()),
+                scalar_operand(operands.get(1)),
             ),
             SassMappingConfidence::OpcodeHeuristic,
         )
     } else {
-        unsupported_arity(opcode, instruction, 2)
+        unsupported_arity(opcode, operands.len(), 2)
     }
 }
 
 pub(super) fn map_register_two_scalar_operands(
     opcode: &SassOpcode,
-    instruction: &SassInstruction,
+    operands: &[AggregateOperand],
     f: impl FnOnce(RegisterRef, ScalarOperand, ScalarOperand) -> KernelIrOpKind,
 ) -> LiftResult {
-    if instruction.operands.len() == 3 {
+    if operands.len() == 3 {
         (
             f(
-                register_operand(&instruction.operands[0].raw),
-                scalar_operand(&instruction.operands[1].raw),
-                scalar_operand(&instruction.operands[2].raw),
+                register_operand(operands.first()),
+                scalar_operand(operands.get(1)),
+                scalar_operand(operands.get(2)),
             ),
             SassMappingConfidence::OpcodeHeuristic,
         )
     } else {
-        unsupported_arity(opcode, instruction, 3)
+        unsupported_arity(opcode, operands.len(), 3)
     }
 }
 
 pub(super) fn map_register_three_scalar_operands(
     opcode: &SassOpcode,
-    instruction: &SassInstruction,
+    operands: &[AggregateOperand],
     f: impl FnOnce(RegisterRef, ScalarOperand, ScalarOperand, ScalarOperand) -> KernelIrOpKind,
 ) -> LiftResult {
-    if instruction.operands.len() >= 4 {
+    if operands.len() >= 4 {
         (
             f(
-                register_operand(&instruction.operands[0].raw),
-                scalar_operand(&instruction.operands[1].raw),
-                scalar_operand(&instruction.operands[2].raw),
-                scalar_operand(&instruction.operands[3].raw),
+                register_operand(operands.first()),
+                scalar_operand(operands.get(1)),
+                scalar_operand(operands.get(2)),
+                scalar_operand(operands.get(3)),
             ),
             SassMappingConfidence::OpcodeHeuristic,
         )
     } else {
-        unsupported_arity(opcode, instruction, 4)
+        unsupported_arity(opcode, operands.len(), 4)
     }
 }
 
 pub(super) fn map_warp_shuffle_operands(
     opcode: &SassOpcode,
-    instruction: &SassInstruction,
+    operands: &[AggregateOperand],
     f: impl FnOnce(
         RegisterRef,
         RegisterRef,
@@ -124,34 +145,27 @@ pub(super) fn map_warp_shuffle_operands(
         ScalarOperand,
     ) -> KernelIrOpKind,
 ) -> LiftResult {
-    if instruction.operands.len() >= 5 {
+    if operands.len() >= 5 {
         (
             f(
-                register_operand(&instruction.operands[0].raw),
-                register_operand(&instruction.operands[1].raw),
-                scalar_operand(&instruction.operands[2].raw),
-                scalar_operand(&instruction.operands[3].raw),
-                scalar_operand(&instruction.operands[4].raw),
+                register_operand(operands.first()),
+                register_operand(operands.get(1)),
+                scalar_operand(operands.get(2)),
+                scalar_operand(operands.get(3)),
+                scalar_operand(operands.get(4)),
             ),
             SassMappingConfidence::OpcodeHeuristic,
         )
     } else {
-        unsupported_arity(opcode, instruction, 5)
+        unsupported_arity(opcode, operands.len(), 5)
     }
 }
 
-pub(super) fn unsupported_arity(
-    opcode: &SassOpcode,
-    instruction: &SassInstruction,
-    expected: usize,
-) -> LiftResult {
+pub(super) fn unsupported_arity(opcode: &SassOpcode, actual: usize, expected: usize) -> LiftResult {
     (
         KernelIrOpKind::Unsupported {
             opcode: opcode.clone(),
-            reason: SassUnsupportedReason::at_least_operand_arity(
-                expected,
-                instruction.operands.len(),
-            ),
+            reason: SassUnsupportedReason::at_least_operand_arity(expected, actual),
         },
         SassMappingConfidence::Unsupported,
     )

@@ -1,6 +1,6 @@
 use super::super::types::{
-    KernelIrOpKind, SassCompareDType, SassComparisonKind, SassMappingConfidence, SassModifier,
-    SassModifierKind, SassOpcode, SassOpcodeKind,
+    AggregateOperand, KernelIrOpKind, SassCompareDType, SassComparisonKind, SassMappingConfidence,
+    SassModifier, SassModifierKind, SassOpcode, SassOpcodeKind,
 };
 use super::{
     LiftResult,
@@ -10,18 +10,18 @@ use super::{
 pub(super) fn lift(
     opcode: &SassOpcode,
     modifiers: &[SassModifier],
-    operands: &[String],
+    operands: &[AggregateOperand],
 ) -> Option<LiftResult> {
     Some(match opcode.kind() {
         SassOpcodeKind::Isetp | SassOpcodeKind::Uisetp | SassOpcodeKind::Fsetp => (
             KernelIrOpKind::CompareSet {
-                dst: register_operand(operands.first().map(String::as_str).unwrap_or_default()),
+                dst: register_operand(operands.first()),
                 comparison: modifiers.first().map(comparison_kind),
                 dtype: modifiers
                     .iter()
                     .find_map(|modifier| compare_dtype(modifier.kind())),
-                lhs: scalar_operand(operands.get(2).map(String::as_str).unwrap_or_default()),
-                rhs: scalar_operand(operands.get(3).map(String::as_str).unwrap_or_default()),
+                lhs: scalar_operand(operands.get(2)),
+                rhs: scalar_operand(operands.get(3)),
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
