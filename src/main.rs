@@ -3481,22 +3481,11 @@ fn run_linear_batched_bf16_stress_case(
         &mut seed,
     );
 
-    let expected = cpu_batched_linear_bf16_reference(
-        &input,
-        &input_layout,
-        &weight,
-        &weight_layout,
-        batch,
-        output_dim,
-        input_dim,
-    );
-
     let dev_input = DeviceBuffer::from_host(stream, &input)?;
     let dev_weight = DeviceBuffer::from_host(stream, &weight)?;
     let mut dev_output = DeviceBuffer::from_host(stream, &output)?;
-    ops::linear_batched_bf16(
+    let used_tensor_core = ops::try_linear_batched_bf16_tensor_core_tf32(
         stream,
-        module,
         &dev_input,
         &dev_weight,
         batch,
@@ -3504,6 +3493,39 @@ fn run_linear_batched_bf16_stress_case(
         output_dim,
         &mut dev_output,
     )?;
+    if !used_tensor_core {
+        ops::linear_batched_bf16(
+            stream,
+            module,
+            &dev_input,
+            &dev_weight,
+            batch,
+            input_dim,
+            output_dim,
+            &mut dev_output,
+        )?;
+    }
+    let expected = if used_tensor_core {
+        cpu_batched_linear_bf16_tf32_reference(
+            &input,
+            &input_layout,
+            &weight,
+            &weight_layout,
+            batch,
+            output_dim,
+            input_dim,
+        )
+    } else {
+        cpu_batched_linear_bf16_reference(
+            &input,
+            &input_layout,
+            &weight,
+            &weight_layout,
+            batch,
+            output_dim,
+            input_dim,
+        )
+    };
     let actual = dev_output.to_host_vec(stream)?;
 
     compare_gemm_output(
@@ -3627,7 +3649,7 @@ fn run_linear_qkv_batched_bf16_stress_case(
         &mut seed,
     );
 
-    let expected_query = cpu_batched_linear_bf16_reference(
+    let expected_query = cpu_batched_linear_bf16_tf32_reference(
         &input,
         &input_layout,
         &wq,
@@ -3636,7 +3658,7 @@ fn run_linear_qkv_batched_bf16_stress_case(
         q_output_dim,
         input_dim,
     );
-    let expected_key = cpu_batched_linear_bf16_reference(
+    let expected_key = cpu_batched_linear_bf16_tf32_reference(
         &input,
         &input_layout,
         &wk,
@@ -3645,7 +3667,7 @@ fn run_linear_qkv_batched_bf16_stress_case(
         kv_output_dim,
         input_dim,
     );
-    let expected_value = cpu_batched_linear_bf16_reference(
+    let expected_value = cpu_batched_linear_bf16_tf32_reference(
         &input,
         &input_layout,
         &wv,
@@ -3790,6 +3812,44 @@ fn run_silu_gate_up_via_gemm_stress_case(
         output_dim,
         &mut dev_up,
     )?;
+    let actual_gate = dev_gate.to_host_vec(stream)?;
+    let actual_up = dev_up.to_host_vec(stream)?;
+    let expected_gate = cpu_batched_linear_bf16_reference(
+        &input,
+        &input_layout,
+        &gate_weight,
+        &weight_layout,
+        batch,
+        output_dim,
+        input_dim,
+    );
+    let expected_up = cpu_batched_linear_bf16_reference(
+        &input,
+        &input_layout,
+        &up_weight,
+        &weight_layout,
+        batch,
+        output_dim,
+        input_dim,
+    );
+    compare_gemm_output(
+        &format!("{label}-gate-linear"),
+        &actual_gate,
+        &expected_gate,
+        &output_layout,
+        batch,
+        output_dim,
+        input_dim,
+    )?;
+    compare_gemm_output(
+        &format!("{label}-up-linear"),
+        &actual_up,
+        &expected_up,
+        &output_layout,
+        batch,
+        output_dim,
+        input_dim,
+    )?;
     ops::silu_mul_prefix(
         stream,
         module,
@@ -3799,8 +3859,18 @@ fn run_silu_gate_up_via_gemm_stress_case(
         &mut dev_output,
     )?;
     let actual = dev_output.to_host_vec(stream)?;
-
+    let expected_from_actual_linear = cpu_silu_mul_reference(&actual_gate, &actual_up);
     compare_gemm_output(
+        &format!("{label}-activation-from-gpu-linear"),
+        &actual,
+        &expected_from_actual_linear,
+        &output_layout,
+        batch,
+        output_dim,
+        input_dim,
+    )?;
+
+    compare_silu_gate_up_composed_output(
         label,
         &actual,
         &expected,
@@ -3808,6 +3878,10 @@ fn run_silu_gate_up_via_gemm_stress_case(
         batch,
         output_dim,
         input_dim,
+        &actual_gate,
+        &actual_up,
+        &expected_gate,
+        &expected_up,
     )
 }
 
@@ -4237,6 +4311,62 @@ fn compare_gemm_output<L: Layout2D>(
     })
 }
 
+fn compare_silu_gate_up_composed_output<L: Layout2D>(
+    label: &str,
+    actual: &[f32],
+    expected: &[f32],
+    c_layout: &MatrixLayout<L>,
+    m: usize,
+    n: usize,
+    k: usize,
+    actual_gate: &[f32],
+    actual_up: &[f32],
+    expected_gate: &[f32],
+    expected_up: &[f32],
+) -> AppResult<GemmStressStats> {
+    let mut max_abs_diff = 0.0_f32;
+    let mut sum_abs_diff = 0.0_f64;
+    let mut element_count = 0usize;
+    let mut max_row = 0usize;
+    let mut max_col = 0usize;
+    let mut max_offset = 0usize;
+    for row in 0..m {
+        for col in 0..n {
+            let offset = c_layout.offset(row, col);
+            let diff = (actual[offset] - expected[offset]).abs();
+            if diff > max_abs_diff {
+                max_abs_diff = diff;
+                max_row = row;
+                max_col = col;
+                max_offset = offset;
+            }
+            sum_abs_diff += diff as f64;
+            element_count += 1;
+        }
+    }
+
+    let tolerance = 1.0e-4_f32 * (k.max(1) as f32).sqrt();
+    if max_abs_diff > tolerance {
+        return Err(invalid_data(format!(
+            "GEMM stress {label} {m}x{k} * {k}x{n} failed: max_abs_diff={max_abs_diff:.8}, tolerance={tolerance:.8}, row={max_row}, col={max_col}, actual={:.8}, expected={:.8}, actual_gate={:.8}, expected_gate={:.8}, gate_diff={:.8}, actual_up={:.8}, expected_up={:.8}, up_diff={:.8}",
+            actual[max_offset],
+            expected[max_offset],
+            actual_gate[max_offset],
+            expected_gate[max_offset],
+            actual_gate[max_offset] - expected_gate[max_offset],
+            actual_up[max_offset],
+            expected_up[max_offset],
+            actual_up[max_offset] - expected_up[max_offset],
+        )));
+    }
+
+    Ok(GemmStressStats {
+        element_count,
+        max_abs_diff,
+        sum_abs_diff,
+    })
+}
+
 fn compare_attention_output(
     split: &[f32],
     fused: &[f32],
@@ -4443,7 +4573,7 @@ fn cpu_gemm_bf16_reference<ALayout, BLayout, CLayout>(
     out
 }
 
-fn cpu_batched_linear_bf16_reference(
+fn cpu_batched_linear_bf16_tf32_reference(
     input: &[f32],
     input_layout: &MatrixLayout<RowMajor>,
     weight: &[Bf16],
@@ -4456,11 +4586,22 @@ fn cpu_batched_linear_bf16_reference(
     let mut out = vec![0.0_f32; output_layout.capacity()];
     for row in 0..batch {
         for col in 0..output_dim {
-            let mut acc = 0.0_f32;
-            for kk in 0..input_dim {
-                acc += input[input_layout.offset(row, kk)]
-                    * weight[weight_layout.offset(col, kk)].to_f32();
+            let mut component_acc = [0.0_f32; 3];
+            let mut k_base = 0;
+            while k_base < input_dim {
+                let k_end = (k_base + 8).min(input_dim);
+                for component in 0..3 {
+                    for kk in k_base..k_end {
+                        let input_parts =
+                            decompose_f32_to_tf32_parts(input[input_layout.offset(row, kk)]);
+                        let weight_value =
+                            round_f32_to_tf32(weight[weight_layout.offset(col, kk)].to_f32());
+                        component_acc[component] += input_parts[component] * weight_value;
+                    }
+                }
+                k_base += 8;
             }
+            let acc = (component_acc[0] + component_acc[1]) + component_acc[2];
             out[output_layout.offset(row, col)] = acc;
         }
     }
@@ -4482,6 +4623,30 @@ fn cpu_batched_linear_i8_scaled_reference(
             let mut acc = 0.0_f32;
             for kk in 0..input_dim {
                 acc += input[input_layout.offset(row, kk)] * weight.scaled_value(col, kk);
+            }
+            out[output_layout.offset(row, col)] = acc;
+        }
+    }
+    out
+}
+
+fn cpu_batched_linear_bf16_reference(
+    input: &[f32],
+    input_layout: &MatrixLayout<RowMajor>,
+    weight: &[Bf16],
+    weight_layout: &MatrixLayout<RowMajor>,
+    batch: usize,
+    output_dim: usize,
+    input_dim: usize,
+) -> Vec<f32> {
+    let output_layout = MatrixLayout::<RowMajor>::packed(batch, output_dim);
+    let mut out = vec![0.0_f32; output_layout.capacity()];
+    for row in 0..batch {
+        for col in 0..output_dim {
+            let mut acc = 0.0_f32;
+            for kk in 0..input_dim {
+                acc += input[input_layout.offset(row, kk)]
+                    * weight[weight_layout.offset(col, kk)].to_f32();
             }
             out[output_layout.offset(row, col)] = acc;
         }
@@ -4514,6 +4679,30 @@ fn cpu_batched_silu_gate_up_bf16_reference(
         }
     }
     out
+}
+
+fn round_f32_to_tf32(value: f32) -> f32 {
+    if !value.is_finite() {
+        return value;
+    }
+    let bits = value.to_bits();
+    let rounded = bits.wrapping_add(0x0000_0fff + ((bits >> 13) & 1));
+    f32::from_bits(rounded & 0xffff_e000)
+}
+
+fn decompose_f32_to_tf32_parts(value: f32) -> [f32; 3] {
+    let high = round_f32_to_tf32(value);
+    let residual = value - high;
+    let mid = round_f32_to_tf32(residual);
+    let low = round_f32_to_tf32(residual - mid);
+    [high, mid, low]
+}
+
+fn cpu_silu_mul_reference(gate: &[f32], up: &[f32]) -> Vec<f32> {
+    gate.iter()
+        .zip(up)
+        .map(|(&gate, &up)| gate / (1.0 + (-gate).exp()) * up)
+        .collect()
 }
 
 fn cpu_linear_residual_bf16_reference(

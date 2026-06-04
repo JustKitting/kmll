@@ -4,6 +4,8 @@ target/
 # Managed cuda-oxide outputs live under target/cuda-oxide/.
 # Keep these wildcards for accidental source-adjacent outputs.
 *.ptx
+!crates/inference/src/ops/ptx/
+!crates/inference/src/ops/ptx/*.ptx
 *.ll
 *.ltoir
 *.cubin

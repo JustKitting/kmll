@@ -2,6 +2,7 @@ pub mod activation;
 pub mod inference;
 pub mod matmul;
 pub mod qwen;
+mod tensor_core_matmul;
 pub mod vector;
 
 pub use activation::{relu, swiglu};
@@ -16,7 +17,8 @@ pub use inference::{
     linear_triple_bf16, prefill_causal_attention, prepare_incremental_attention,
     prepare_prefill_attention_batch, rmsnorm, rmsnorm_batched_bf16, sigmoid_mul, silu_gate_up_bf16,
     silu_gate_up_bf16_rows8, silu_mul, silu_mul_prefix, single_query_attention, single_token_gqa,
-    softmax_value, softmax_value_to_matrix_row, top_k_f32, write_kv_cache,
+    softmax_value, softmax_value_to_matrix_row, top_k_f32,
+    try_linear_batched_bf16_tensor_core_tf32, write_kv_cache,
 };
 pub use matmul::{
     gemm_f32, gemm_f32_bf16, gemm_f32_bf16_prefix, gemm_f32_i8_scaled_prefix,

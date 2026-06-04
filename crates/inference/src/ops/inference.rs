@@ -979,6 +979,37 @@ pub fn linear_batched_bf16(
     output_dim: usize,
     output: &mut DeviceBuffer<f32>,
 ) -> Result<(), DriverError> {
+    validate_linear_batched_bf16(input, weight, batch, input_dim, output_dim, output);
+
+    super::matmul::gemm_f32_bf16_prefix::<RowMajor, ColumnMajor, RowMajor>(
+        stream, module, input, weight, output, batch, output_dim, input_dim, 1.0, 0.0,
+    )
+}
+
+pub fn try_linear_batched_bf16_tensor_core_tf32(
+    stream: &Arc<CudaStream>,
+    input: &DeviceBuffer<f32>,
+    weight: &DeviceBuffer<Bf16>,
+    batch: usize,
+    input_dim: usize,
+    output_dim: usize,
+    output: &mut DeviceBuffer<f32>,
+) -> Result<bool, DriverError> {
+    validate_linear_batched_bf16(input, weight, batch, input_dim, output_dim, output);
+
+    super::tensor_core_matmul::try_linear_batched_bf16_tf32(
+        stream, input, weight, batch, input_dim, output_dim, output,
+    )
+}
+
+fn validate_linear_batched_bf16(
+    input: &DeviceBuffer<f32>,
+    weight: &DeviceBuffer<Bf16>,
+    batch: usize,
+    input_dim: usize,
+    output_dim: usize,
+    output: &DeviceBuffer<f32>,
+) {
     let input_len = batch
         .checked_mul(input_dim)
         .expect("batched linear input shape overflow");
@@ -1004,10 +1035,6 @@ pub fn linear_batched_bf16(
         output.len(),
         output_len
     );
-
-    super::matmul::gemm_f32_bf16_prefix::<RowMajor, ColumnMajor, RowMajor>(
-        stream, module, input, weight, output, batch, output_dim, input_dim, 1.0, 0.0,
-    )
 }
 
 pub fn silu_mul(

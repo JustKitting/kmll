@@ -351,42 +351,73 @@ pub fn linear_qkv_batched_bf16(
         kv_output_len
     );
 
-    gemm_f32_bf16_prefix::<RowMajor, ColumnMajor, RowMajor>(
+    if !super::tensor_core_matmul::try_linear_batched_bf16_tf32(
         stream,
-        module,
         input,
         wq,
-        query_out,
         batch,
-        q_output_dim,
         input_dim,
-        1.0,
-        0.0,
-    )?;
-    gemm_f32_bf16_prefix::<RowMajor, ColumnMajor, RowMajor>(
+        q_output_dim,
+        query_out,
+    )? {
+        gemm_f32_bf16_prefix::<RowMajor, ColumnMajor, RowMajor>(
+            stream,
+            module,
+            input,
+            wq,
+            query_out,
+            batch,
+            q_output_dim,
+            input_dim,
+            1.0,
+            0.0,
+        )?;
+    }
+    if !super::tensor_core_matmul::try_linear_batched_bf16_tf32(
         stream,
-        module,
         input,
         wk,
-        key_out,
         batch,
-        kv_output_dim,
         input_dim,
-        1.0,
-        0.0,
-    )?;
-    gemm_f32_bf16_prefix::<RowMajor, ColumnMajor, RowMajor>(
+        kv_output_dim,
+        key_out,
+    )? {
+        gemm_f32_bf16_prefix::<RowMajor, ColumnMajor, RowMajor>(
+            stream,
+            module,
+            input,
+            wk,
+            key_out,
+            batch,
+            kv_output_dim,
+            input_dim,
+            1.0,
+            0.0,
+        )?;
+    }
+    if !super::tensor_core_matmul::try_linear_batched_bf16_tf32(
         stream,
-        module,
         input,
         wv,
-        value_out,
         batch,
-        kv_output_dim,
         input_dim,
-        1.0,
-        0.0,
-    )
+        kv_output_dim,
+        value_out,
+    )? {
+        gemm_f32_bf16_prefix::<RowMajor, ColumnMajor, RowMajor>(
+            stream,
+            module,
+            input,
+            wv,
+            value_out,
+            batch,
+            kv_output_dim,
+            input_dim,
+            1.0,
+            0.0,
+        )?;
+    }
+    Ok(())
 }
 
 pub fn linear_batched_i8_scaled(
