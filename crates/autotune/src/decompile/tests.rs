@@ -628,6 +628,63 @@ fn generated_gemm_sass_routes_to_autotune_and_recompiles_best() {
     cleanup_decompile_autotune_test_root(&root);
 }
 
+#[test]
+#[ignore = "writes external SASS, autotunes from it, and recompiles best candidate"]
+fn external_sass_file_routes_to_autotune_and_recompiles_best() {
+    let root = decompile_autotune_test_root();
+    let sass_path = root.join("external-scalar-gemm.sass");
+    fs::create_dir_all(&root).expect("test root should be creatable");
+    fs::write(&sass_path, SCALAR_GEMM_SLICE).expect("external SASS fixture should be writable");
+
+    let report = run_decompile_autotune_sass(&DecompileAutotuneSassOptions {
+        sass_path: sass_path.clone(),
+        source_path: None,
+        output_dir: None,
+        artifact_root: root.clone(),
+        compile_arch: "sm_120".to_string(),
+        function_symbol: Some("scalar_gemm_fixture".to_string()),
+        shape: DecompiledAutotuneShape::GemmF32Bf16RowColRow {
+            m: 64,
+            n: 64,
+            k: 128,
+        },
+        config: AutoOptimizeConfig {
+            beam_width: 3,
+            max_steps: 1,
+            require_launchable: false,
+            min_score_improvement: 0.0,
+        },
+    })
+    .expect("external SASS should route into autotune and recompile");
+
+    assert!(report.sass_path.is_absolute());
+    assert_eq!(
+        report.sass_path.file_name().and_then(|name| name.to_str()),
+        Some("external-scalar-gemm.sass")
+    );
+    assert_eq!(report.function_symbol, "scalar_gemm_fixture");
+    assert!(report.output_dir.starts_with(&root));
+    assert!(report.ir_path.exists());
+    assert!(report.pattern_path.exists());
+    assert!(report.side_by_side_path.exists());
+    assert!(report.evidence.supports_f32_bf16_row_col_row_gemm());
+    assert_eq!(report.unsupported_instruction_count, 0);
+    assert!(report.optimized_source_path.exists());
+    assert!(report.optimized_ptx_path.exists());
+    assert!(report.optimized_cubin_path.exists());
+    assert!(report.optimized_sass_path.exists());
+    assert!(report.optimized_ir_path.exists());
+    assert!(report.optimized_pattern_path.exists());
+    assert!(
+        report
+            .optimized_evidence
+            .supports_f32_bf16_row_col_row_gemm()
+    );
+    assert_eq!(report.optimized_unsupported_instruction_count, 0);
+    assert_eq!(report.best_action_ops, vec!["local-tile"]);
+    cleanup_decompile_autotune_test_root(&root);
+}
+
 const CFG_SASS: &str = r#"
         .target sm_120
 
