@@ -1596,6 +1596,12 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     );
     assert!(
         report
+            .cfg_blocks
+            .iter()
+            .any(|block| block.label == Some(SassSymbol::new(".L_x_0")))
+    );
+    assert!(
+        report
             .opcode_counts
             .iter()
             .any(|count| count.opcode == SassOpcode::new("MYSTERY") && count.count == 1)
