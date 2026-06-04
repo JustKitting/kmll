@@ -244,6 +244,29 @@ pub(super) const TENSOR_CORE_WGMMA_QGMMA_PTX: &str = r#".version 8.7
 }
 "#;
 
+pub(super) const WARP_GROUP_REGISTER_SET_PTX: &str = r#".version 8.7
+.target sm_90a
+.address_size 64
+
+.visible .entry warpgroup_register_set_probe(
+    .param .u64 warpgroup_register_set_probe_out
+)
+.maxntid 384, 1, 1
+.minnctapersm 1
+{
+    .reg .b32 %r<4>;
+    .reg .b64 %rd<2>;
+
+    ld.param.u64 %rd0, [warpgroup_register_set_probe_out];
+
+    mov.u32 %r0, 1;
+    setmaxnreg.inc.sync.aligned.u32 232;
+    setmaxnreg.dec.sync.aligned.u32 40;
+    st.global.u32 [%rd0], %r0;
+    ret;
+}
+"#;
+
 pub(super) const SCALAR_MEMORY_LOGIC_PTX: &str = r#".version 8.0
 .target sm_75
 .address_size 64

@@ -57,7 +57,7 @@ pub(super) fn lift(
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
-        SassOpcodeKind::Warpgroup | SassOpcodeKind::Warpgroupset => (
+        SassOpcodeKind::Usetmaxreg | SassOpcodeKind::Warpgroup | SassOpcodeKind::Warpgroupset => (
             KernelIrOpKind::WarpGroup {
                 opcode: opcode.clone(),
                 operands,

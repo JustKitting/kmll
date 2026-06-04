@@ -407,7 +407,7 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
         WarpGroupControl
     ),
     nvidia_mapped_on!(
-        Warpgroupset,
+        Usetmaxreg,
         [SassArchitecture::sm(90), SassArchitecture::sm_a(90)],
         WarpGroup,
         WarpGroupControl

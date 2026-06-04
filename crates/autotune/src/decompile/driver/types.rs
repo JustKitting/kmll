@@ -103,6 +103,7 @@ impl DecompilePtxProbeOptions {
                 PtxDecompileProbeKind::TensorCoreWgmmaHgmma,
                 PtxDecompileProbeKind::TensorCoreWgmmaIgmma,
                 PtxDecompileProbeKind::TensorCoreWgmmaQgmma,
+                PtxDecompileProbeKind::WarpGroupRegisterSet,
                 PtxDecompileProbeKind::ScalarMemoryLogic,
                 PtxDecompileProbeKind::ArchitectureSm90Scalar,
                 PtxDecompileProbeKind::ScalarMemoryAtomic,

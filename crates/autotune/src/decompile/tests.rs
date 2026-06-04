@@ -437,7 +437,8 @@ tensor_core_fixture:
         /*0010*/                   LDT R2, tmem[UR4] ;                           /* 0x0 */
         /*0020*/                   UTMALDG desc[UR8][R0.64], R2 ;                /* 0x0 */
         /*0030*/                   WARPGROUP ;                                   /* 0x0 */
-        /*0040*/                   EXIT ;                                        /* 0x0 */
+        /*0040*/                   USETMAXREG.TRY_ALLOC.CTAPOOL UP0, 0xe8 ;      /* 0x0 */
+        /*0050*/                   EXIT ;                                        /* 0x0 */
 "#;
 
 const TENSOR_CORE_DTYPE_SASS: &str = r#"
@@ -1785,6 +1786,12 @@ fn lift_tensor_core_sass_keeps_known_op_families_typed() {
         KernelIrOpKind::WarpGroup { opcode, operands }
             if opcode == &SassOpcode::new("WARPGROUP") && operands.is_empty()
     ));
+    assert!(matches!(
+        &function.ops[4].kind,
+        KernelIrOpKind::WarpGroup { opcode, operands }
+            if opcode == &SassOpcode::new("USETMAXREG")
+                && aggregate_texts(operands).as_slice() == ["UP0", "0xe8"]
+    ));
 
     let analysis = analyze_sass_ir(&ir);
     let lifted = lift_sass_value_ir(&ir, &analysis);
@@ -2436,6 +2443,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreWgmmaQgmma)
         .expect("WGMMA QGMMA PTX probe should exist");
+    let warpgroup_register_set_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::WarpGroupRegisterSet)
+        .expect("warpgroup register-set PTX probe should exist");
     let scalar_probe = probes
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::ScalarMemoryLogic)
@@ -2460,6 +2471,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             PtxDecompileProbeKind::TensorCoreWgmmaHgmma,
             PtxDecompileProbeKind::TensorCoreWgmmaIgmma,
             PtxDecompileProbeKind::TensorCoreWgmmaQgmma,
+            PtxDecompileProbeKind::WarpGroupRegisterSet,
             PtxDecompileProbeKind::ScalarMemoryLogic,
             PtxDecompileProbeKind::ArchitectureSm90Scalar,
             PtxDecompileProbeKind::ScalarMemoryAtomic
@@ -2536,6 +2548,31 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         wgmma_qgmma_probe
             .source
             .contains("wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3")
+    );
+    assert_eq!(
+        warpgroup_register_set_probe.symbol,
+        "warpgroup_register_set_probe"
+    );
+    assert_eq!(warpgroup_register_set_probe.default_compile_arch, "sm_90a");
+    assert!(
+        warpgroup_register_set_probe
+            .source
+            .contains(".maxntid 384, 1, 1")
+    );
+    assert!(
+        warpgroup_register_set_probe
+            .source
+            .contains(".minnctapersm 1")
+    );
+    assert!(
+        warpgroup_register_set_probe
+            .source
+            .contains("setmaxnreg.inc.sync.aligned.u32 232")
+    );
+    assert!(
+        warpgroup_register_set_probe
+            .source
+            .contains("setmaxnreg.dec.sync.aligned.u32 40")
     );
     assert_eq!(scalar_probe.symbol, "scalar_memory_logic_probe");
     assert_eq!(scalar_probe.default_compile_arch, "sm_75");
