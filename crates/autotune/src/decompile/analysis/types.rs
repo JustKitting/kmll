@@ -2,12 +2,12 @@ use std::fmt;
 
 use super::super::{
     ControlTarget, KernelIrOpKind, MemoryAddress, MemoryAddressBase, MemoryAddressImmediate,
-    MemorySpace, PredicateCondition, RegisterRef, SassOpcode, SassSymbol,
+    MemorySpace, PredicateCondition, RegisterRef, SassOpcode, SassSymbol, SassTarget,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassAnalysisModule {
-    pub target: Option<String>,
+    pub target: Option<SassTarget>,
     pub functions: Vec<SassAnalysisFunction>,
 }
 

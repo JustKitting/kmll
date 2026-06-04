@@ -337,6 +337,10 @@ fn parse_nvidia_sass_captures_nvdisasm_function_and_operands() {
     assert_eq!(function.instructions[7].label.as_deref(), Some(".L_x_0"));
 
     let ir = lift_sass_module(&module);
+    assert!(matches!(
+        ir.target,
+        Some(SassTarget::Architecture(architecture)) if architecture == SassArchitecture::sm(120)
+    ));
     assert_eq!(
         ir.functions[0].ops[0].source_position,
         function.instructions[0].source_position

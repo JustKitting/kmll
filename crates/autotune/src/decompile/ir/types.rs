@@ -4,13 +4,14 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+use super::super::SassTarget;
 use super::super::sass::{
     RegisterClass, SassOperand, SassOperandKind, SassRegister, SassSourcePosition,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelIrModule {
-    pub target: Option<String>,
+    pub target: Option<SassTarget>,
     pub functions: Vec<KernelIrFunction>,
 }
 

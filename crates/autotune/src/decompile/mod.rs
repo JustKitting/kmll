@@ -14,6 +14,7 @@ use crate::autotune::{
 };
 
 mod analysis;
+mod architecture;
 mod coverage;
 mod coverage_compare;
 mod fixtures;
@@ -32,6 +33,7 @@ pub use self::{
         SassRegionKind, SassRegionPath, SassSsaValue, SassValueOp, SassValueOpKind,
         analyze_sass_ir,
     },
+    architecture::{SassArchitecture, SassTarget},
     coverage::{
         SassCoverageBasicBlock, SassCoverageCfgEdge, SassCoverageDataflowOp,
         SassCoverageDefUseEdge, SassCoverageDominatorBlock, SassCoverageFileReport,
@@ -63,8 +65,8 @@ pub use self::{
         SassWarpShuffleMode, ScalarOperand, ScalarOperandKind, lift_sass_module,
     },
     known_opcodes::{
-        KnownSassOpcode, SassArchitecture, SassOpcodeCatalogClass, SassOpcodeCatalogKind,
-        SassOpcodeCatalogSource, known_sass_opcodes,
+        KnownSassOpcode, SassOpcodeCatalogClass, SassOpcodeCatalogKind, SassOpcodeCatalogSource,
+        known_sass_opcodes,
     },
     lifted::{
         SassLiftedFunction, SassLiftedModule, SassLiftedOp, SassLiftedOpClass, SassLiftedOpDetail,

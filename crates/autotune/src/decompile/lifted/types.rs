@@ -1,12 +1,12 @@
 use std::fmt;
 
 use super::super::AggregateOperand;
-use super::super::{PredicateCondition, RegisterRef, SassOpcode, SassSymbol};
+use super::super::{PredicateCondition, RegisterRef, SassOpcode, SassSymbol, SassTarget};
 use super::semantics::SassLiftedSemantics;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassLiftedModule {
-    pub target: Option<String>,
+    pub target: Option<SassTarget>,
     pub functions: Vec<SassLiftedFunction>,
 }
 

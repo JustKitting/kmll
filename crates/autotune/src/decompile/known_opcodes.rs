@@ -1,36 +1,6 @@
 use std::fmt;
 
-use super::{SassLiftedOpClass, SassLiftedOpKind, SassOpcodeKind};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SassArchitecture {
-    sm: u16,
-}
-
-impl SassArchitecture {
-    pub const fn sm(sm: u16) -> Self {
-        Self { sm }
-    }
-
-    pub const fn sm_number(self) -> u16 {
-        self.sm
-    }
-
-    pub fn parse(raw: &str) -> Option<Self> {
-        let sm = raw
-            .strip_prefix("sm_")
-            .or_else(|| raw.strip_prefix("sm"))?
-            .parse()
-            .ok()?;
-        Some(Self::sm(sm))
-    }
-}
-
-impl fmt::Display for SassArchitecture {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "sm{}", self.sm)
-    }
-}
+use super::{SassArchitecture, SassLiftedOpClass, SassLiftedOpKind, SassOpcodeKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnownSassOpcode {

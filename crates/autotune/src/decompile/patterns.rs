@@ -5,13 +5,13 @@ use std::{
 
 use super::{
     ImmediateValue, KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, RegisterRef,
-    RegisterRefKind, SassModifierKind, SassOpcode, SassOpcodeKind, SassSymbol, SassWarpShuffleMode,
-    ScalarOperand, ScalarOperandKind,
+    RegisterRefKind, SassModifierKind, SassOpcode, SassOpcodeKind, SassSymbol, SassTarget,
+    SassWarpShuffleMode, ScalarOperand, ScalarOperandKind,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassPatternModule {
-    pub target: Option<String>,
+    pub target: Option<SassTarget>,
     pub functions: Vec<SassPatternFunction>,
 }
 

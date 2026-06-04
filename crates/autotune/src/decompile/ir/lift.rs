@@ -1,3 +1,4 @@
+use super::super::SassTarget;
 use super::super::sass::{SassInstruction, SassModule};
 use super::{
     opcodes::{aggregate_operands, lift_kind, predicate_condition},
@@ -6,7 +7,7 @@ use super::{
 
 pub fn lift_sass_module(module: &SassModule) -> KernelIrModule {
     KernelIrModule {
-        target: module.target.clone(),
+        target: module.target.clone().map(SassTarget::parse),
         functions: module
             .functions
             .iter()
