@@ -82,16 +82,27 @@ pub enum SassModifierKind {
     SignedWidth(u32),
     Width(u32),
     TensorShape(SassTensorMmaShape),
+    Row,
+    Col,
     F16,
     Bf16,
     F32,
     F64,
     Tf32,
     Fp4,
+    Fp6,
     Fp8,
     E2M1,
+    E2M3,
+    E3M2,
     E4M3,
     E5M2,
+    Sparse,
+    BlockScaleMx,
+    BlockScaleNvfp4,
+    BlockScaleMxfp4,
+    BlockScaleMxfp6,
+    BlockScaleMxfp8,
     Equal,
     NotEqual,
     LessThan,
@@ -128,16 +139,27 @@ impl SassModifierKind {
         match raw.as_str() {
             "E" => return Self::E,
             "ADD" => return Self::Add,
+            "ROW" => return Self::Row,
+            "COL" => return Self::Col,
             "F16" | "FP16" => return Self::F16,
             "BF16" => return Self::Bf16,
             "F32" | "FP32" => return Self::F32,
             "F64" | "FP64" => return Self::F64,
             "TF32" => return Self::Tf32,
             "F4" | "FP4" => return Self::Fp4,
+            "F6" | "FP6" => return Self::Fp6,
             "F8" | "FP8" => return Self::Fp8,
             "E2M1" => return Self::E2M1,
+            "E2M3" => return Self::E2M3,
+            "E3M2" => return Self::E3M2,
             "E4M3" => return Self::E4M3,
             "E5M2" => return Self::E5M2,
+            "SP" | "SPARSE" => return Self::Sparse,
+            "MX" | "BLOCK_SCALE_MX" => return Self::BlockScaleMx,
+            "NVFP4" | "BLOCK_SCALE_NVFP4" => return Self::BlockScaleNvfp4,
+            "MXFP4" | "BLOCK_SCALE_MXFP4" => return Self::BlockScaleMxfp4,
+            "MXFP6" | "BLOCK_SCALE_MXFP6" => return Self::BlockScaleMxfp6,
+            "MXFP8" | "BLOCK_SCALE_MXFP8" => return Self::BlockScaleMxfp8,
             "EQ" => return Self::Equal,
             "NE" => return Self::NotEqual,
             "LT" => return Self::LessThan,
@@ -187,16 +209,27 @@ impl SassModifierKind {
             Self::E
             | Self::Add
             | Self::TensorShape(_)
+            | Self::Row
+            | Self::Col
             | Self::F16
             | Self::Bf16
             | Self::F32
             | Self::F64
             | Self::Tf32
             | Self::Fp4
+            | Self::Fp6
             | Self::Fp8
             | Self::E2M1
+            | Self::E2M3
+            | Self::E3M2
             | Self::E4M3
             | Self::E5M2
+            | Self::Sparse
+            | Self::BlockScaleMx
+            | Self::BlockScaleNvfp4
+            | Self::BlockScaleMxfp4
+            | Self::BlockScaleMxfp6
+            | Self::BlockScaleMxfp8
             | Self::Equal
             | Self::NotEqual
             | Self::LessThan

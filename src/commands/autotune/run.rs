@@ -2,8 +2,8 @@ use nn_rust_autotune::{
     AutoOptimizeConfig, CachedInferenceKernelAutoOptimize, GemmF32Bf16MeasuredAutotuneScorer,
     InferenceKernelAutoOptimize, InferenceKernelRustCudaGenerator, KernelArtifactStore,
     KernelAutotuneMeasureOptions, KernelCandidateMetadata, KernelExpansionPolicy,
-    KernelOptimizationCacheKey, MatvecBf16MeasuredAutotuneScorer,
-    auto_optimize_inference_kernel_with_selection_cache_and_policy,
+    KernelOptimizationCacheKey, MatvecBf16MeasuredAutotuneScorer, TensorCoreOpFamily,
+    TensorCoreSearchSpace, auto_optimize_inference_kernel_with_selection_cache_and_policy,
     auto_optimize_inference_kernel_with_selection_cache_and_policy_scorer, cached_measured_score,
     compile_standalone_kernel_crate,
 };
@@ -101,6 +101,49 @@ pub(crate) fn run_kernel_autotune_matvec(args: &[String]) -> AppResult<()> {
         config,
         &options,
     )
+}
+
+pub(crate) fn run_kernel_autotune_tensor_core_space(args: &[String]) -> AppResult<()> {
+    if !args.is_empty() {
+        return Err(invalid_input(
+            "kernel-autotune-tensor-core-space does not accept arguments",
+        ));
+    }
+
+    let space = TensorCoreSearchSpace::sm120_seed();
+    println!(
+        "kernel_autotune_tensor_core_space target=sm120 seed_specs={}",
+        space.specs().len()
+    );
+    for family in [
+        TensorCoreOpFamily::MmaSync,
+        TensorCoreOpFamily::MmaSparse,
+        TensorCoreOpFamily::WgmmaAsync,
+        TensorCoreOpFamily::Tcgen05,
+    ] {
+        println!(
+            "  family={} count={}",
+            family,
+            space.by_family(family).count()
+        );
+    }
+    for (index, spec) in space.iter().enumerate() {
+        println!(
+            "  spec[{index}] family={} shape={} dtypes={} layout={} sparsity={} block_scale={} label={}",
+            spec.family,
+            spec.shape,
+            spec.dtypes,
+            spec.layouts,
+            spec.sparsity
+                .map(|sparsity| sparsity.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            spec.block_scale
+                .map(|block_scale| block_scale.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            spec.label()
+        );
+    }
+    Ok(())
 }
 
 fn run_gemm_search(

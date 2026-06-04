@@ -80,7 +80,13 @@ pub enum SassNumericDType {
     F64,
     Tf32,
     Fp4,
+    Fp6,
     Fp8,
+    E2M1,
+    E2M3,
+    E3M2,
+    E4M3,
+    E5M2,
     Raw(String),
 }
 
@@ -101,7 +107,13 @@ impl SassNumericDType {
             SassModifierKind::F64 => Some(Self::F64),
             SassModifierKind::Tf32 => Some(Self::Tf32),
             SassModifierKind::Fp4 => Some(Self::Fp4),
+            SassModifierKind::Fp6 => Some(Self::Fp6),
             SassModifierKind::Fp8 => Some(Self::Fp8),
+            SassModifierKind::E2M1 => Some(Self::E2M1),
+            SassModifierKind::E2M3 => Some(Self::E2M3),
+            SassModifierKind::E3M2 => Some(Self::E3M2),
+            SassModifierKind::E4M3 => Some(Self::E4M3),
+            SassModifierKind::E5M2 => Some(Self::E5M2),
             SassModifierKind::Raw(raw) => Some(Self::Raw(raw.clone())),
             _ => None,
         }
@@ -123,7 +135,13 @@ impl SassNumericDType {
             Self::F64 => "F64",
             Self::Tf32 => "TF32",
             Self::Fp4 => "FP4",
+            Self::Fp6 => "FP6",
             Self::Fp8 => "FP8",
+            Self::E2M1 => "E2M1",
+            Self::E2M3 => "E2M3",
+            Self::E3M2 => "E3M2",
+            Self::E4M3 => "E4M3",
+            Self::E5M2 => "E5M2",
             Self::Raw(raw) => raw,
         }
     }
