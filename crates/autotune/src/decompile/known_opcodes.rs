@@ -301,6 +301,7 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     local!(Hmul2, FloatMath, PackedHalfMul),
     local!(Iadd, IntegerMath, IntegerAdd),
     local!(Iadd3, IntegerMath, IntegerAdd),
+    local!(I2f, FloatMath, NumericConvert),
     local!(I2fp, FloatMath, NumericConvert),
     local!(Imad, IntegerMath, IntegerMad),
     local!(Isetp, Predicate, CompareSet),

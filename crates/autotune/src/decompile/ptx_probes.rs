@@ -189,7 +189,7 @@ const TENSOR_CORE_DMMA_PTX: &str = r#".version 8.0
 "#;
 
 const SCALAR_MEMORY_LOGIC_PTX: &str = r#".version 8.0
-.target sm_80
+.target sm_75
 .address_size 64
 
 .visible .entry scalar_memory_logic_probe(
@@ -238,7 +238,7 @@ const SCALAR_MEMORY_LOGIC_PTX: &str = r#".version 8.0
 "#;
 
 const SCALAR_MEMORY_ATOMIC_PTX: &str = r#".version 9.1
-.target sm_80
+.target sm_75
 .address_size 64
 
 .visible .entry scalar_memory_atomic_probe(

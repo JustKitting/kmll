@@ -13,7 +13,7 @@ pub(super) fn lift(
     operands: &[AggregateOperand],
 ) -> Option<LiftResult> {
     Some(match opcode.kind() {
-        SassOpcodeKind::I2fp => {
+        SassOpcodeKind::I2f | SassOpcodeKind::I2fp => {
             if operands.len() == 2 {
                 let (dst_dtype, src_dtype) = conversion_dtypes(modifiers);
                 (

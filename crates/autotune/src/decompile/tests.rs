@@ -216,7 +216,8 @@ select_convert_fixture:
 .text.select_convert_fixture:
         /*0000*/                   SEL R6, R7, R6, P0 ;                         /* 0x0 */
         /*0010*/                   I2FP.F32.U32 R4, R6 ;                        /* 0x0 */
-        /*0020*/                   EXIT ;                                       /* 0x0 */
+        /*0020*/                   I2F.U32 R2, R4 ;                             /* 0x0 */
+        /*0030*/                   EXIT ;                                       /* 0x0 */
 "#;
 
     let module = parse_nvidia_sass(SELECT_CONVERT_SASS).expect("SASS should parse");
@@ -251,6 +252,18 @@ select_convert_fixture:
         } if dst == &reg("R4") && src == &scalar("R6")
     ));
 
+    let legacy_convert = &function.ops[2];
+    assert_eq!(legacy_convert.source_opcode.kind(), &SassOpcodeKind::I2f);
+    assert!(matches!(
+        &legacy_convert.kind,
+        KernelIrOpKind::NumericConvert {
+            dst,
+            src,
+            dst_dtype: Some(SassNumericDType::U32),
+            src_dtype: None,
+        } if dst == &reg("R2") && src == &scalar("R4")
+    ));
+
     let analysis = analyze_sass_ir(&ir);
     let dataflow = &analysis.functions[0].dataflow;
     assert_eq!(dataflow[0].defines.as_slice(), &[reg("R6")]);
@@ -260,6 +273,8 @@ select_convert_fixture:
     );
     assert_eq!(dataflow[1].defines.as_slice(), &[reg("R4")]);
     assert_eq!(dataflow[1].uses.as_slice(), &[reg("R6")]);
+    assert_eq!(dataflow[2].defines.as_slice(), &[reg("R2")]);
+    assert_eq!(dataflow[2].uses.as_slice(), &[reg("R4")]);
 
     let lifted = lift_sass_value_ir(&ir, &analysis);
     assert_eq!(lifted.functions[0].ops[0].kind, SassLiftedOpKind::Select);
@@ -267,11 +282,21 @@ select_convert_fixture:
         lifted.functions[0].ops[1].kind,
         SassLiftedOpKind::NumericConvert
     );
+    assert_eq!(
+        lifted.functions[0].ops[2].kind,
+        SassLiftedOpKind::NumericConvert
+    );
     assert!(
         lifted.functions[0].ops[1]
             .semantics
             .to_string()
             .contains("dst-dtype=F32,src-dtype=U32")
+    );
+    assert!(
+        lifted.functions[0].ops[2]
+            .semantics
+            .to_string()
+            .contains("dst-dtype=U32")
     );
 }
 
@@ -2357,6 +2382,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
     );
     assert!(dmma_probe.source.contains("st.global.f64"));
     assert_eq!(scalar_probe.symbol, "scalar_memory_logic_probe");
+    assert!(scalar_probe.source.contains(".target sm_75"));
     assert!(scalar_probe.source.contains("ld.global.nc.u32"));
     assert!(scalar_probe.source.contains("st.local.u32"));
     assert!(scalar_probe.source.contains("ld.local.u32"));
@@ -2365,6 +2391,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
     assert!(scalar_probe.source.contains("fma.rn.f32"));
     assert!(scalar_probe.source.contains("setp.gt.f32"));
     assert_eq!(atomic_probe.symbol, "scalar_memory_atomic_probe");
+    assert!(atomic_probe.source.contains(".target sm_75"));
     assert!(atomic_probe.source.contains("atom.global.add.u32"));
     assert!(atomic_probe.source.contains("red.global.add.u32"));
     assert!(atomic_probe.source.contains("st.volatile.local.u32"));
