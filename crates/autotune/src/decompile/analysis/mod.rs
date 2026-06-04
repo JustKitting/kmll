@@ -8,9 +8,9 @@ mod types;
 
 pub use self::types::{
     SassAnalysisFunction, SassAnalysisModule, SassBasicBlock, SassBlockTerminator, SassCfgEdge,
-    SassCfgEdgeKind, SassDataflowOp, SassDefUseEdge, SassDominatorBlock, SassLiveRange,
-    SassMemoryAccess, SassMemoryAccessKind, SassNaturalLoop, SassReachingUse, SassRegion,
-    SassRegionKind, SassRegionPath, SassSsaValue, SassValueOp, SassValueOpKind,
+    SassCfgEdgeKind, SassDataflowOp, SassDataflowSite, SassDefUseEdge, SassDominatorBlock,
+    SassLiveRange, SassMemoryAccess, SassMemoryAccessKind, SassNaturalLoop, SassReachingUse,
+    SassRegion, SassRegionKind, SassRegionPath, SassSsaValue, SassValueOp, SassValueOpKind,
 };
 
 use super::{KernelIrFunction, KernelIrModule};

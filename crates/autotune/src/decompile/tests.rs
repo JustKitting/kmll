@@ -1197,6 +1197,8 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
         .iter()
         .find(|value| value.register == reg("R2") && value.def_address.is_none())
         .expect("entry R2 should have an SSA value");
+    assert_eq!(entry_r2_value.origin, SassDataflowSite::Entry);
+    assert_eq!(entry_r2_value.origin.address(), None);
     assert_eq!(entry_r2_value.use_addresses.as_slice(), &[0x30]);
 
     let local_r2_value = function
@@ -1204,6 +1206,8 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
         .iter()
         .find(|value| value.register == reg("R2") && value.def_address == Some(0x20))
         .expect("local R2 definition should have an SSA value");
+    assert_eq!(local_r2_value.origin, SassDataflowSite::Instruction(0x20));
+    assert_eq!(local_r2_value.origin.address(), Some(0x20));
     assert_eq!(local_r2_value.use_addresses.as_slice(), &[0x30]);
 
     let joined_r2_edges = function
@@ -1218,7 +1222,9 @@ fn analysis_recovers_cfg_edges_and_register_dataflow() {
             .any(|edge| edge.value_id == entry_r2_value.value_id && edge.def_address.is_none())
     );
     assert!(joined_r2_edges.iter().any(|edge| {
-        edge.value_id == local_r2_value.value_id && edge.def_address == Some(0x20)
+        edge.value_id == local_r2_value.value_id
+            && edge.def_address == Some(0x20)
+            && edge.use_site == SassDataflowSite::Instruction(0x30)
     }));
 
     let joined_op = function

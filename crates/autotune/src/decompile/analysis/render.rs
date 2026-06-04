@@ -124,7 +124,7 @@ impl SassAnalysisModule {
                     value.value_id,
                     value.name(),
                     format_addresses(&value.use_addresses),
-                    value.source.as_deref().unwrap_or("entry")
+                    value.origin
                 )
                 .expect("write to string");
             }
@@ -132,8 +132,8 @@ impl SassAnalysisModule {
             for edge in &function.def_use_edges {
                 writeln!(
                     out,
-                    "    {:#06x}: {} <- v{} {}",
-                    edge.use_address,
+                    "    {}: {} <- v{} {}",
+                    edge.use_site,
                     edge.register,
                     edge.value_id,
                     format_register_definition(&edge.register, edge.def_address)

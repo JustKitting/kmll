@@ -28,9 +28,9 @@ mod sass;
 pub use self::{
     analysis::{
         SassAnalysisFunction, SassAnalysisModule, SassBasicBlock, SassBlockTerminator, SassCfgEdge,
-        SassCfgEdgeKind, SassDataflowOp, SassDefUseEdge, SassDominatorBlock, SassLiveRange,
-        SassMemoryAccess, SassMemoryAccessKind, SassNaturalLoop, SassReachingUse, SassRegion,
-        SassRegionKind, SassRegionPath, SassSsaValue, SassValueOp, SassValueOpKind,
+        SassCfgEdgeKind, SassDataflowOp, SassDataflowSite, SassDefUseEdge, SassDominatorBlock,
+        SassLiveRange, SassMemoryAccess, SassMemoryAccessKind, SassNaturalLoop, SassReachingUse,
+        SassRegion, SassRegionKind, SassRegionPath, SassSsaValue, SassValueOp, SassValueOpKind,
         analyze_sass_ir,
     },
     architecture::{SassArchitecture, SassTarget},

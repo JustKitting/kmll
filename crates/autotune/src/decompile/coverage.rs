@@ -12,12 +12,13 @@ use super::{
     AggregateOperand, ControlTarget, KernelIrModule, KernelIrOpKind, KnownSassOpcode,
     MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemorySpace, PredicateCondition,
     RegisterRef, SassAnalysisModule, SassArchitecture, SassBlockTerminator, SassCfgEdgeKind,
-    SassLiftedModule, SassLiftedOpClass, SassLiftedOpDetail, SassLiftedOpKind, SassLiftedSemantics,
-    SassLiftedValueRef, SassMemoryAccessKind, SassModifier, SassOpcode, SassOpcodeCatalogClass,
-    SassOpcodeCatalogKind, SassOpcodeCatalogSource, SassPatternConfidence, SassPatternModule,
-    SassRegionKind, SassRegionPath, SassSemanticPatternCategory, SassSemanticPatternKind,
-    SassUnsupportedReason, SassValueOpKind, analyze_sass_ir, known_sass_opcodes,
-    lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns, render_sass_file_side_by_side,
+    SassDataflowSite, SassLiftedModule, SassLiftedOpClass, SassLiftedOpDetail, SassLiftedOpKind,
+    SassLiftedSemantics, SassLiftedValueRef, SassMemoryAccessKind, SassModifier, SassOpcode,
+    SassOpcodeCatalogClass, SassOpcodeCatalogKind, SassOpcodeCatalogSource, SassPatternConfidence,
+    SassPatternModule, SassRegionKind, SassRegionPath, SassSemanticPatternCategory,
+    SassSemanticPatternKind, SassUnsupportedReason, SassValueOpKind, analyze_sass_ir,
+    known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
+    render_sass_file_side_by_side,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -527,7 +528,7 @@ pub struct SassCoverageSsaValue {
     pub value_id: usize,
     pub register: RegisterRef,
     pub def_address: Option<u64>,
-    pub source: Option<String>,
+    pub origin: SassDataflowSite,
     pub use_addresses: Vec<u64>,
 }
 
@@ -539,7 +540,7 @@ pub struct SassCoverageDefUseEdge {
     pub register: RegisterRef,
     pub def_address: Option<u64>,
     pub use_address: u64,
-    pub use_source: String,
+    pub use_site: SassDataflowSite,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1271,7 +1272,7 @@ fn append_analysis(
                 value_id: value.value_id,
                 register: value.register.clone(),
                 def_address: value.def_address,
-                source: value.source.clone(),
+                origin: value.origin,
                 use_addresses: value.use_addresses.clone(),
             });
         }
@@ -1283,7 +1284,7 @@ fn append_analysis(
                 register: edge.register.clone(),
                 def_address: edge.def_address,
                 use_address: edge.use_address,
-                use_source: edge.use_source.clone(),
+                use_site: edge.use_site,
             });
         }
         for op in &function.value_ops {
@@ -1932,7 +1933,7 @@ fn render_ssa_values_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "sass_path\tfunction\tvalue_id\tregister\tdef\tuses\tsource"
+        "sass_path\tfunction\tvalue_id\tregister\tdef\tuses\torigin"
     )
     .expect("write to string");
     for value in &report.ssa_values {
@@ -1945,7 +1946,7 @@ fn render_ssa_values_tsv(report: &SassCoverageReport) -> String {
             tsv(&value.register.to_string()),
             tsv(&format_optional_address(value.def_address)),
             tsv(&format_addresses(&value.use_addresses)),
-            tsv(value.source.as_deref().unwrap_or("entry")),
+            tsv(&value.origin.to_string()),
         )
         .expect("write to string");
     }
@@ -1956,7 +1957,7 @@ fn render_def_use_edges_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "sass_path\tfunction\tuse_address\tregister\tvalue_id\tdef\tuse_source"
+        "sass_path\tfunction\tuse_address\tregister\tvalue_id\tdef\tuse_site"
     )
     .expect("write to string");
     for edge in &report.def_use_edges {
@@ -1969,7 +1970,7 @@ fn render_def_use_edges_tsv(report: &SassCoverageReport) -> String {
             tsv(&edge.register.to_string()),
             edge.value_id,
             tsv(&format_optional_address(edge.def_address)),
-            tsv(&edge.use_source),
+            tsv(&edge.use_site.to_string()),
         )
         .expect("write to string");
     }

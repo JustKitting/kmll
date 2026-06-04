@@ -5,8 +5,8 @@ use super::{
     cfg::{block_id_for_op_index, predecessors_by_block},
     registers::push_register_refs,
     types::{
-        SassBasicBlock, SassCfgEdge, SassDataflowOp, SassDefUseEdge, SassLiveRange,
-        SassReachingUse, SassSsaValue, SassValueOp, SassValueOpKind,
+        SassBasicBlock, SassCfgEdge, SassDataflowOp, SassDataflowSite, SassDefUseEdge,
+        SassLiveRange, SassReachingUse, SassSsaValue, SassValueOp, SassValueOpKind,
     },
 };
 
@@ -71,7 +71,6 @@ pub(super) fn build_value_ops(
 struct ReachingDef {
     register: RegisterRef,
     address: Option<u64>,
-    source: Option<String>,
 }
 
 pub(super) fn analyze_reaching_defs(
@@ -102,7 +101,6 @@ pub(super) fn analyze_reaching_defs(
         definitions.push(ReachingDef {
             register: register.clone(),
             address: None,
-            source: None,
         });
         entry_def_by_register.insert(register.clone(), def_id);
         defs_by_register.entry(register).or_default().insert(def_id);
@@ -113,7 +111,6 @@ pub(super) fn analyze_reaching_defs(
             definitions.push(ReachingDef {
                 register: register.clone(),
                 address: Some(op.address),
-                source: Some(op.source.clone()),
             });
             def_by_op_register.insert((op_index, register.clone()), def_id);
             defs_by_register
@@ -219,7 +216,7 @@ pub(super) fn analyze_reaching_defs(
                         register: register.clone(),
                         def_address: definitions[*def_id].address,
                         use_address: op.address,
-                        use_source: op.source.clone(),
+                        use_site: SassDataflowSite::Instruction(op.address),
                     });
                 }
                 reaching_uses.push(SassReachingUse {
@@ -273,7 +270,7 @@ pub(super) fn analyze_reaching_defs(
             value_id,
             register: definition.register.clone(),
             def_address: definition.address,
-            source: definition.source.clone(),
+            origin: SassDataflowSite::from_optional_address(definition.address),
             use_addresses: ssa_value_uses
                 .remove(&value_id)
                 .unwrap_or_default()

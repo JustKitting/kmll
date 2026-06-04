@@ -430,12 +430,40 @@ impl SassReachingUse {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassDataflowSite {
+    Entry,
+    Instruction(u64),
+}
+
+impl SassDataflowSite {
+    pub fn from_optional_address(address: Option<u64>) -> Self {
+        address.map(Self::Instruction).unwrap_or(Self::Entry)
+    }
+
+    pub fn address(self) -> Option<u64> {
+        match self {
+            Self::Entry => None,
+            Self::Instruction(address) => Some(address),
+        }
+    }
+}
+
+impl fmt::Display for SassDataflowSite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Entry => f.write_str("entry"),
+            Self::Instruction(address) => write!(f, "{address:#06x}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassSsaValue {
     pub value_id: usize,
     pub register: RegisterRef,
     pub def_address: Option<u64>,
-    pub source: Option<String>,
+    pub origin: SassDataflowSite,
     pub use_addresses: Vec<u64>,
 }
 
@@ -451,7 +479,7 @@ pub struct SassDefUseEdge {
     pub register: RegisterRef,
     pub def_address: Option<u64>,
     pub use_address: u64,
-    pub use_source: String,
+    pub use_site: SassDataflowSite,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
