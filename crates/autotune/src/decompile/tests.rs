@@ -2435,6 +2435,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreWgmmaHgmma)
         .expect("WGMMA HGMMA PTX probe should exist");
+    let wgmma_bgmma_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreWgmmaBgmma)
+        .expect("WGMMA BGMMA PTX probe should exist");
     let wgmma_igmma_probe = probes
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreWgmmaIgmma)
@@ -2469,6 +2473,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             PtxDecompileProbeKind::TensorCoreDmma,
             PtxDecompileProbeKind::TensorCoreBmma,
             PtxDecompileProbeKind::TensorCoreWgmmaHgmma,
+            PtxDecompileProbeKind::TensorCoreWgmmaBgmma,
             PtxDecompileProbeKind::TensorCoreWgmmaIgmma,
             PtxDecompileProbeKind::TensorCoreWgmmaQgmma,
             PtxDecompileProbeKind::WarpGroupRegisterSet,
@@ -2532,6 +2537,14 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         wgmma_hgmma_probe
             .source
             .contains("wgmma.wait_group.sync.aligned 0")
+    );
+    assert_eq!(wgmma_bgmma_probe.symbol, "tensor_core_wgmma_bgmma_probe");
+    assert_eq!(wgmma_bgmma_probe.default_compile_arch, "sm_90a");
+    assert!(wgmma_bgmma_probe.source.contains(".target sm_90a"));
+    assert!(
+        wgmma_bgmma_probe
+            .source
+            .contains("wgmma.mma_async.sync.aligned.m64n8k256.s32.b1.b1.and.popc")
     );
     assert_eq!(wgmma_igmma_probe.symbol, "tensor_core_wgmma_igmma_probe");
     assert_eq!(wgmma_igmma_probe.default_compile_arch, "sm_90a");

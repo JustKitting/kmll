@@ -5,6 +5,7 @@ pub enum PtxDecompileProbeKind {
     TensorCoreDmma,
     TensorCoreBmma,
     TensorCoreWgmmaHgmma,
+    TensorCoreWgmmaBgmma,
     TensorCoreWgmmaIgmma,
     TensorCoreWgmmaQgmma,
     WarpGroupRegisterSet,
@@ -21,6 +22,7 @@ impl PtxDecompileProbeKind {
             Self::TensorCoreDmma => "tensor-core-dmma",
             Self::TensorCoreBmma => "tensor-core-bmma",
             Self::TensorCoreWgmmaHgmma => "tensor-core-wgmma-hgmma",
+            Self::TensorCoreWgmmaBgmma => "tensor-core-wgmma-bgmma",
             Self::TensorCoreWgmmaIgmma => "tensor-core-wgmma-igmma",
             Self::TensorCoreWgmmaQgmma => "tensor-core-wgmma-qgmma",
             Self::WarpGroupRegisterSet => "warpgroup-register-set",
@@ -41,6 +43,11 @@ impl PtxDecompileProbeKind {
             | "wgmma-hgmma"
             | "wgmma_hgmma"
             | "hgmma" => Some(Self::TensorCoreWgmmaHgmma),
+            "tensor-core-wgmma-bgmma"
+            | "tensor_core_wgmma_bgmma"
+            | "wgmma-bgmma"
+            | "wgmma_bgmma"
+            | "bgmma" => Some(Self::TensorCoreWgmmaBgmma),
             "tensor-core-wgmma-igmma"
             | "tensor_core_wgmma_igmma"
             | "wgmma-igmma"

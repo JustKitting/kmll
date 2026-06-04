@@ -165,6 +165,45 @@ pub(super) const TENSOR_CORE_WGMMA_HGMMA_PTX: &str = r#".version 8.7
 }
 "#;
 
+pub(super) const TENSOR_CORE_WGMMA_BGMMA_PTX: &str = r#".version 8.7
+.target sm_90a
+.address_size 64
+
+.visible .entry tensor_core_wgmma_bgmma_probe(
+    .param .u64 tensor_core_wgmma_bgmma_probe_out
+)
+{
+    .reg .pred %p<2>;
+    .reg .b32 %r<32>;
+    .reg .b64 %rd<4>;
+
+    ld.param.u64 %rd0, [tensor_core_wgmma_bgmma_probe_out];
+
+    mov.b32 %r0, 0xffffffff;
+    mov.b32 %r1, 0xaaaaaaaa;
+    mov.b32 %r2, 0xffffffff;
+    mov.b32 %r3, 0xaaaaaaaa;
+    mov.b32 %r4, 0;
+    mov.b32 %r5, 0;
+    mov.b32 %r6, 0;
+    mov.b32 %r7, 0;
+    mov.u64 %rd1, 0;
+    setp.ne.b32 %p0, 1, 0;
+
+    wgmma.fence.sync.aligned;
+    wgmma.mma_async.sync.aligned.m64n8k256.s32.b1.b1.and.popc
+        {%r4, %r5, %r6, %r7},
+        {%r0, %r1, %r2, %r3},
+        %rd1,
+        %p0;
+    wgmma.commit_group.sync.aligned;
+    wgmma.wait_group.sync.aligned 0;
+
+    st.global.u32 [%rd0], %r4;
+    ret;
+}
+"#;
+
 pub(super) const TENSOR_CORE_WGMMA_IGMMA_PTX: &str = r#".version 8.7
 .target sm_90a
 .address_size 64

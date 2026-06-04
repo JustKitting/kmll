@@ -1,8 +1,9 @@
 use super::kinds::PtxDecompileProbeKind;
 use super::sources::{
     SCALAR_MEMORY_ATOMIC_PTX, SCALAR_MEMORY_LOGIC_PTX, TENSOR_CORE_BMMA_PTX, TENSOR_CORE_DMMA_PTX,
-    TENSOR_CORE_HMMA_PTX, TENSOR_CORE_IMMA_PTX, TENSOR_CORE_WGMMA_HGMMA_PTX,
-    TENSOR_CORE_WGMMA_IGMMA_PTX, TENSOR_CORE_WGMMA_QGMMA_PTX, WARP_GROUP_REGISTER_SET_PTX,
+    TENSOR_CORE_HMMA_PTX, TENSOR_CORE_IMMA_PTX, TENSOR_CORE_WGMMA_BGMMA_PTX,
+    TENSOR_CORE_WGMMA_HGMMA_PTX, TENSOR_CORE_WGMMA_IGMMA_PTX, TENSOR_CORE_WGMMA_QGMMA_PTX,
+    WARP_GROUP_REGISTER_SET_PTX,
 };
 
 pub const AUTO_COMPILE_ARCH: &str = "auto";
@@ -64,6 +65,13 @@ pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
             source: TENSOR_CORE_WGMMA_HGMMA_PTX,
         },
         PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::TensorCoreWgmmaBgmma,
+            symbol: "tensor_core_wgmma_bgmma_probe",
+            behavior: "one PTX sm90a warpgroup boolean MMA with warpgroup sync and wait",
+            default_compile_arch: "sm_90a",
+            source: TENSOR_CORE_WGMMA_BGMMA_PTX,
+        },
+        PtxDecompileProbe {
             kind: PtxDecompileProbeKind::TensorCoreWgmmaIgmma,
             symbol: "tensor_core_wgmma_igmma_probe",
             behavior: "one PTX sm90a warpgroup integer MMA with warpgroup sync and wait",
@@ -115,6 +123,7 @@ pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
         PtxDecompileProbeKind::TensorCoreDmma,
         PtxDecompileProbeKind::TensorCoreBmma,
         PtxDecompileProbeKind::TensorCoreWgmmaHgmma,
+        PtxDecompileProbeKind::TensorCoreWgmmaBgmma,
         PtxDecompileProbeKind::TensorCoreWgmmaIgmma,
         PtxDecompileProbeKind::TensorCoreWgmmaQgmma,
         PtxDecompileProbeKind::WarpGroupRegisterSet,
