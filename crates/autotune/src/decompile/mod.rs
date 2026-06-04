@@ -15,6 +15,7 @@ use crate::autotune::{
 
 mod analysis;
 mod architecture;
+mod autotune_bridge;
 mod coverage;
 mod coverage_compare;
 mod fixtures;
@@ -34,6 +35,10 @@ pub use self::{
         analyze_sass_ir,
     },
     architecture::{SassArchitecture, SassTarget},
+    autotune_bridge::{
+        DecompiledAutotuneError, DecompiledAutotuneEvidence, DecompiledAutotuneOperation,
+        DecompiledAutotuneShape, decompiled_autotune_operation,
+    },
     coverage::{
         SassCoverageBasicBlock, SassCoverageCfgEdge, SassCoverageDataflowOp,
         SassCoverageDefUseEdge, SassCoverageDominatorBlock, SassCoverageFileReport,

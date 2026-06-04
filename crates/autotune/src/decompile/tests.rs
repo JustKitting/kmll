@@ -1,5 +1,10 @@
 use super::*;
-use std::{collections::BTreeSet, env, fs, process, time::SystemTime};
+use crate::autotune::{
+    AutoOptimizeConfig, InferenceKernelRustCudaGenerator, KernelArtifactStore,
+    compile_standalone_kernel_crate, generate_inference_kernel_source,
+};
+use nn_rust_profiling::{NumericKind, OperationKind};
+use std::{collections::BTreeSet, env, fs, path::Path, process, time::SystemTime};
 
 fn reg(raw: &str) -> RegisterRef {
     RegisterRef::parse(raw.to_string())
@@ -34,6 +39,26 @@ fn is_label_target(target: &Option<ControlTarget>, expected: &str) -> bool {
             ..
         }) if label.as_str() == expected
     )
+}
+
+fn decompile_autotune_test_root() -> std::path::PathBuf {
+    nn_rust_inference::runtime::default_artifact_dir()
+        .join("test-decompile-autotune")
+        .join(format!(
+            "{}-{}",
+            process::id(),
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ))
+}
+
+fn cleanup_decompile_autotune_test_root(root: &Path) {
+    fs::remove_dir_all(root).expect("test decompile autotune artifact directory should clean up");
+    if let Some(parent) = root.parent() {
+        let _ = fs::remove_dir(parent);
+    }
 }
 
 #[test]
@@ -293,6 +318,100 @@ unsupported_fixture:
         /*0000*/                   MYSTERY R0, R1 ;                             /* 0x0 */
         /*0010*/                   EXIT ;                                        /* 0x0 */
 "#;
+
+#[test]
+fn decompiled_matvec_types_route_to_autotune_generation_and_emit_crate() {
+    let module = parse_nvidia_sass(ROWS17_SLICE).expect("rows17 slice should parse");
+    let ir = lift_sass_module(&module);
+    let function = &ir.functions[0];
+
+    let routed = decompiled_autotune_operation(
+        function,
+        DecompiledAutotuneShape::MatvecBf16RowMajor {
+            rows: 128,
+            cols: 256,
+        },
+    )
+    .expect("typed decompiled matvec evidence should route into autotune");
+
+    assert!(routed.evidence.supports_bf16_row_major_matvec());
+    assert_eq!(routed.operation.kind, OperationKind::Matvec);
+    assert_eq!(routed.operation.inputs[0].dtype, NumericKind::F32);
+    assert_eq!(routed.operation.inputs[1].dtype, NumericKind::Bf16);
+    assert_eq!(routed.operation.outputs[0].accumulator, NumericKind::F32);
+
+    let config = AutoOptimizeConfig {
+        beam_width: 4,
+        max_steps: 2,
+        require_launchable: false,
+        min_score_improvement: 0.0,
+    };
+    let generated = generate_inference_kernel_source(&routed.operation, config)
+        .expect("decompiled operation should autotune and render source");
+    assert_eq!(
+        generated.optimization.problem.family(),
+        "matvec-bf16-row-major"
+    );
+    assert_eq!(generated.source.symbol, generated.candidate.launch.kernel);
+    assert!(generated.source.source.contains("#[kernel]"));
+
+    let root = decompile_autotune_test_root();
+    let store = KernelArtifactStore::new(&root);
+    let emitted = store
+        .emit_standalone_crate(&generated.candidate, &InferenceKernelRustCudaGenerator)
+        .expect("decompiled autotune candidate should emit standalone crate");
+    assert_eq!(emitted.symbol, generated.source.symbol);
+    assert!(emitted.paths.source_path.starts_with(store.root()));
+    let source = fs::read_to_string(&emitted.paths.source_path)
+        .expect("emitted standalone source should be readable");
+    assert!(source.contains(&format!("pub fn {}(", generated.source.symbol)));
+    cleanup_decompile_autotune_test_root(&root);
+}
+
+#[test]
+#[ignore = "runs cargo oxide build for generated standalone crate"]
+fn decompiled_matvec_autotune_candidate_recompiles() {
+    let module = parse_nvidia_sass(ROWS17_SLICE).expect("rows17 slice should parse");
+    let ir = lift_sass_module(&module);
+    let routed = decompiled_autotune_operation(
+        &ir.functions[0],
+        DecompiledAutotuneShape::MatvecBf16RowMajor {
+            rows: 128,
+            cols: 256,
+        },
+    )
+    .expect("typed decompiled matvec evidence should route into autotune");
+    let generated = generate_inference_kernel_source(
+        &routed.operation,
+        AutoOptimizeConfig {
+            beam_width: 4,
+            max_steps: 2,
+            require_launchable: false,
+            min_score_improvement: 0.0,
+        },
+    )
+    .expect("decompiled operation should autotune and render source");
+
+    let root = decompile_autotune_test_root();
+    let store = KernelArtifactStore::new(&root);
+    let emitted = store
+        .emit_standalone_crate(&generated.candidate, &InferenceKernelRustCudaGenerator)
+        .expect("decompiled autotune candidate should emit standalone crate");
+    let output_dir = root.join("ptx");
+    let target_dir = root.join("standalone-target");
+    let compiled = compile_standalone_kernel_crate(
+        &emitted.paths.crate_dir,
+        &output_dir,
+        &emitted.package_name,
+        Some("sm_120"),
+        Some(&target_dir),
+    )
+    .expect("generated standalone kernel should recompile");
+
+    assert!(compiled.ptx_path.exists());
+    assert!(compiled.ptx_path.starts_with(&output_dir));
+    cleanup_decompile_autotune_test_root(&root);
+}
 
 const CFG_SASS: &str = r#"
         .target sm_120
