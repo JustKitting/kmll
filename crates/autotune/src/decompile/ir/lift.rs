@@ -36,6 +36,6 @@ fn lift_instruction(instruction: &SassInstruction) -> KernelIrOp {
             .map(|modifier| SassModifier::parse(modifier.as_str()))
             .collect(),
         source_operands,
-        source: instruction.raw.clone(),
+        source_text: instruction.raw.clone(),
     }
 }

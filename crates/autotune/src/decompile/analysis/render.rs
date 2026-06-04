@@ -101,7 +101,7 @@ impl SassAnalysisModule {
                     dataflow.address,
                     format_registers(&dataflow.defines),
                     format_registers(&dataflow.uses),
-                    dataflow.source
+                    dataflow.source_text
                 )
                 .expect("write to string");
             }
@@ -151,7 +151,7 @@ impl SassAnalysisModule {
                     format_value_ids(&op.input_value_ids),
                     format_value_ids(&op.output_value_ids),
                     format_optional_display(op.predicate.as_ref()),
-                    op.source
+                    op.source_text
                 )
                 .expect("write to string");
             }
@@ -194,7 +194,7 @@ impl SassAnalysisModule {
                         .map(|bits| bits.to_string())
                         .unwrap_or_else(|| "-".to_string()),
                     format_optional_display(access.predicate.as_ref()),
-                    access.source
+                    access.source_text
                 )
                 .expect("write to string");
             }

@@ -24,7 +24,7 @@ impl SassLiftedModule {
                     format_optional_display(op.predicate.as_ref()),
                     format_display_list(&op.source_operands),
                     op.semantics,
-                    op.source
+                    op.source_text
                 )
                 .expect("write to string");
             }

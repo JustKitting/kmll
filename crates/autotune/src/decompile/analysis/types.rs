@@ -405,7 +405,7 @@ pub struct SassDataflowOp {
     pub predicate: Option<PredicateCondition>,
     pub defines: Vec<RegisterRef>,
     pub uses: Vec<RegisterRef>,
-    pub source: String,
+    pub source_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -493,7 +493,7 @@ pub struct SassValueOp {
     pub output_registers: Vec<RegisterRef>,
     pub input_value_ids: Vec<usize>,
     pub output_value_ids: Vec<usize>,
-    pub source: String,
+    pub source_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -525,7 +525,7 @@ pub struct SassMemoryAccess {
     pub address_registers: Vec<RegisterRef>,
     pub address_base: Option<MemoryAddressBase>,
     pub offset: Option<MemoryAddressImmediate>,
-    pub source: String,
+    pub source_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

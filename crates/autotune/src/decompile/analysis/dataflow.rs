@@ -62,7 +62,7 @@ pub(super) fn build_value_ops(
                 output_registers: dataflow.defines.clone(),
                 input_value_ids,
                 output_value_ids,
-                source: op.source.clone(),
+                source_text: op.source_text.clone(),
             }
         })
         .collect()
@@ -433,6 +433,6 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
         predicate: op.predicate.clone(),
         defines,
         uses,
-        source: op.source.clone(),
+        source_text: op.source_text.clone(),
     }
 }

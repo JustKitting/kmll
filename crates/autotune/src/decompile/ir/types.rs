@@ -35,7 +35,7 @@ impl KernelIrModule {
                 writeln!(
                     out,
                     "  {:#06x}: {:?} [{}] <- {}",
-                    op.address, op.kind, op.confidence, op.source
+                    op.address, op.kind, op.confidence, op.source_text
                 )
                 .expect("write to string");
             }
@@ -62,7 +62,7 @@ pub struct KernelIrOp {
     pub source_opcode: SassOpcode,
     pub source_modifiers: Vec<SassModifier>,
     pub source_operands: Vec<AggregateOperand>,
-    pub source: String,
+    pub source_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

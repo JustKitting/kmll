@@ -75,7 +75,7 @@ fn memory_access(
             .collect(),
         address_base: address.base(),
         offset: address.offset().cloned(),
-        source: op.source.clone(),
+        source_text: op.source_text.clone(),
     }
 }
 

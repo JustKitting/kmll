@@ -1880,6 +1880,31 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(lifted_ops_tsv.starts_with(
         "sass_path\tfunction\taddress\tblock_id\tpredicate\topcode\tclass\tkind\tsemantics"
     ));
+    assert!(
+        lifted_ops_tsv
+            .lines()
+            .next()
+            .is_some_and(|header| header.ends_with("\tsource_text"))
+    );
+    let dataflow_tsv =
+        fs::read_to_string(&report.dataflow_path).expect("dataflow TSV should be readable");
+    assert!(dataflow_tsv.starts_with("sass_path\tfunction\taddress\tdefines\tuses\tsource_text"));
+    let value_ops_tsv =
+        fs::read_to_string(&report.value_ops_path).expect("value ops TSV should be readable");
+    assert!(
+        value_ops_tsv
+            .lines()
+            .next()
+            .is_some_and(|header| header.ends_with("\tsource_text"))
+    );
+    let memory_accesses_tsv = fs::read_to_string(&report.memory_accesses_path)
+        .expect("memory accesses TSV should be readable");
+    assert!(
+        memory_accesses_tsv
+            .lines()
+            .next()
+            .is_some_and(|header| header.ends_with("\tsource_text"))
+    );
     let opcode_catalog_tsv =
         fs::read_to_string(&report.opcode_catalog_path).expect("opcode catalog TSV should read");
     assert!(opcode_catalog_tsv.starts_with(

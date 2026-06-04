@@ -116,6 +116,6 @@ fn lift_op(
         outputs,
         source_operands: op.source_operands.clone(),
         detail: SassLiftedOpDetail::new(class, kind),
-        source: op.source.clone(),
+        source_text: op.source_text.clone(),
     }
 }

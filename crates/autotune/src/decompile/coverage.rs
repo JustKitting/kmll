@@ -508,7 +508,7 @@ pub struct SassCoverageDataflowOp {
     pub address: u64,
     pub defines: Vec<RegisterRef>,
     pub uses: Vec<RegisterRef>,
-    pub source: String,
+    pub source_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -556,7 +556,7 @@ pub struct SassCoverageValueOp {
     pub output_registers: Vec<RegisterRef>,
     pub input_value_ids: Vec<usize>,
     pub output_value_ids: Vec<usize>,
-    pub source: String,
+    pub source_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -574,7 +574,7 @@ pub struct SassCoverageLiftedOp {
     pub outputs: Vec<SassLiftedValueRef>,
     pub source_operands: Vec<AggregateOperand>,
     pub detail: SassLiftedOpDetail,
-    pub source: String,
+    pub source_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -602,7 +602,7 @@ pub struct SassCoverageMemoryAccess {
     pub address_registers: Vec<RegisterRef>,
     pub address_base: Option<MemoryAddressBase>,
     pub offset: Option<MemoryAddressImmediate>,
-    pub source: String,
+    pub source_text: String,
 }
 
 pub fn run_sass_coverage_scan(
@@ -1133,7 +1133,7 @@ fn append_unsupported(
                 address: op.address,
                 opcode: opcode.clone(),
                 reason: reason.clone(),
-                raw: op.source.clone(),
+                raw: op.source_text.clone(),
             });
         }
     }
@@ -1252,7 +1252,7 @@ fn append_analysis(
                 address: op.address,
                 defines: op.defines.clone(),
                 uses: op.uses.clone(),
-                source: op.source.clone(),
+                source_text: op.source_text.clone(),
             });
         }
         for use_site in &function.reaching_uses {
@@ -1300,7 +1300,7 @@ fn append_analysis(
                 output_registers: op.output_registers.clone(),
                 input_value_ids: op.input_value_ids.clone(),
                 output_value_ids: op.output_value_ids.clone(),
-                source: op.source.clone(),
+                source_text: op.source_text.clone(),
             });
         }
         if let Some(lifted_function) = lifted
@@ -1323,7 +1323,7 @@ fn append_analysis(
                     outputs: op.outputs.clone(),
                     source_operands: op.source_operands.clone(),
                     detail: op.detail,
-                    source: op.source.clone(),
+                    source_text: op.source_text.clone(),
                 });
             }
         }
@@ -1352,7 +1352,7 @@ fn append_analysis(
                 address_registers: access.address_registers.clone(),
                 address_base: access.address_base.clone(),
                 offset: access.offset.clone(),
-                source: access.source.clone(),
+                source_text: access.source_text.clone(),
             });
         }
     }
@@ -1886,7 +1886,11 @@ fn render_regions_tsv(report: &SassCoverageReport) -> String {
 
 fn render_dataflow_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
-    writeln!(out, "sass_path\tfunction\taddress\tdefines\tuses\traw").expect("write to string");
+    writeln!(
+        out,
+        "sass_path\tfunction\taddress\tdefines\tuses\tsource_text"
+    )
+    .expect("write to string");
     for op in &report.dataflow {
         writeln!(
             out,
@@ -1896,7 +1900,7 @@ fn render_dataflow_tsv(report: &SassCoverageReport) -> String {
             op.address,
             tsv(&display_list(&op.defines)),
             tsv(&display_list(&op.uses)),
-            tsv(&op.source),
+            tsv(&op.source_text),
         )
         .expect("write to string");
     }
@@ -1981,7 +1985,7 @@ fn render_value_ops_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "sass_path\tfunction\taddress\tblock_id\tpredicate\topcode\tinput_registers\toutput_registers\tinput_values\toutput_values\tkind\traw"
+        "sass_path\tfunction\taddress\tblock_id\tpredicate\topcode\tinput_registers\toutput_registers\tinput_values\toutput_values\tkind\tsource_text"
     )
     .expect("write to string");
     for op in &report.value_ops {
@@ -2001,7 +2005,7 @@ fn render_value_ops_tsv(report: &SassCoverageReport) -> String {
             tsv(&format_values(&op.input_value_ids)),
             tsv(&format_values(&op.output_value_ids)),
             tsv(&op.kind.to_string()),
-            tsv(&op.source),
+            tsv(&op.source_text),
         )
         .expect("write to string");
     }
@@ -2012,7 +2016,7 @@ fn render_lifted_ops_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "sass_path\tfunction\taddress\tblock_id\tpredicate\topcode\tclass\tkind\tsemantics\tinputs\toutputs\tsource_operands\tdetail\traw"
+        "sass_path\tfunction\taddress\tblock_id\tpredicate\topcode\tclass\tkind\tsemantics\tinputs\toutputs\tsource_operands\tdetail\tsource_text"
     )
     .expect("write to string");
     for op in &report.lifted_ops {
@@ -2034,7 +2038,7 @@ fn render_lifted_ops_tsv(report: &SassCoverageReport) -> String {
             tsv(&display_lifted_value_refs(&op.outputs)),
             tsv(&display_list(&op.source_operands)),
             tsv(&op.detail.to_string()),
-            tsv(&op.source),
+            tsv(&op.source_text),
         )
         .expect("write to string");
     }
@@ -2069,7 +2073,7 @@ fn render_memory_accesses_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "sass_path\tfunction\taddress\tpredicate\tkind\tspace\twidth_bits\tvalue_register\taddress_expr\taddress_registers\taddress_base\toffset\traw"
+        "sass_path\tfunction\taddress\tpredicate\tkind\tspace\twidth_bits\tvalue_register\taddress_expr\taddress_registers\taddress_base\toffset\tsource_text"
     )
     .expect("write to string");
     for access in &report.memory_accesses {
@@ -2091,7 +2095,7 @@ fn render_memory_accesses_tsv(report: &SassCoverageReport) -> String {
             tsv(&display_list(&access.address_registers)),
             tsv(&display_optional(access.address_base.as_ref())),
             tsv(&display_optional(access.offset.as_ref())),
-            tsv(&access.source),
+            tsv(&access.source_text),
         )
         .expect("write to string");
     }

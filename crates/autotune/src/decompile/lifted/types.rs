@@ -38,7 +38,7 @@ pub struct SassLiftedOp {
     pub outputs: Vec<SassLiftedValueRef>,
     pub source_operands: Vec<AggregateOperand>,
     pub detail: SassLiftedOpDetail,
-    pub source: String,
+    pub source_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
