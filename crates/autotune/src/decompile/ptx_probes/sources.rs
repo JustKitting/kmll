@@ -200,27 +200,29 @@ pub(super) const SCALAR_MEMORY_ATOMIC_PTX: &str = r#".version 9.1
     cvt.u64.u32 %rd2, %r2;
     add.u64 %rd3, %rd0, %rd2;
     add.u64 %rd4, %rd1, %rd2;
+    cvta.to.global.u64 %rd7, %rd4;
 
     mov.u32 %r3, 1;
-    atom.global.add.u32 %r4, [%rd4], %r3;
+    atom.add.u32 %r4, [%rd7], %r3;
+    atom.global.add.u32 %r5, [%rd4], %r3;
     red.global.add.u32 [%rd4], %r3;
 
     mov.u64 %rd5, scalar_memory_atomic_probe_local;
     add.u64 %rd6, %rd5, %rd2;
     st.volatile.local.u32 [%rd6], %r4;
-    ld.volatile.local.u32 %r5, [%rd6];
+    ld.volatile.local.u32 %r6, [%rd6];
 
-    setp.eq.u32 %p0, %r5, %r4;
-    setp.ne.u32 %p1, %r5, %r3;
-    setp.gt.u32 %p2, %r5, 0;
+    setp.eq.u32 %p0, %r6, %r4;
+    setp.ne.u32 %p1, %r6, %r3;
+    setp.gt.u32 %p2, %r6, 0;
     and.pred %p3, %p0, %p1;
     or.pred %p4, %p2, %p3;
     xor.pred %p5, %p4, %p1;
-    selp.u32 %r6, %r5, %r3, %p5;
+    selp.u32 %r7, %r6, %r3, %p5;
 
-    add.u32 %r7, %r4, %r5;
-    add.u32 %r8, %r7, %r6;
-    st.global.u32 [%rd3], %r8;
+    add.u32 %r8, %r4, %r5;
+    add.u32 %r9, %r8, %r7;
+    st.global.u32 [%rd3], %r9;
     ret;
 }
 "#;

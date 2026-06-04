@@ -2449,6 +2449,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
     assert_eq!(atomic_probe.symbol, "scalar_memory_atomic_probe");
     assert_eq!(atomic_probe.default_compile_arch, "sm_75");
     assert!(atomic_probe.source.contains(".target sm_75"));
+    assert!(atomic_probe.source.contains("atom.add.u32"));
     assert!(atomic_probe.source.contains("atom.global.add.u32"));
     assert!(atomic_probe.source.contains("red.global.add.u32"));
     assert!(atomic_probe.source.contains("st.volatile.local.u32"));
