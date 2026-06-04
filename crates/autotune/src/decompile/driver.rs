@@ -1,3 +1,4 @@
+mod artifacts;
 mod autotune_gemm;
 mod autotune_matvec;
 mod autotune_sass;

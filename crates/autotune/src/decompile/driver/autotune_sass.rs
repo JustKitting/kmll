@@ -10,10 +10,10 @@ use crate::autotune::{
 };
 
 use super::super::{
-    DecompiledAutotuneShape, analyze_sass_ir, decompiled_autotune_operation_with_module,
-    driver_support::{absolute_path, render_sass_file_side_by_side, run_capture, run_checked},
-    lift_sass_module, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
+    DecompiledAutotuneShape, decompiled_autotune_operation_with_module,
+    driver_support::absolute_path,
 };
+use super::artifacts::{DecompiledSassArtifacts, disassemble_ptx_to_sass};
 use super::types::{DecompileAutotuneSassOptions, DecompileAutotuneSassReport};
 
 pub fn run_decompile_autotune_sass(
@@ -33,11 +33,6 @@ pub fn run_decompile_autotune_sass(
         Some(path) => Some((path.clone(), fs::read_to_string(path)?)),
         None => None,
     };
-    let parsed = parse_nvidia_sass(&sass)?;
-    let project_ir = lift_sass_module(&parsed);
-    let analysis = analyze_sass_ir(&project_ir);
-    let lifted = lift_sass_value_ir(&project_ir, &analysis);
-    let patterns = recover_sass_patterns(&project_ir);
     let output_dir = match &options.output_dir {
         Some(path) => absolute_path(path)?,
         None => artifact_root.join("input").join(
@@ -47,28 +42,16 @@ pub fn run_decompile_autotune_sass(
                 .unwrap_or("sass"),
         ),
     };
-    fs::create_dir_all(&output_dir)?;
-    let ir_path = output_dir.join("lifted.ir.txt");
-    fs::write(&ir_path, project_ir.to_text().as_bytes())?;
-    let lifted_ir_path = output_dir.join("lifted-value-ir.txt");
-    fs::write(&lifted_ir_path, lifted.to_text().as_bytes())?;
-    let analysis_path = output_dir.join("analysis.txt");
-    fs::write(&analysis_path, analysis.to_text().as_bytes())?;
-    let pattern_path = output_dir.join("patterns.txt");
-    fs::write(&pattern_path, patterns.to_text().as_bytes())?;
-    let side_by_side = render_sass_file_side_by_side(
-        &sass_path,
-        source
-            .as_ref()
-            .map(|(path, text)| (path.as_path(), text.as_str())),
-        &sass,
-        &project_ir,
-    );
-    let side_by_side_path = output_dir.join("source-sass-ir.txt");
-    fs::write(&side_by_side_path, side_by_side.as_bytes())?;
+    let (parsed, input_artifacts) = DecompiledSassArtifacts::parse_and_write(
+        output_dir.clone(),
+        sass_path.clone(),
+        source.clone(),
+        sass,
+    )?;
 
     let function = match &options.function_symbol {
-        Some(symbol) => project_ir
+        Some(symbol) => input_artifacts
+            .ir
             .functions
             .iter()
             .find(|function| function.name.as_str() == symbol)
@@ -81,20 +64,21 @@ pub fn run_decompile_autotune_sass(
                     ),
                 )
             })?,
-        None => project_ir.functions.first().ok_or_else(|| {
+        None => input_artifacts.ir.functions.first().ok_or_else(|| {
             io::Error::new(
                 ErrorKind::InvalidData,
                 "input SASS did not contain any functions",
             )
         })?,
     };
-    let routed = decompiled_autotune_operation_with_module(&project_ir, function, options.shape)
-        .map_err(|error| {
-            io::Error::new(
-                ErrorKind::InvalidData,
-                format!("input SASS did not provide supported autotune evidence: {error:?}"),
-            )
-        })?;
+    let routed =
+        decompiled_autotune_operation_with_module(&input_artifacts.ir, function, options.shape)
+            .map_err(|error| {
+                io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("input SASS did not provide supported autotune evidence: {error:?}"),
+                )
+            })?;
 
     let optimization = auto_optimize_inference_kernel(&routed.operation, options.config)?;
     let best = optimization.best_candidate().ok_or_else(|| {
@@ -117,73 +101,28 @@ pub fn run_decompile_autotune_sass(
         Some(&generated_store.standalone_target_root()),
     )?;
     let optimized_sass_dir = generated_store.paths_for(best).directory.join("sass");
-    fs::create_dir_all(&optimized_sass_dir)?;
-    let optimized_cubin_path = optimized_sass_dir.join(format!(
-        "{}.{}.cubin",
-        emitted_optimized.symbol, options.compile_arch
-    ));
-    run_checked(
-        "ptxas",
-        &[
-            format!("-arch={}", options.compile_arch),
-            "-o".to_string(),
-            optimized_cubin_path.display().to_string(),
-            compiled_optimized.ptx_path.display().to_string(),
-        ],
-        &optimized_sass_dir,
-    )?;
-    let optimized_sass_path = optimized_sass_dir.join(format!(
-        "{}.{}.nvdisasm.sass",
-        emitted_optimized.symbol, options.compile_arch
-    ));
-    let optimized_sass = run_capture(
-        "nvdisasm",
-        &[optimized_cubin_path.display().to_string()],
-        &optimized_sass_dir,
-    )?;
-    fs::write(&optimized_sass_path, optimized_sass.as_bytes())?;
-    let optimized_parsed = parse_nvidia_sass(&optimized_sass)?;
-    let optimized_ir = lift_sass_module(&optimized_parsed);
-    let optimized_analysis = analyze_sass_ir(&optimized_ir);
-    let optimized_lifted = lift_sass_value_ir(&optimized_ir, &optimized_analysis);
-    let optimized_patterns = recover_sass_patterns(&optimized_ir);
-    let optimized_ir_path = optimized_sass_dir.join("lifted.ir.txt");
-    fs::write(&optimized_ir_path, optimized_ir.to_text().as_bytes())?;
-    let optimized_lifted_ir_path = optimized_sass_dir.join("lifted-value-ir.txt");
-    fs::write(
-        &optimized_lifted_ir_path,
-        optimized_lifted.to_text().as_bytes(),
-    )?;
-    let optimized_analysis_path = optimized_sass_dir.join("analysis.txt");
-    fs::write(
-        &optimized_analysis_path,
-        optimized_analysis.to_text().as_bytes(),
-    )?;
-    let optimized_pattern_path = optimized_sass_dir.join("patterns.txt");
-    fs::write(
-        &optimized_pattern_path,
-        optimized_patterns.to_text().as_bytes(),
+    let optimized_disassembly = disassemble_ptx_to_sass(
+        compiled_optimized.ptx_path.clone(),
+        optimized_sass_dir.clone(),
+        &emitted_optimized.symbol,
+        &options.compile_arch,
     )?;
     let optimized_source_text = fs::read_to_string(&emitted_optimized.paths.source_path)?;
-    let optimized_side_by_side = render_sass_file_side_by_side(
-        &optimized_sass_path,
+    let (optimized_parsed, optimized_artifacts) = DecompiledSassArtifacts::parse_and_write(
+        optimized_sass_dir,
+        optimized_disassembly.sass_path.clone(),
         Some((
-            emitted_optimized.paths.source_path.as_path(),
-            optimized_source_text.as_str(),
+            emitted_optimized.paths.source_path.clone(),
+            optimized_source_text,
         )),
-        &optimized_sass,
-        &optimized_ir,
-    );
-    let optimized_side_by_side_path = optimized_sass_dir.join("source-sass-ir.txt");
-    fs::write(
-        &optimized_side_by_side_path,
-        optimized_side_by_side.as_bytes(),
+        optimized_disassembly.sass,
     )?;
-    let optimized_function = optimized_ir
+    let optimized_function = optimized_artifacts
+        .ir
         .functions
         .iter()
         .find(|function| function.name.as_str() == emitted_optimized.symbol)
-        .or_else(|| optimized_ir.functions.first())
+        .or_else(|| optimized_artifacts.ir.functions.first())
         .ok_or_else(|| {
             io::Error::new(
                 ErrorKind::InvalidData,
@@ -191,7 +130,7 @@ pub fn run_decompile_autotune_sass(
             )
         })?;
     let optimized_routed = decompiled_autotune_operation_with_module(
-        &optimized_ir,
+        &optimized_artifacts.ir,
         optimized_function,
         options.shape,
     )
@@ -223,29 +162,31 @@ pub fn run_decompile_autotune_sass(
         source_path,
         function_symbol: function.name.as_str().to_string(),
         output_dir,
-        ir_path,
-        lifted_ir_path,
-        analysis_path,
-        pattern_path,
-        side_by_side_path,
+        ir_path: input_artifacts.ir_path,
+        lifted_ir_path: input_artifacts.lifted_ir_path,
+        analysis_path: input_artifacts.analysis_path,
+        pattern_path: input_artifacts.pattern_path,
+        side_by_side_path: input_artifacts.side_by_side_path,
         parsed_instruction_count: parsed.instruction_count(),
-        unsupported_instruction_count: project_ir.unsupported_instruction_count(),
-        semantic_pattern_count: patterns.pattern_count(),
+        unsupported_instruction_count: input_artifacts.ir.unsupported_instruction_count(),
+        semantic_pattern_count: input_artifacts.patterns.pattern_count(),
         evidence: routed.evidence,
         operation_name: routed.operation.name,
         auto_report_path: emitted_report.report_path,
         optimized_source_path: emitted_optimized.paths.source_path,
         optimized_ptx_path: compiled_optimized.ptx_path,
-        optimized_cubin_path,
-        optimized_sass_path,
-        optimized_ir_path,
-        optimized_lifted_ir_path,
-        optimized_analysis_path,
-        optimized_pattern_path,
-        optimized_side_by_side_path,
+        optimized_cubin_path: optimized_disassembly.cubin_path,
+        optimized_sass_path: optimized_disassembly.sass_path,
+        optimized_ir_path: optimized_artifacts.ir_path,
+        optimized_lifted_ir_path: optimized_artifacts.lifted_ir_path,
+        optimized_analysis_path: optimized_artifacts.analysis_path,
+        optimized_pattern_path: optimized_artifacts.pattern_path,
+        optimized_side_by_side_path: optimized_artifacts.side_by_side_path,
         optimized_parsed_instruction_count: optimized_parsed.instruction_count(),
-        optimized_unsupported_instruction_count: optimized_ir.unsupported_instruction_count(),
-        optimized_semantic_pattern_count: optimized_patterns.pattern_count(),
+        optimized_unsupported_instruction_count: optimized_artifacts
+            .ir
+            .unsupported_instruction_count(),
+        optimized_semantic_pattern_count: optimized_artifacts.patterns.pattern_count(),
         optimized_evidence: optimized_routed.evidence,
         best_symbol: emitted_optimized.symbol,
         best_action_count: best_action_ops.len(),
