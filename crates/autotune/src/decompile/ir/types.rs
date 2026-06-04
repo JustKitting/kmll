@@ -46,7 +46,7 @@ impl KernelIrModule {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelIrFunction {
-    pub name: String,
+    pub name: SassSymbol,
     pub ops: Vec<KernelIrOp>,
 }
 

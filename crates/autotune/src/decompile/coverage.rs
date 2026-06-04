@@ -1128,7 +1128,7 @@ fn append_unsupported(
             };
             unsupported_instructions.push(SassUnsupportedInstruction {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 address: op.address,
                 opcode: opcode.clone(),
                 reason: reason.clone(),
@@ -1147,7 +1147,7 @@ fn append_semantic_patterns(
         for pattern in &function.patterns {
             semantic_patterns.push(SassCoverageSemanticPattern {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 start_address: pattern.start_address,
                 end_address: pattern.end_address,
                 kind: pattern.kind.clone(),
@@ -1179,7 +1179,7 @@ fn append_analysis(
         for block in &function.blocks {
             cfg_blocks.push(SassCoverageBasicBlock {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 id: block.id,
                 label: block.label.as_ref().map(ToString::to_string),
                 start_address: block.start_address,
@@ -1191,7 +1191,7 @@ fn append_analysis(
         for edge in &function.edges {
             cfg_edges.push(SassCoverageCfgEdge {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 from_block: edge.from_block,
                 to_block: edge.to_block,
                 kind: edge.kind,
@@ -1202,7 +1202,7 @@ fn append_analysis(
         for dominator in &function.dominators {
             dominators.push(SassCoverageDominatorBlock {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 block_id: dominator.block_id,
                 reachable: dominator.reachable,
                 immediate_dominator: dominator.immediate_dominator,
@@ -1213,7 +1213,7 @@ fn append_analysis(
         for natural_loop in &function.natural_loops {
             natural_loops.push(SassCoverageNaturalLoop {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 header_block: natural_loop.header_block,
                 latch_block: natural_loop.latch_block,
                 reachable: natural_loop.reachable,
@@ -1225,7 +1225,7 @@ fn append_analysis(
         for region in &function.regions {
             regions.push(SassCoverageRegion {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 id: region.id,
                 parent: region.parent,
                 children: region.children.clone(),
@@ -1247,7 +1247,7 @@ fn append_analysis(
         for op in &function.dataflow {
             dataflow.push(SassCoverageDataflowOp {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 address: op.address,
                 defines: op.defines.clone(),
                 uses: op.uses.clone(),
@@ -1257,7 +1257,7 @@ fn append_analysis(
         for use_site in &function.reaching_uses {
             reaching_uses.push(SassCoverageReachingUse {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 address: use_site.address,
                 register: use_site.register.clone(),
                 reaching_def_addresses: use_site.reaching_def_addresses.clone(),
@@ -1267,7 +1267,7 @@ fn append_analysis(
         for value in &function.ssa_values {
             ssa_values.push(SassCoverageSsaValue {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 value_id: value.value_id,
                 register: value.register.clone(),
                 def_address: value.def_address,
@@ -1278,7 +1278,7 @@ fn append_analysis(
         for edge in &function.def_use_edges {
             def_use_edges.push(SassCoverageDefUseEdge {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 value_id: edge.value_id,
                 register: edge.register.clone(),
                 def_address: edge.def_address,
@@ -1289,7 +1289,7 @@ fn append_analysis(
         for op in &function.value_ops {
             value_ops.push(SassCoverageValueOp {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 address: op.address,
                 block_id: op.block_id,
                 predicate: op.predicate.clone(),
@@ -1310,7 +1310,7 @@ fn append_analysis(
             for op in &lifted_function.ops {
                 lifted_ops.push(SassCoverageLiftedOp {
                     sass_path: sass_path.to_path_buf(),
-                    function: function.name.clone(),
+                    function: function.name.to_string(),
                     address: op.address,
                     block_id: op.block_id,
                     predicate: op.predicate.clone(),
@@ -1329,7 +1329,7 @@ fn append_analysis(
         for range in &function.live_ranges {
             live_ranges.push(SassCoverageLiveRange {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 register: range.register.clone(),
                 def_address: range.def_address,
                 start_address: range.start_address,
@@ -1340,7 +1340,7 @@ fn append_analysis(
         for access in &function.memory_accesses {
             memory_accesses.push(SassCoverageMemoryAccess {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.clone(),
+                function: function.name.to_string(),
                 address: access.address,
                 predicate: access.predicate.clone(),
                 kind: access.kind,

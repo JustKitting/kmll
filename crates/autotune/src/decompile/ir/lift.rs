@@ -11,7 +11,7 @@ pub fn lift_sass_module(module: &SassModule) -> KernelIrModule {
             .functions
             .iter()
             .map(|function| KernelIrFunction {
-                name: function.name.clone(),
+                name: SassSymbol::new(function.name.clone()),
                 ops: function.instructions.iter().map(lift_instruction).collect(),
             })
             .collect(),

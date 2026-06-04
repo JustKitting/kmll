@@ -1,7 +1,7 @@
 use std::fmt;
 
 use super::super::AggregateOperand;
-use super::super::{PredicateCondition, RegisterRef, SassOpcode};
+use super::super::{PredicateCondition, RegisterRef, SassOpcode, SassSymbol};
 use super::semantics::SassLiftedSemantics;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,7 +21,7 @@ impl SassLiftedModule {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassLiftedFunction {
-    pub name: String,
+    pub name: SassSymbol,
     pub ops: Vec<SassLiftedOp>,
 }
 

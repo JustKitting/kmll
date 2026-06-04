@@ -309,7 +309,7 @@ fn parse_nvidia_sass_captures_nvdisasm_function_and_operands() {
     assert_eq!(module.target.as_deref(), Some("sm_120"));
     assert_eq!(module.functions.len(), 1);
     let function = &module.functions[0];
-    assert_eq!(function.name, "sass_fixture_i32_add");
+    assert_eq!(function.name.as_str(), "sass_fixture_i32_add");
     assert_eq!(function.instructions.len(), 8);
     assert!(
         function
@@ -350,7 +350,7 @@ fn parse_nvidia_sass_captures_cuobjdump_function_header() {
     assert_eq!(module.target.as_deref(), Some("sm_120"));
     assert_eq!(module.functions.len(), 1);
     let function = &module.functions[0];
-    assert_eq!(function.name, "cuobjdump_fixture");
+    assert_eq!(function.name.as_str(), "cuobjdump_fixture");
     assert_eq!(function.section.as_deref(), Some("cuobjdump_fixture"));
     assert_eq!(function.instructions.len(), 3);
     assert_eq!(function.instructions[0].opcode, "S2R");

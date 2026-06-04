@@ -99,7 +99,7 @@ impl SassAnalysisModule {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassAnalysisFunction {
-    pub name: String,
+    pub name: SassSymbol,
     pub blocks: Vec<SassBasicBlock>,
     pub edges: Vec<SassCfgEdge>,
     pub dominators: Vec<SassDominatorBlock>,

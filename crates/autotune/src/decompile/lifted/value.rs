@@ -19,7 +19,7 @@ pub fn lift_sass_value_ir(
     let analysis_by_name = analysis
         .functions
         .iter()
-        .map(|function| (function.name.as_str(), function))
+        .map(|function| (function.name.clone(), function))
         .collect::<BTreeMap<_, _>>();
     SassLiftedModule {
         target: module.target.clone(),
@@ -28,7 +28,7 @@ pub fn lift_sass_value_ir(
             .iter()
             .filter_map(|function| {
                 analysis_by_name
-                    .get(function.name.as_str())
+                    .get(&function.name)
                     .map(|analysis| lift_function(function, analysis))
             })
             .collect(),
