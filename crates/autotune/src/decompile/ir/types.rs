@@ -1491,15 +1491,6 @@ fn parse_immediate_operand(raw: &str) -> Option<ImmediateValue> {
     if text.is_empty() {
         return None;
     }
-    if text.contains('.') || text.contains('e') || text.contains('E') {
-        return text.parse::<f64>().ok().map(|value| {
-            if value.fract() == 0.0 {
-                ImmediateValue::Integer(value as i128)
-            } else {
-                ImmediateValue::FloatBits(value.to_bits())
-            }
-        });
-    }
     let (negative, body) = text
         .strip_prefix('-')
         .map(|body| (true, body))
@@ -1512,6 +1503,15 @@ fn parse_immediate_operand(raw: &str) -> Option<ImmediateValue> {
         } else {
             value
         }));
+    }
+    if text.contains('.') || body.contains('e') || body.contains('E') {
+        return text.parse::<f64>().ok().map(|value| {
+            if value.fract() == 0.0 {
+                ImmediateValue::Integer(value as i128)
+            } else {
+                ImmediateValue::FloatBits(value.to_bits())
+            }
+        });
     }
     text.parse::<i128>().ok().map(ImmediateValue::Integer)
 }

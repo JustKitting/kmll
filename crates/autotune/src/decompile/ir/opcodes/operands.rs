@@ -1,10 +1,8 @@
-use super::super::super::sass::{
-    RegisterClass, SassInstruction, SassOperandKind, SassPredicate, SassRegister, label_in_text,
-};
+use super::super::super::sass::{SassInstruction, SassPredicate, label_in_text};
 use super::super::types::{
-    AggregateOperand, AggregateOperandKind, ControlTarget, KernelIrOpKind, PredicateCondition,
-    RegisterRef, SassMappingConfidence, SassOpcode, SassUnsupportedReason, ScalarOperand,
-    ScalarOperandKind,
+    AggregateOperand, AggregateOperandKind, ControlTarget, ImmediateValue, KernelIrOpKind,
+    PredicateCondition, RegisterRef, RegisterRefKind, SassMappingConfidence, SassOpcode,
+    SassUnsupportedReason, ScalarOperand, ScalarOperandKind,
 };
 use super::LiftResult;
 
@@ -187,73 +185,50 @@ pub(super) fn predicate_condition(predicate: &SassPredicate) -> PredicateConditi
     }
 }
 
-pub(super) fn target_operand(instruction: &SassInstruction) -> Option<ControlTarget> {
-    instruction
-        .operands
-        .iter()
-        .find_map(|operand| match &operand.kind {
-            SassOperandKind::Label(label) => {
-                Some(ControlTarget::label(operand.raw.clone(), label.clone()))
-            }
-            SassOperandKind::Immediate(target) => {
-                let raw = operand.raw.clone();
-                parse_address_target(target)
-                    .map(|address| ControlTarget::address(raw.clone(), address))
-                    .or_else(|| Some(ControlTarget::raw(raw)))
-            }
-            _ => label_in_text(&operand.raw)
-                .map(|label| ControlTarget::label(operand.raw.clone(), label)),
-        })
-}
-
-fn parse_address_target(target: &str) -> Option<u64> {
-    target
-        .strip_prefix("0x")
-        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
-        .or_else(|| target.parse::<u64>().ok())
-}
-
-pub(super) fn branch_condition_operand(
-    instruction: &SassInstruction,
-) -> Option<PredicateCondition> {
-    instruction.operands.iter().find_map(|operand| {
-        let SassOperandKind::Register(
-            register @ SassRegister {
-                class:
-                    RegisterClass::Predicate
-                    | RegisterClass::UniformPredicate
-                    | RegisterClass::PredicateTrue
-                    | RegisterClass::UniformPredicateTrue,
-                ..
-            },
-        ) = &operand.kind
-        else {
-            return None;
-        };
-        let register_text =
-            predicate_register_text(register).unwrap_or_else(|| register_text(&operand.raw));
-        Some(PredicateCondition::register(
+pub(super) fn target_operand(operands: &[AggregateOperand]) -> Option<ControlTarget> {
+    operands.iter().find_map(|operand| match &operand.kind {
+        AggregateOperandKind::Label(label) => Some(ControlTarget::label(
             operand.raw.clone(),
-            RegisterRef::from_sass_register(register_text, register),
-            register.negated,
-        ))
+            label.as_str().to_string(),
+        )),
+        AggregateOperandKind::Immediate(immediate) => {
+            let raw = operand.raw.clone();
+            parse_address_target(immediate)
+                .map(|address| ControlTarget::address(raw.clone(), address))
+                .or_else(|| Some(ControlTarget::raw(raw)))
+        }
+        _ => label_in_text(&operand.raw)
+            .map(|label| ControlTarget::label(operand.raw.clone(), label)),
     })
 }
 
-fn predicate_register_text(register: &SassRegister) -> Option<String> {
-    match register.class {
-        RegisterClass::Predicate => register.index.map(|index| format!("P{index}")),
-        RegisterClass::UniformPredicate => register.index.map(|index| format!("UP{index}")),
-        RegisterClass::PredicateTrue => Some("PT".to_string()),
-        RegisterClass::UniformPredicateTrue => Some("UPT".to_string()),
-        _ => None,
+fn parse_address_target(target: &ImmediateValue) -> Option<u64> {
+    match target {
+        ImmediateValue::Integer(value) => (*value).try_into().ok(),
+        ImmediateValue::FloatBits(_) => None,
     }
 }
 
-fn register_text(raw: &str) -> String {
-    raw.trim()
-        .trim_start_matches('!')
-        .trim_start_matches('-')
-        .trim_matches('|')
-        .to_string()
+pub(super) fn branch_condition_operand(
+    operands: &[AggregateOperand],
+) -> Option<PredicateCondition> {
+    operands.iter().find_map(|operand| {
+        let AggregateOperandKind::Register(register) = &operand.kind else {
+            return None;
+        };
+        if !matches!(
+            register.kind,
+            RegisterRefKind::Predicate(_)
+                | RegisterRefKind::UniformPredicate(_)
+                | RegisterRefKind::PredicateTrue
+                | RegisterRefKind::UniformPredicateTrue
+        ) {
+            return None;
+        }
+        Some(PredicateCondition::register(
+            operand.raw.clone(),
+            register.clone(),
+            operand.raw.trim_start().starts_with('!'),
+        ))
+    })
 }

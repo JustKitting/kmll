@@ -45,6 +45,39 @@ fn register_refs_canonicalize_modifier_spelling_for_identity() {
 }
 
 #[test]
+fn hex_branch_targets_with_exponent_digits_stay_typed() {
+    const HEX_BRANCH_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.hex_branch_fixture,"ax",@progbits
+        .global hex_branch_fixture
+hex_branch_fixture:
+.text.hex_branch_fixture:
+        /*0000*/                   BRA 0xe0 ;                                      /* 0x0 */
+        /*0010*/                   EXIT ;                                          /* 0x0 */
+"#;
+
+    let module = parse_nvidia_sass(HEX_BRANCH_SASS).expect("hex branch SASS should parse");
+    let ir = lift_sass_module(&module);
+    let branch = &ir.functions[0].ops[0];
+
+    assert!(matches!(
+        &branch.source_operands[0].kind,
+        AggregateOperandKind::Immediate(ImmediateValue::Integer(value)) if *value == 0xe0
+    ));
+    assert!(matches!(
+        &branch.kind,
+        KernelIrOpKind::Branch {
+            target: Some(ControlTarget {
+                kind: ControlTargetKind::Address(0xe0),
+                ..
+            }),
+            ..
+        }
+    ));
+}
+
+#[test]
 fn sass_architecture_parses_sm_spellings_and_displays_canonical_form() {
     assert_eq!(
         SassArchitecture::parse("sm120"),
