@@ -165,6 +165,85 @@ pub(super) const TENSOR_CORE_WGMMA_HGMMA_PTX: &str = r#".version 8.7
 }
 "#;
 
+pub(super) const TENSOR_CORE_WGMMA_IGMMA_PTX: &str = r#".version 8.7
+.target sm_90a
+.address_size 64
+
+.visible .entry tensor_core_wgmma_igmma_probe(
+    .param .u64 tensor_core_wgmma_igmma_probe_out
+)
+{
+    .reg .pred %p<2>;
+    .reg .b32 %r<24>;
+    .reg .b64 %rd<4>;
+
+    ld.param.u64 %rd0, [tensor_core_wgmma_igmma_probe_out];
+
+    mov.b32 %r0, 0x01010101;
+    mov.b32 %r1, 0x01010101;
+    mov.b32 %r2, 0x01010101;
+    mov.b32 %r3, 0x01010101;
+    mov.b32 %r4, 0;
+    mov.b32 %r5, 0;
+    mov.b32 %r6, 0;
+    mov.b32 %r7, 0;
+    mov.u64 %rd1, 0;
+    setp.ne.b32 %p0, 1, 0;
+
+    wgmma.fence.sync.aligned;
+    wgmma.mma_async.sync.aligned.m64n8k32.s32.s8.s8
+        {%r4, %r5, %r6, %r7},
+        {%r0, %r1, %r2, %r3},
+        %rd1,
+        %p0;
+    wgmma.commit_group.sync.aligned;
+    wgmma.wait_group.sync.aligned 0;
+
+    st.global.u32 [%rd0], %r4;
+    ret;
+}
+"#;
+
+pub(super) const TENSOR_CORE_WGMMA_QGMMA_PTX: &str = r#".version 8.7
+.target sm_90a
+.address_size 64
+
+.visible .entry tensor_core_wgmma_qgmma_probe(
+    .param .u64 tensor_core_wgmma_qgmma_probe_out
+)
+{
+    .reg .pred %p<2>;
+    .reg .b32 %r<16>;
+    .reg .b64 %rd<4>;
+    .reg .f32 %f<8>;
+
+    ld.param.u64 %rd0, [tensor_core_wgmma_qgmma_probe_out];
+
+    mov.b32 %r0, 0x3f3f3f3f;
+    mov.b32 %r1, 0x3f3f3f3f;
+    mov.b32 %r2, 0x3f3f3f3f;
+    mov.b32 %r3, 0x3f3f3f3f;
+    mov.f32 %f0, 0f00000000;
+    mov.f32 %f1, 0f00000000;
+    mov.f32 %f2, 0f00000000;
+    mov.f32 %f3, 0f00000000;
+    mov.u64 %rd1, 0;
+    setp.ne.b32 %p0, 1, 0;
+
+    wgmma.fence.sync.aligned;
+    wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3
+        {%f0, %f1, %f2, %f3},
+        {%r0, %r1, %r2, %r3},
+        %rd1,
+        %p0, 1, 1;
+    wgmma.commit_group.sync.aligned;
+    wgmma.wait_group.sync.aligned 0;
+
+    st.global.f32 [%rd0], %f0;
+    ret;
+}
+"#;
+
 pub(super) const SCALAR_MEMORY_LOGIC_PTX: &str = r#".version 8.0
 .target sm_75
 .address_size 64

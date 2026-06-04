@@ -5,6 +5,8 @@ pub enum PtxDecompileProbeKind {
     TensorCoreDmma,
     TensorCoreBmma,
     TensorCoreWgmmaHgmma,
+    TensorCoreWgmmaIgmma,
+    TensorCoreWgmmaQgmma,
     ScalarMemoryLogic,
     ArchitectureSm90Scalar,
     ScalarMemoryAtomic,
@@ -18,6 +20,8 @@ impl PtxDecompileProbeKind {
             Self::TensorCoreDmma => "tensor-core-dmma",
             Self::TensorCoreBmma => "tensor-core-bmma",
             Self::TensorCoreWgmmaHgmma => "tensor-core-wgmma-hgmma",
+            Self::TensorCoreWgmmaIgmma => "tensor-core-wgmma-igmma",
+            Self::TensorCoreWgmmaQgmma => "tensor-core-wgmma-qgmma",
             Self::ScalarMemoryLogic => "scalar-memory-logic",
             Self::ArchitectureSm90Scalar => "architecture-sm90-scalar",
             Self::ScalarMemoryAtomic => "scalar-memory-atomic",
@@ -35,6 +39,16 @@ impl PtxDecompileProbeKind {
             | "wgmma-hgmma"
             | "wgmma_hgmma"
             | "hgmma" => Some(Self::TensorCoreWgmmaHgmma),
+            "tensor-core-wgmma-igmma"
+            | "tensor_core_wgmma_igmma"
+            | "wgmma-igmma"
+            | "wgmma_igmma"
+            | "igmma" => Some(Self::TensorCoreWgmmaIgmma),
+            "tensor-core-wgmma-qgmma"
+            | "tensor_core_wgmma_qgmma"
+            | "wgmma-qgmma"
+            | "wgmma_qgmma"
+            | "qgmma" => Some(Self::TensorCoreWgmmaQgmma),
             "scalar-memory-logic" | "scalar_memory_logic" | "scalar" => {
                 Some(Self::ScalarMemoryLogic)
             }

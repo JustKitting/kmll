@@ -2428,6 +2428,14 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreWgmmaHgmma)
         .expect("WGMMA HGMMA PTX probe should exist");
+    let wgmma_igmma_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreWgmmaIgmma)
+        .expect("WGMMA IGMMA PTX probe should exist");
+    let wgmma_qgmma_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreWgmmaQgmma)
+        .expect("WGMMA QGMMA PTX probe should exist");
     let scalar_probe = probes
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::ScalarMemoryLogic)
@@ -2450,6 +2458,8 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             PtxDecompileProbeKind::TensorCoreDmma,
             PtxDecompileProbeKind::TensorCoreBmma,
             PtxDecompileProbeKind::TensorCoreWgmmaHgmma,
+            PtxDecompileProbeKind::TensorCoreWgmmaIgmma,
+            PtxDecompileProbeKind::TensorCoreWgmmaQgmma,
             PtxDecompileProbeKind::ScalarMemoryLogic,
             PtxDecompileProbeKind::ArchitectureSm90Scalar,
             PtxDecompileProbeKind::ScalarMemoryAtomic
@@ -2510,6 +2520,22 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         wgmma_hgmma_probe
             .source
             .contains("wgmma.wait_group.sync.aligned 0")
+    );
+    assert_eq!(wgmma_igmma_probe.symbol, "tensor_core_wgmma_igmma_probe");
+    assert_eq!(wgmma_igmma_probe.default_compile_arch, "sm_90a");
+    assert!(wgmma_igmma_probe.source.contains(".target sm_90a"));
+    assert!(
+        wgmma_igmma_probe
+            .source
+            .contains("wgmma.mma_async.sync.aligned.m64n8k32.s32.s8.s8")
+    );
+    assert_eq!(wgmma_qgmma_probe.symbol, "tensor_core_wgmma_qgmma_probe");
+    assert_eq!(wgmma_qgmma_probe.default_compile_arch, "sm_90a");
+    assert!(wgmma_qgmma_probe.source.contains(".target sm_90a"));
+    assert!(
+        wgmma_qgmma_probe
+            .source
+            .contains("wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3")
     );
     assert_eq!(scalar_probe.symbol, "scalar_memory_logic_probe");
     assert_eq!(scalar_probe.default_compile_arch, "sm_75");
