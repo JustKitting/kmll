@@ -648,8 +648,66 @@ pub enum KernelIrOpKind {
     NoOp,
     Unsupported {
         opcode: SassOpcode,
-        reason: String,
+        reason: SassUnsupportedReason,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassUnsupportedReason {
+    NoLocalMapping,
+    OperandArity {
+        expectation: SassOperandArityExpectation,
+        expected: usize,
+        actual: usize,
+    },
+}
+
+impl SassUnsupportedReason {
+    pub const fn no_local_mapping() -> Self {
+        Self::NoLocalMapping
+    }
+
+    pub const fn exact_operand_arity(expected: usize, actual: usize) -> Self {
+        Self::OperandArity {
+            expectation: SassOperandArityExpectation::Exact,
+            expected,
+            actual,
+        }
+    }
+
+    pub const fn at_least_operand_arity(expected: usize, actual: usize) -> Self {
+        Self::OperandArity {
+            expectation: SassOperandArityExpectation::AtLeast,
+            expected,
+            actual,
+        }
+    }
+}
+
+impl fmt::Display for SassUnsupportedReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoLocalMapping => f.write_str("no local mapping for opcode yet"),
+            Self::OperandArity {
+                expectation,
+                expected,
+                actual,
+            } => match expectation {
+                SassOperandArityExpectation::Exact => {
+                    write!(f, "expected {expected} operands, saw {actual}")
+                }
+                SassOperandArityExpectation::AtLeast => {
+                    write!(f, "expected at least {expected} operands, saw {actual}")
+                }
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SassOperandArityExpectation {
+    Exact,
+    AtLeast,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

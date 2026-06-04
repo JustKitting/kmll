@@ -16,8 +16,8 @@ use super::{
     SassLiftedValueRef, SassMemoryAccessKind, SassModifier, SassOpcode, SassOpcodeCatalogClass,
     SassOpcodeCatalogKind, SassOpcodeCatalogSource, SassPatternConfidence, SassPatternModule,
     SassRegionKind, SassRegionPath, SassSemanticPatternCategory, SassSemanticPatternKind,
-    SassValueOpKind, analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass,
-    recover_sass_patterns, render_sass_file_side_by_side,
+    SassUnsupportedReason, SassValueOpKind, analyze_sass_ir, known_sass_opcodes,
+    lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns, render_sass_file_side_by_side,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -418,7 +418,7 @@ pub struct SassUnsupportedInstruction {
     pub function: String,
     pub address: u64,
     pub opcode: SassOpcode,
-    pub reason: String,
+    pub reason: SassUnsupportedReason,
     pub raw: String,
 }
 
@@ -2163,7 +2163,7 @@ fn render_unsupported_tsv(report: &SassCoverageReport) -> String {
             tsv(&instruction.function),
             instruction.address,
             tsv(&instruction.opcode.to_string()),
-            tsv(&instruction.reason),
+            tsv(&instruction.reason.to_string()),
             tsv(&instruction.raw)
         )
         .expect("write to string");

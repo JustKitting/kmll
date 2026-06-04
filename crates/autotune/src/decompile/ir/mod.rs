@@ -11,7 +11,8 @@ pub use self::{
         MemoryAddressKind, MemorySpace, PredicateCondition, PredicateConditionKind, RegisterRef,
         RegisterRefKind, SassCompareDType, SassComparisonKind, SassMappingConfidence,
         SassMemoryModifier, SassModifier, SassModifierKind, SassOpcode, SassOpcodeKind,
-        SassSyncKind, SassTensorElementType, SassTensorMmaShape, SassTensorMmaSignature,
-        SassTensorScope, SassWarpShuffleMode, ScalarOperand, ScalarOperandKind,
+        SassOperandArityExpectation, SassSyncKind, SassTensorElementType, SassTensorMmaShape,
+        SassTensorMmaSignature, SassTensorScope, SassUnsupportedReason, SassWarpShuffleMode,
+        ScalarOperand, ScalarOperandKind,
     },
 };

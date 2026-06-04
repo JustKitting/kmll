@@ -3,7 +3,7 @@ use super::super::super::sass::{
 };
 use super::super::types::{
     AggregateOperand, ControlTarget, KernelIrOpKind, PredicateCondition, RegisterRef,
-    SassMappingConfidence, SassOpcode, ScalarOperand,
+    SassMappingConfidence, SassOpcode, SassUnsupportedReason, ScalarOperand,
 };
 use super::LiftResult;
 
@@ -139,9 +139,9 @@ pub(super) fn unsupported_arity(instruction: &SassInstruction, expected: usize) 
     (
         KernelIrOpKind::Unsupported {
             opcode: SassOpcode::new(instruction.opcode.clone()),
-            reason: format!(
-                "expected at least {expected} operands, saw {}",
-                instruction.operands.len()
+            reason: SassUnsupportedReason::at_least_operand_arity(
+                expected,
+                instruction.operands.len(),
             ),
         },
         SassMappingConfidence::Unsupported,

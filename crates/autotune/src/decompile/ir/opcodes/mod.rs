@@ -13,6 +13,7 @@ mod warp;
 use super::super::sass::{SassInstruction, SassPredicate};
 use super::types::{
     AggregateOperand, KernelIrOpKind, PredicateCondition, SassMappingConfidence, SassOpcode,
+    SassUnsupportedReason,
 };
 
 pub(super) type LiftResult = (KernelIrOpKind, SassMappingConfidence);
@@ -46,7 +47,7 @@ fn unsupported_opcode(opcode: SassOpcode) -> LiftResult {
     (
         KernelIrOpKind::Unsupported {
             opcode,
-            reason: "no local mapping for opcode yet".to_string(),
+            reason: SassUnsupportedReason::no_local_mapping(),
         },
         SassMappingConfidence::Unsupported,
     )

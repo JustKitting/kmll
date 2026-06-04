@@ -58,6 +58,56 @@ fn sass_architecture_parses_sm_spellings_and_displays_canonical_form() {
     assert_eq!(SassArchitecture::sm(120).to_string(), "sm120");
 }
 
+#[test]
+fn unsupported_reasons_are_typed() {
+    const BAD_ARITY_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.bad_arity_fixture,"ax",@progbits
+        .global bad_arity_fixture
+bad_arity_fixture:
+.text.bad_arity_fixture:
+        /*0000*/                   FADD R1, R2 ;                                /* 0x0 */
+        /*0010*/                   EXIT ;                                        /* 0x0 */
+"#;
+
+    let unsupported_module =
+        parse_nvidia_sass(UNSUPPORTED_SASS).expect("unsupported SASS should parse");
+    let unsupported_ir = lift_sass_module(&unsupported_module);
+    let unsupported = unsupported_ir.functions[0]
+        .ops
+        .iter()
+        .find(|op| op.address == 0)
+        .expect("unsupported opcode should lift to an IR op");
+    assert!(matches!(
+        &unsupported.kind,
+        KernelIrOpKind::Unsupported {
+            opcode,
+            reason: SassUnsupportedReason::NoLocalMapping,
+        } if opcode == &SassOpcode::new("MYSTERY")
+    ));
+
+    let bad_arity_module = parse_nvidia_sass(BAD_ARITY_SASS).expect("bad arity SASS should parse");
+    let bad_arity_ir = lift_sass_module(&bad_arity_module);
+    let bad_arity = bad_arity_ir.functions[0]
+        .ops
+        .iter()
+        .find(|op| op.address == 0)
+        .expect("bad arity opcode should lift to an IR op");
+    assert!(matches!(
+        &bad_arity.kind,
+        KernelIrOpKind::Unsupported {
+            opcode,
+            reason:
+                SassUnsupportedReason::OperandArity {
+                    expectation: SassOperandArityExpectation::AtLeast,
+                    expected: 3,
+                    actual: 2,
+                },
+        } if opcode == &SassOpcode::new("FADD")
+    ));
+}
+
 const SIMPLE_SASS: &str = r#"
         .target sm_120
 
@@ -1616,7 +1666,10 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         report
             .unsupported_instructions
             .iter()
-            .any(|instruction| instruction.opcode == SassOpcode::new("MYSTERY"))
+            .any(
+                |instruction| instruction.opcode == SassOpcode::new("MYSTERY")
+                    && instruction.reason == SassUnsupportedReason::NoLocalMapping
+            )
     );
     assert!(report.files.iter().any(
         |file| file.sass_path.file_name().and_then(|name| name.to_str())

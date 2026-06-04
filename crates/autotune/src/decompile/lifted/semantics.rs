@@ -4,7 +4,7 @@ use super::super::{
     AggregateOperand, ControlTarget, KernelIrOpKind, MemoryAddress, MemorySpace,
     PredicateCondition, RegisterRef, SassCompareDType, SassComparisonKind, SassMemoryModifier,
     SassOpcode, SassSyncKind, SassTensorElementType, SassTensorMmaSignature, SassTensorScope,
-    SassWarpShuffleMode, ScalarOperand,
+    SassUnsupportedReason, SassWarpShuffleMode, ScalarOperand,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,7 +146,7 @@ pub enum SassLiftedSemantics {
     NoOp,
     Unsupported {
         opcode: SassOpcode,
-        reason: String,
+        reason: SassUnsupportedReason,
     },
 }
 
