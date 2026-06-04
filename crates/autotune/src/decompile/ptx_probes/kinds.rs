@@ -8,6 +8,7 @@ pub enum PtxDecompileProbeKind {
     TensorCoreWgmmaBgmma,
     TensorCoreWgmmaIgmma,
     TensorCoreWgmmaQgmma,
+    TensorCoreSm120aOmma,
     TensorCoreSm120aQmma,
     TensorCoreTcgen05UtchmmaUtcimma,
     TensorCoreTcgen05Utcomma,
@@ -19,6 +20,7 @@ pub enum PtxDecompileProbeKind {
     TensorMemoryBulkReduce,
     TensorMemoryTmaAsync,
     WarpGroupRegisterSet,
+    ScalarVoteSync,
     ScalarMemoryLogic,
     ArchitectureSm90Scalar,
     ScalarMemoryAtomic,
@@ -35,6 +37,7 @@ impl PtxDecompileProbeKind {
             Self::TensorCoreWgmmaBgmma => "tensor-core-wgmma-bgmma",
             Self::TensorCoreWgmmaIgmma => "tensor-core-wgmma-igmma",
             Self::TensorCoreWgmmaQgmma => "tensor-core-wgmma-qgmma",
+            Self::TensorCoreSm120aOmma => "tensor-core-sm120a-omma",
             Self::TensorCoreSm120aQmma => "tensor-core-sm120a-qmma",
             Self::TensorCoreTcgen05UtchmmaUtcimma => "tensor-core-tcgen05-utchmma-utcimma",
             Self::TensorCoreTcgen05Utcomma => "tensor-core-tcgen05-utcomma",
@@ -46,6 +49,7 @@ impl PtxDecompileProbeKind {
             Self::TensorMemoryBulkReduce => "tensor-memory-bulk-reduce",
             Self::TensorMemoryTmaAsync => "tensor-memory-tma-async",
             Self::WarpGroupRegisterSet => "warpgroup-register-set",
+            Self::ScalarVoteSync => "scalar-vote-sync",
             Self::ScalarMemoryLogic => "scalar-memory-logic",
             Self::ArchitectureSm90Scalar => "architecture-sm90-scalar",
             Self::ScalarMemoryAtomic => "scalar-memory-atomic",
@@ -83,6 +87,11 @@ impl PtxDecompileProbeKind {
             | "sm120a-qmma"
             | "sm120a_qmma"
             | "qmma" => Some(Self::TensorCoreSm120aQmma),
+            "tensor-core-sm120a-omma"
+            | "tensor_core_sm120a_omma"
+            | "sm120a-omma"
+            | "sm120a_omma"
+            | "omma" => Some(Self::TensorCoreSm120aOmma),
             "tensor-core-tcgen05-utchmma-utcimma"
             | "tensor_core_tcgen05_utchmma_utcimma"
             | "tcgen05-utchmma-utcimma"
@@ -139,6 +148,8 @@ impl PtxDecompileProbeKind {
             | "warpgroup_set"
             | "setmaxnreg"
             | "usetmaxreg" => Some(Self::WarpGroupRegisterSet),
+            "scalar-vote-sync" | "scalar_vote_sync" | "vote-sync" | "vote_sync" | "vote"
+            | "ulop3" => Some(Self::ScalarVoteSync),
             "scalar-memory-logic" | "scalar_memory_logic" | "scalar" => {
                 Some(Self::ScalarMemoryLogic)
             }

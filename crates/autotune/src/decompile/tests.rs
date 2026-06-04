@@ -1746,6 +1746,43 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
 }
 
 #[test]
+fn lift_vote_and_uniform_logic_ops_are_typed() {
+    const VOTE_SASS: &str = r#"
+        .target sm_75
+
+        .section .text.vote_fixture,"ax",@progbits
+        .global vote_fixture
+vote_fixture:
+.text.vote_fixture:
+        /*0000*/                   VOTEU.ANY UR4, UPT, PT ;                    /* 0x0 */
+        /*0010*/                   ULOP3.LUT UR4, UR4, 0x2, URZ, 0xc0, !UPT ;  /* 0x0 */
+        /*0020*/                   VOTE.ANY R0, PT, P0 ;                       /* 0x0 */
+        /*0030*/                   EXIT ;                                      /* 0x0 */
+"#;
+
+    let module = parse_nvidia_sass(VOTE_SASS).expect("vote SASS should parse");
+    let ir = lift_sass_module(&module);
+    let ops = &ir.functions[0].ops;
+
+    assert!(matches!(
+        &ops[0].kind,
+        KernelIrOpKind::WarpElect { dst, .. } if dst == &reg("UR4")
+    ));
+    assert_eq!(ops[0].source_opcode.kind(), &SassOpcodeKind::Voteu);
+    assert!(matches!(
+        &ops[1].kind,
+        KernelIrOpKind::LogicLut { dst, .. } if dst == &reg("UR4")
+    ));
+    assert_eq!(ops[1].source_opcode.kind(), &SassOpcodeKind::Ulop3);
+    assert!(matches!(
+        &ops[2].kind,
+        KernelIrOpKind::WarpElect { dst, .. } if dst == &reg("R0")
+    ));
+    assert_eq!(ops[2].source_opcode.kind(), &SassOpcodeKind::Vote);
+    assert_eq!(ir.unsupported_instruction_count(), 0);
+}
+
+#[test]
 fn lift_tensor_core_sass_keeps_known_op_families_typed() {
     let module = parse_nvidia_sass(TENSOR_CORE_SASS).expect("tensor SASS should parse");
     let ir = lift_sass_module(&module);
@@ -2506,6 +2543,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreSm120aQmma)
         .expect("SM120a QMMA PTX probe should exist");
+    let sm120a_omma_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreSm120aOmma)
+        .expect("SM120a OMMA PTX probe should exist");
     let tcgen05_utchmma_utcimma_probe = probes
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreTcgen05UtchmmaUtcimma)
@@ -2534,6 +2575,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::WarpGroupRegisterSet)
         .expect("warpgroup register-set PTX probe should exist");
+    let scalar_vote_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::ScalarVoteSync)
+        .expect("scalar vote-sync PTX probe should exist");
     let scalar_probe = probes
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::ScalarMemoryLogic)
@@ -2654,6 +2699,13 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             .contains("mma.sync.aligned.kind::f8f6f4.m16n8k32.row.col.f32.e4m3.e4m3.f32")
     );
     assert!(sm120a_qmma_probe.source.contains("st.global.f32"));
+    assert_eq!(sm120a_omma_probe.symbol, "tensor_core_sm120a_omma_probe");
+    assert_eq!(sm120a_omma_probe.default_compile_arch, "sm_120a");
+    assert!(sm120a_omma_probe.source.contains(".target sm_120a"));
+    assert!(sm120a_omma_probe.source.contains(
+        "mma.sync.aligned.kind::mxf4nvf4.block_scale.scale_vec::2X.m16n8k64.row.col.f32.e2m1.e2m1.f32.ue8m0"
+    ));
+    assert!(sm120a_omma_probe.source.contains("st.global.f32"));
     assert_eq!(
         tcgen05_utchmma_utcimma_probe.symbol,
         "tensor_core_tcgen05_utchmma_utcimma_probe"
@@ -2783,6 +2835,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             .source
             .contains("setmaxnreg.dec.sync.aligned.u32 40")
     );
+    assert_eq!(scalar_vote_probe.symbol, "scalar_vote_sync_probe");
+    assert_eq!(scalar_vote_probe.default_compile_arch, "sm_75");
+    assert!(scalar_vote_probe.source.contains("vote.sync.all.pred"));
+    assert!(scalar_vote_probe.source.contains("st.global.u32"));
     assert_eq!(scalar_probe.symbol, "scalar_memory_logic_probe");
     assert_eq!(scalar_probe.default_compile_arch, "sm_75");
     assert!(scalar_probe.source.contains(".target sm_75"));

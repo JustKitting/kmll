@@ -1,12 +1,13 @@
 use super::kinds::PtxDecompileProbeKind;
 use super::sources::{
-    SCALAR_MEMORY_ATOMIC_PTX, SCALAR_MEMORY_LOGIC_PTX, TENSOR_CORE_BMMA_PTX, TENSOR_CORE_DMMA_PTX,
-    TENSOR_CORE_HMMA_PTX, TENSOR_CORE_IMMA_PTX, TENSOR_CORE_SM120A_QMMA_PTX,
-    TENSOR_CORE_TCGEN05_UTCHMMA_UTCIMMA_PTX, TENSOR_CORE_TCGEN05_UTCOMMA_PTX,
-    TENSOR_CORE_TCGEN05_UTCQMMA_PTX, TENSOR_CORE_WGMMA_BGMMA_PTX, TENSOR_CORE_WGMMA_HGMMA_PTX,
-    TENSOR_CORE_WGMMA_IGMMA_PTX, TENSOR_CORE_WGMMA_QGMMA_PTX, TENSOR_MEMORY_BULK_ASYNC_PTX,
-    TENSOR_MEMORY_BULK_REDUCE_PTX, TENSOR_MEMORY_LDTM_PTX, TENSOR_MEMORY_STTM_PTX,
-    TENSOR_MEMORY_TMA_ASYNC_PTX, TENSOR_MEMORY_UTCCP_PTX, WARP_GROUP_REGISTER_SET_PTX,
+    SCALAR_MEMORY_ATOMIC_PTX, SCALAR_MEMORY_LOGIC_PTX, SCALAR_VOTE_SYNC_PTX, TENSOR_CORE_BMMA_PTX,
+    TENSOR_CORE_DMMA_PTX, TENSOR_CORE_HMMA_PTX, TENSOR_CORE_IMMA_PTX, TENSOR_CORE_SM120A_OMMA_PTX,
+    TENSOR_CORE_SM120A_QMMA_PTX, TENSOR_CORE_TCGEN05_UTCHMMA_UTCIMMA_PTX,
+    TENSOR_CORE_TCGEN05_UTCOMMA_PTX, TENSOR_CORE_TCGEN05_UTCQMMA_PTX, TENSOR_CORE_WGMMA_BGMMA_PTX,
+    TENSOR_CORE_WGMMA_HGMMA_PTX, TENSOR_CORE_WGMMA_IGMMA_PTX, TENSOR_CORE_WGMMA_QGMMA_PTX,
+    TENSOR_MEMORY_BULK_ASYNC_PTX, TENSOR_MEMORY_BULK_REDUCE_PTX, TENSOR_MEMORY_LDTM_PTX,
+    TENSOR_MEMORY_STTM_PTX, TENSOR_MEMORY_TMA_ASYNC_PTX, TENSOR_MEMORY_UTCCP_PTX,
+    WARP_GROUP_REGISTER_SET_PTX,
 };
 
 pub const AUTO_COMPILE_ARCH: &str = "auto";
@@ -89,6 +90,13 @@ pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
             source: TENSOR_CORE_WGMMA_QGMMA_PTX,
         },
         PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::TensorCoreSm120aOmma,
+            symbol: "tensor_core_sm120a_omma_probe",
+            behavior: "one PTX sm120a warp-scope block-scaled FP4 MMA that disassembles to OMMA",
+            default_compile_arch: "sm_120a",
+            source: TENSOR_CORE_SM120A_OMMA_PTX,
+        },
+        PtxDecompileProbe {
             kind: PtxDecompileProbeKind::TensorCoreSm120aQmma,
             symbol: "tensor_core_sm120a_qmma_probe",
             behavior: "one PTX sm120a warp-scope FP8 MMA that disassembles to QMMA",
@@ -166,6 +174,13 @@ pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
             source: WARP_GROUP_REGISTER_SET_PTX,
         },
         PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::ScalarVoteSync,
+            symbol: "scalar_vote_sync_probe",
+            behavior: "one PTX vote.sync probe that disassembles to ULOP3 mask logic on sm75",
+            default_compile_arch: "sm_75",
+            source: SCALAR_VOTE_SYNC_PTX,
+        },
+        PtxDecompileProbe {
             kind: PtxDecompileProbeKind::ScalarMemoryLogic,
             symbol: "scalar_memory_logic_probe",
             behavior: "scalar PTX memory, predicate, logic, integer, and f32 fused math instructions",
@@ -199,6 +214,7 @@ pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
         PtxDecompileProbeKind::TensorCoreWgmmaBgmma,
         PtxDecompileProbeKind::TensorCoreWgmmaIgmma,
         PtxDecompileProbeKind::TensorCoreWgmmaQgmma,
+        PtxDecompileProbeKind::TensorCoreSm120aOmma,
         PtxDecompileProbeKind::TensorCoreSm120aQmma,
         PtxDecompileProbeKind::TensorCoreTcgen05UtchmmaUtcimma,
         PtxDecompileProbeKind::TensorCoreTcgen05Utcomma,
@@ -210,6 +226,7 @@ pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
         PtxDecompileProbeKind::TensorMemoryBulkReduce,
         PtxDecompileProbeKind::TensorMemoryTmaAsync,
         PtxDecompileProbeKind::WarpGroupRegisterSet,
+        PtxDecompileProbeKind::ScalarVoteSync,
         PtxDecompileProbeKind::ScalarMemoryLogic,
         PtxDecompileProbeKind::ArchitectureSm90Scalar,
         PtxDecompileProbeKind::ScalarMemoryAtomic,

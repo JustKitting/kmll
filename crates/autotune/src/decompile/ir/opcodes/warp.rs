@@ -13,7 +13,7 @@ pub(super) fn lift(
     operands: &[AggregateOperand],
 ) -> Option<LiftResult> {
     match opcode.kind() {
-        SassOpcodeKind::Elect => Some((
+        SassOpcodeKind::Elect | SassOpcodeKind::Vote | SassOpcodeKind::Voteu => Some((
             KernelIrOpKind::WarpElect {
                 dst: register_operand(operands.first()),
                 operands: operands.to_vec(),

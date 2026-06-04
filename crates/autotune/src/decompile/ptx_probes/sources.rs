@@ -319,6 +319,53 @@ pub(super) const TENSOR_CORE_SM120A_QMMA_PTX: &str = r#".version 9.2
 }
 "#;
 
+pub(super) const TENSOR_CORE_SM120A_OMMA_PTX: &str = r#".version 9.2
+.target sm_120a
+.address_size 64
+
+.visible .entry tensor_core_sm120a_omma_probe(
+    .param .u64 tensor_core_sm120a_omma_probe_out
+)
+{
+    .reg .b16 %h<4>;
+    .reg .b32 %r<10>;
+    .reg .b64 %rd<2>;
+    .reg .f32 %f<8>;
+
+    ld.param.u64 %rd0, [tensor_core_sm120a_omma_probe_out];
+
+    mov.b32 %r0, 0x11111111;
+    mov.b32 %r1, 0x11111111;
+    mov.b32 %r2, 0x11111111;
+    mov.b32 %r3, 0x11111111;
+    mov.b32 %r4, 0x11111111;
+    mov.b32 %r5, 0x11111111;
+    mov.b32 %r6, 0x01010101;
+    mov.b32 %r7, 0x01010101;
+    mov.u16 %h0, 0;
+    mov.u16 %h1, 0;
+    mov.u16 %h2, 0;
+    mov.u16 %h3, 0;
+    mov.f32 %f0, 0f00000000;
+    mov.f32 %f1, 0f00000000;
+    mov.f32 %f2, 0f00000000;
+    mov.f32 %f3, 0f00000000;
+
+    mma.sync.aligned.kind::mxf4nvf4.block_scale.scale_vec::2X.m16n8k64.row.col.f32.e2m1.e2m1.f32.ue8m0
+        {%f0, %f1, %f2, %f3},
+        {%r0, %r1, %r2, %r3},
+        {%r4, %r5},
+        {%f0, %f1, %f2, %f3},
+        {%r6},
+        {%h0, %h1},
+        {%r7},
+        {%h2, %h3};
+
+    st.global.f32 [%rd0], %f0;
+    ret;
+}
+"#;
+
 pub(super) const TENSOR_CORE_TCGEN05_UTCQMMA_PTX: &str = r#".version 9.2
 .target sm_100a
 .address_size 64
@@ -685,6 +732,30 @@ pub(super) const SCALAR_MEMORY_LOGIC_PTX: &str = r#".version 8.0
     selp.u32 %r9, %r8, %r3, %p3;
 
     st.global.u32 [%rd0], %r9;
+    ret;
+}
+"#;
+
+pub(super) const SCALAR_VOTE_SYNC_PTX: &str = r#".version 9.2
+.target sm_75
+.address_size 64
+
+.visible .entry scalar_vote_sync_probe(
+    .param .u64 scalar_vote_sync_probe_out
+)
+{
+    .reg .pred %p<4>;
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<2>;
+
+    ld.param.u64 %rd0, [scalar_vote_sync_probe_out];
+
+    mov.u32 %r0, %tid.x;
+    setp.ne.u32 %p0, %r0, 0;
+    vote.sync.all.pred %p1, %p0, 0x2;
+    selp.u32 %r1, 1, 0, %p1;
+
+    st.global.u32 [%rd0], %r1;
     ret;
 }
 "#;
