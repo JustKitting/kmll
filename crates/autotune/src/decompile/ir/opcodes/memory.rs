@@ -1,11 +1,16 @@
 use super::super::super::sass::{SassInstruction, SassOperand, SassOperandKind};
 use super::super::types::{
     KernelIrOpKind, MemoryAccessInfo, MemoryAddress, MemoryAddressKind, MemorySpace, RegisterRef,
-    SassMappingConfidence, SassMemoryModifier, SassOpcode, SassOpcodeKind, SassUnsupportedReason,
+    SassMappingConfidence, SassMemoryModifier, SassModifier, SassOpcode, SassOpcodeKind,
+    SassUnsupportedReason,
 };
 use super::LiftResult;
 
-pub(super) fn lift(opcode: &SassOpcode, instruction: &SassInstruction) -> Option<LiftResult> {
+pub(super) fn lift(
+    opcode: &SassOpcode,
+    instruction: &SassInstruction,
+    modifiers: &[SassModifier],
+) -> Option<LiftResult> {
     Some(match opcode.kind() {
         SassOpcodeKind::Ldc | SassOpcodeKind::Ldcu | SassOpcodeKind::Uldc => {
             lift_load_const(instruction)
@@ -21,7 +26,7 @@ pub(super) fn lift(opcode: &SassOpcode, instruction: &SassInstruction) -> Option
                         space: memory_space(opcode.kind(), &address),
                         address,
                         dst,
-                        access: memory_access_info(instruction),
+                        access: memory_access_info(modifiers),
                     },
                     SassMappingConfidence::OpcodeHeuristic,
                 )
@@ -38,7 +43,7 @@ pub(super) fn lift(opcode: &SassOpcode, instruction: &SassInstruction) -> Option
                         space: memory_space(opcode.kind(), &address),
                         address,
                         value,
-                        access: memory_access_info(instruction),
+                        access: memory_access_info(modifiers),
                     },
                     SassMappingConfidence::OpcodeHeuristic,
                 )
@@ -113,11 +118,10 @@ fn memory_space(opcode: &SassOpcodeKind, address: &MemoryAddress) -> MemorySpace
     }
 }
 
-fn memory_access_info(instruction: &SassInstruction) -> MemoryAccessInfo {
-    let modifiers = instruction
-        .modifiers
+fn memory_access_info(source_modifiers: &[SassModifier]) -> MemoryAccessInfo {
+    let modifiers = source_modifiers
         .iter()
-        .map(|modifier| SassMemoryModifier::parse(modifier.as_str()))
+        .map(SassMemoryModifier::from_modifier)
         .collect::<Vec<_>>();
     let width_bits = modifiers.iter().find_map(SassMemoryModifier::width_bits);
     MemoryAccessInfo::new(width_bits, modifiers)

@@ -1,4 +1,3 @@
-use super::super::super::sass::SassInstruction;
 use super::super::types::{
     AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassModifier, SassModifierKind,
     SassOpcode, SassOpcodeKind, SassTensorElementType, SassTensorMmaSignature, SassTensorScope,
@@ -7,12 +6,11 @@ use super::LiftResult;
 
 pub(super) fn lift(
     opcode: &SassOpcode,
-    instruction: &SassInstruction,
+    modifiers: &[SassModifier],
     operands: &[AggregateOperand],
 ) -> Option<LiftResult> {
     let operands = operands.to_vec();
-    let modifiers = source_modifiers(instruction);
-    let signature = tensor_core_signature(opcode.kind(), &modifiers);
+    let signature = tensor_core_signature(opcode.kind(), modifiers);
     Some(match opcode.kind() {
         SassOpcodeKind::Bgmma
         | SassOpcodeKind::Bmma
@@ -68,14 +66,6 @@ pub(super) fn lift(
         ),
         _ => return None,
     })
-}
-
-fn source_modifiers(instruction: &SassInstruction) -> Vec<SassModifier> {
-    instruction
-        .modifiers
-        .iter()
-        .map(|modifier| SassModifier::parse(modifier.as_str()))
-        .collect()
 }
 
 fn tensor_core_element_type(

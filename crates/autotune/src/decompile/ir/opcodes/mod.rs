@@ -12,8 +12,8 @@ mod warp;
 
 use super::super::sass::{SassInstruction, SassPredicate};
 use super::types::{
-    AggregateOperand, KernelIrOpKind, PredicateCondition, SassMappingConfidence, SassOpcode,
-    SassUnsupportedReason,
+    AggregateOperand, KernelIrOpKind, PredicateCondition, SassMappingConfidence, SassModifier,
+    SassOpcode, SassUnsupportedReason,
 };
 
 pub(super) type LiftResult = (KernelIrOpKind, SassMappingConfidence);
@@ -26,17 +26,17 @@ pub(super) fn aggregate_operands(instruction: &SassInstruction) -> Vec<Aggregate
     operands::aggregate_operands(instruction)
 }
 
-pub(super) fn lift_kind(instruction: &SassInstruction) -> LiftResult {
+pub(super) fn lift_kind(instruction: &SassInstruction, modifiers: &[SassModifier]) -> LiftResult {
     let operands = operands::raw_operands(instruction);
     let aggregate_operands = operands::aggregate_operands(instruction);
     let opcode = SassOpcode::new(instruction.opcode.clone());
     control::lift(&opcode, instruction, &aggregate_operands)
-        .or_else(|| warp::lift(&opcode, instruction))
-        .or_else(|| tensor::lift(&opcode, instruction, &aggregate_operands))
+        .or_else(|| warp::lift(&opcode, instruction, modifiers))
+        .or_else(|| tensor::lift(&opcode, modifiers, &aggregate_operands))
         .or_else(|| movement::lift(&opcode, instruction, &operands))
-        .or_else(|| memory::lift(&opcode, instruction))
-        .or_else(|| math::lift(&opcode, instruction, &operands))
-        .or_else(|| predicate::lift(&opcode, instruction, &operands))
+        .or_else(|| memory::lift(&opcode, instruction, modifiers))
+        .or_else(|| math::lift(&opcode, instruction, modifiers, &operands))
+        .or_else(|| predicate::lift(&opcode, modifiers, &operands))
         .or_else(|| bitwise::lift(&opcode, &operands))
         .or_else(|| address::lift(&opcode, &operands))
         .or_else(|| sync::lift(&opcode, &aggregate_operands))

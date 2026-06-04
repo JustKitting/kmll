@@ -736,6 +736,23 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
     let ir = lift_sass_module(&module);
     let ops = &ir.functions[0].ops;
 
+    let compare_op = ops
+        .iter()
+        .find(|op| matches!(op.kind, KernelIrOpKind::CompareSet { .. }))
+        .expect("rows17 fixture should contain a compare op");
+    assert_eq!(
+        compare_op.source_modifiers[0].kind(),
+        &SassModifierKind::GreaterThan
+    );
+    assert_eq!(
+        compare_op.source_modifiers[1].kind(),
+        &SassModifierKind::UnsignedWidth(32)
+    );
+    assert_eq!(
+        compare_op.source_modifiers[2].kind(),
+        &SassModifierKind::And
+    );
+
     assert!(ops.iter().any(|op| matches!(
         op.kind,
         KernelIrOpKind::CompareSet {

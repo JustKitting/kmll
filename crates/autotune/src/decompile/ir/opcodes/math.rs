@@ -14,15 +14,15 @@ use super::{
 pub(super) fn lift(
     opcode: &SassOpcode,
     instruction: &SassInstruction,
+    modifiers: &[SassModifier],
     operands: &[String],
 ) -> Option<LiftResult> {
-    let modifiers = source_modifiers(instruction);
     Some(match opcode.kind() {
         SassOpcodeKind::Iadd | SassOpcodeKind::Iadd3 | SassOpcodeKind::Uiadd3 => (
             KernelIrOpKind::IntegerAdd {
                 dst: register_operand(operands.first().map(String::as_str).unwrap_or_default()),
                 inputs: scalar_inputs(&operands.iter().skip(1).cloned().collect::<Vec<_>>()),
-                width_bits: width_modifier(&modifiers),
+                width_bits: width_modifier(modifiers),
             },
             SassMappingConfidence::OpcodeHeuristic,
         ),
@@ -67,20 +67,12 @@ pub(super) fn lift(
                     a,
                     b,
                     c,
-                    wide: has_modifier(&modifiers, &SassModifierKind::Wide),
+                    wide: has_modifier(modifiers, &SassModifierKind::Wide),
                 }
             })
         }
         _ => return None,
     })
-}
-
-fn source_modifiers(instruction: &SassInstruction) -> Vec<SassModifier> {
-    instruction
-        .modifiers
-        .iter()
-        .map(|modifier| SassModifier::parse(modifier.as_str()))
-        .collect()
 }
 
 fn has_modifier(modifiers: &[SassModifier], expected: &SassModifierKind) -> bool {

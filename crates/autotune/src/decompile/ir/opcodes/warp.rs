@@ -4,14 +4,18 @@ use super::super::types::{
 };
 use super::{LiftResult, operands::map_warp_shuffle_operands};
 
-pub(super) fn lift(opcode: &SassOpcode, instruction: &SassInstruction) -> Option<LiftResult> {
+pub(super) fn lift(
+    opcode: &SassOpcode,
+    instruction: &SassInstruction,
+    modifiers: &[SassModifier],
+) -> Option<LiftResult> {
     match opcode.kind() {
         SassOpcodeKind::Shfl => Some(map_warp_shuffle_operands(
             instruction,
             |predicate, dst, src, offset, mask| KernelIrOpKind::WarpShuffle {
-                mode: instruction.modifiers.first().and_then(|modifier| {
-                    warp_shuffle_mode(SassModifier::parse(modifier.as_str()).kind())
-                }),
+                mode: modifiers
+                    .first()
+                    .and_then(|modifier| warp_shuffle_mode(modifier.kind())),
                 predicate,
                 dst,
                 src,

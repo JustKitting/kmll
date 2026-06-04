@@ -21,7 +21,12 @@ pub fn lift_sass_module(module: &SassModule) -> KernelIrModule {
 
 fn lift_instruction(instruction: &SassInstruction) -> KernelIrOp {
     let source_operands = aggregate_operands(instruction);
-    let (kind, confidence) = lift_kind(instruction);
+    let source_modifiers = instruction
+        .modifiers
+        .iter()
+        .map(|modifier| SassModifier::parse(modifier.as_str()))
+        .collect::<Vec<_>>();
+    let (kind, confidence) = lift_kind(instruction, &source_modifiers);
     KernelIrOp {
         address: instruction.address,
         source_position: instruction.source_position,
@@ -30,11 +35,7 @@ fn lift_instruction(instruction: &SassInstruction) -> KernelIrOp {
         kind,
         confidence,
         source_opcode: SassOpcode::new(instruction.opcode.clone()),
-        source_modifiers: instruction
-            .modifiers
-            .iter()
-            .map(|modifier| SassModifier::parse(modifier.as_str()))
-            .collect(),
+        source_modifiers,
         source_operands,
         source_text: instruction.raw.clone(),
     }

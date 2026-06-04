@@ -210,6 +210,16 @@ pub enum SassModifierKind {
     E2M1,
     E4M3,
     E5M2,
+    Equal,
+    NotEqual,
+    LessThan,
+    LessEqual,
+    GreaterThan,
+    GreaterEqual,
+    LowerSame,
+    HigherSame,
+    Nan,
+    Num,
     High,
     Low,
     Carry,
@@ -237,6 +247,16 @@ impl SassModifierKind {
             "E2M1" => return Self::E2M1,
             "E4M3" => return Self::E4M3,
             "E5M2" => return Self::E5M2,
+            "EQ" => return Self::Equal,
+            "NE" => return Self::NotEqual,
+            "LT" => return Self::LessThan,
+            "LE" => return Self::LessEqual,
+            "GT" => return Self::GreaterThan,
+            "GE" => return Self::GreaterEqual,
+            "LS" => return Self::LowerSame,
+            "HS" => return Self::HigherSame,
+            "NAN" => return Self::Nan,
+            "NUM" => return Self::Num,
             "HI" => return Self::High,
             "LO" | "LOW" => return Self::Low,
             "X" => return Self::Carry,
@@ -277,6 +297,16 @@ impl SassModifierKind {
             | Self::E2M1
             | Self::E4M3
             | Self::E5M2
+            | Self::Equal
+            | Self::NotEqual
+            | Self::LessThan
+            | Self::LessEqual
+            | Self::GreaterThan
+            | Self::GreaterEqual
+            | Self::LowerSame
+            | Self::HigherSame
+            | Self::Nan
+            | Self::Num
             | Self::High
             | Self::Low
             | Self::Carry
@@ -1622,6 +1652,16 @@ pub enum SassMemoryModifier {
 }
 
 impl SassMemoryModifier {
+    pub fn from_modifier(modifier: &SassModifier) -> Self {
+        match modifier.kind() {
+            SassModifierKind::E => Self::E,
+            SassModifierKind::UnsignedWidth(bits) => Self::Unsigned(*bits),
+            SassModifierKind::SignedWidth(bits) => Self::Signed(*bits),
+            SassModifierKind::Width(bits) => Self::Width(*bits),
+            _ => Self::Raw(modifier.as_str().to_string()),
+        }
+    }
+
     pub fn parse(raw: impl Into<String>) -> Self {
         let raw = raw.into();
         if raw == "E" {
