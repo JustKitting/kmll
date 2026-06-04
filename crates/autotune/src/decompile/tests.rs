@@ -1031,8 +1031,16 @@ fn semantic_patterns_recover_bf16_widen_and_warp_reduce() {
         SassSemanticPatternKind::Bf16WidenBits {
             ref src,
             ref dst,
-            ..
+            ref producer,
+            ref consumer,
         } if src == &reg("R23") && dst == &reg("R23")
+            && matches!(producer, Some(producer)
+                if producer.address == 0x0060 && producer.opcode == SassOpcode::new("LD"))
+            && matches!(consumer, Some(consumer)
+                if consumer.address == 0x0090 && consumer.opcode == SassOpcode::new("FMUL"))
+            && pattern.start_address == 0x0060
+            && pattern.end_address == 0x0090
+            && pattern.source_addresses.as_slice() == [0x0060, 0x0080, 0x0090]
     )));
     assert!(flat.iter().any(|pattern| matches!(
         pattern.kind,

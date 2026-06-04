@@ -5,7 +5,7 @@ use std::{
 
 use super::{
     ImmediateValue, KernelIrFunction, KernelIrModule, KernelIrOp, KernelIrOpKind, RegisterRef,
-    RegisterRefKind, SassModifierKind, SassOpcodeKind, SassSymbol, SassWarpShuffleMode,
+    RegisterRefKind, SassModifierKind, SassOpcode, SassOpcodeKind, SassSymbol, SassWarpShuffleMode,
     ScalarOperand, ScalarOperandKind,
 };
 
@@ -100,8 +100,8 @@ pub enum SassSemanticPatternKind {
     Bf16WidenBits {
         src: RegisterRef,
         dst: RegisterRef,
-        producer: Option<String>,
-        consumer: Option<String>,
+        producer: Option<SassPatternLinkedOp>,
+        consumer: Option<SassPatternLinkedOp>,
     },
     F32MulAddPair {
         mul_dst: RegisterRef,
@@ -122,6 +122,21 @@ pub enum SassSemanticPatternKind {
         offsets: Vec<ScalarOperand>,
         mask: Option<ScalarOperand>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SassPatternLinkedOp {
+    pub address: u64,
+    pub opcode: SassOpcode,
+}
+
+impl SassPatternLinkedOp {
+    fn new(op: &KernelIrOp) -> Self {
+        Self {
+            address: op.address,
+            opcode: op.source_opcode.clone(),
+        }
+    }
 }
 
 impl SassSemanticPatternKind {
@@ -260,7 +275,7 @@ fn recover_bf16_widen_bits(function: &KernelIrFunction, patterns: &mut Vec<SassS
                 candidate.source_opcode.kind() == &SassOpcodeKind::Ld
                     && has_source_modifier(candidate, &SassModifierKind::UnsignedWidth(16))
             })
-            .map(|candidate| candidate.source.clone());
+            .map(SassPatternLinkedOp::new);
         let consumer = function.ops[index + 1..]
             .iter()
             .take(6)
@@ -271,12 +286,16 @@ fn recover_bf16_widen_bits(function: &KernelIrFunction, patterns: &mut Vec<SassS
                         if scalar_register_eq(lhs, dst) || scalar_register_eq(rhs, dst)
                 )
             })
-            .map(|candidate| candidate.source.clone());
+            .map(SassPatternLinkedOp::new);
+        let source_addresses =
+            linked_source_addresses(op.address, producer.as_ref(), consumer.as_ref());
+        let start_address = source_addresses.first().copied().unwrap_or(op.address);
+        let end_address = source_addresses.last().copied().unwrap_or(op.address);
 
         patterns.push(SassSemanticPattern {
-            start_address: op.address,
-            end_address: op.address,
-            source_addresses: vec![op.address],
+            start_address,
+            end_address,
+            source_addresses,
             kind: SassSemanticPatternKind::Bf16WidenBits {
                 src: src_register.clone(),
                 dst: dst.clone(),
@@ -286,6 +305,21 @@ fn recover_bf16_widen_bits(function: &KernelIrFunction, patterns: &mut Vec<SassS
             confidence: SassPatternConfidence::ExactOpcodeSequence,
         });
     }
+}
+
+fn linked_source_addresses(
+    current: u64,
+    producer: Option<&SassPatternLinkedOp>,
+    consumer: Option<&SassPatternLinkedOp>,
+) -> Vec<u64> {
+    let mut addresses = BTreeSet::from([current]);
+    if let Some(producer) = producer {
+        addresses.insert(producer.address);
+    }
+    if let Some(consumer) = consumer {
+        addresses.insert(consumer.address);
+    }
+    addresses.into_iter().collect()
 }
 
 fn recover_f32_mul_add_pairs(function: &KernelIrFunction, patterns: &mut Vec<SassSemanticPattern>) {

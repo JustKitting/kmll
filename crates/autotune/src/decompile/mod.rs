@@ -71,8 +71,9 @@ pub use self::{
         SassLiftedOpKind, SassLiftedSemantics, SassLiftedValueRef, lift_sass_value_ir,
     },
     patterns::{
-        SassPatternConfidence, SassPatternFunction, SassPatternModule, SassSemanticPattern,
-        SassSemanticPatternCategory, SassSemanticPatternKind, recover_sass_patterns,
+        SassPatternConfidence, SassPatternFunction, SassPatternLinkedOp, SassPatternModule,
+        SassSemanticPattern, SassSemanticPatternCategory, SassSemanticPatternKind,
+        recover_sass_patterns,
     },
     ptx_probes::{
         PtxDecompileProbe, PtxDecompileProbeKind, all_ptx_decompile_probe_kinds,
