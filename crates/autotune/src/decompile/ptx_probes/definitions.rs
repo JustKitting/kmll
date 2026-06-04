@@ -1,10 +1,10 @@
 use super::kinds::PtxDecompileProbeKind;
 use super::sources::{
     SCALAR_MEMORY_ATOMIC_PTX, SCALAR_MEMORY_LOGIC_PTX, TENSOR_CORE_BMMA_PTX, TENSOR_CORE_DMMA_PTX,
-    TENSOR_CORE_HMMA_PTX, TENSOR_CORE_IMMA_PTX, TENSOR_CORE_WGMMA_BGMMA_PTX,
-    TENSOR_CORE_WGMMA_HGMMA_PTX, TENSOR_CORE_WGMMA_IGMMA_PTX, TENSOR_CORE_WGMMA_QGMMA_PTX,
-    TENSOR_MEMORY_LDTM_PTX, TENSOR_MEMORY_STTM_PTX, TENSOR_MEMORY_UTCCP_PTX,
-    WARP_GROUP_REGISTER_SET_PTX,
+    TENSOR_CORE_HMMA_PTX, TENSOR_CORE_IMMA_PTX, TENSOR_CORE_TCGEN05_UTCQMMA_PTX,
+    TENSOR_CORE_WGMMA_BGMMA_PTX, TENSOR_CORE_WGMMA_HGMMA_PTX, TENSOR_CORE_WGMMA_IGMMA_PTX,
+    TENSOR_CORE_WGMMA_QGMMA_PTX, TENSOR_MEMORY_LDTM_PTX, TENSOR_MEMORY_STTM_PTX,
+    TENSOR_MEMORY_UTCCP_PTX, WARP_GROUP_REGISTER_SET_PTX,
 };
 
 pub const AUTO_COMPILE_ARCH: &str = "auto";
@@ -87,6 +87,13 @@ pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
             source: TENSOR_CORE_WGMMA_QGMMA_PTX,
         },
         PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::TensorCoreTcgen05Utcqmma,
+            symbol: "tensor_core_tcgen05_utcqmma_probe",
+            behavior: "one PTX sm100a tcgen05 narrow-precision MMA that disassembles to UTCQMMA",
+            default_compile_arch: "sm_100a",
+            source: TENSOR_CORE_TCGEN05_UTCQMMA_PTX,
+        },
+        PtxDecompileProbe {
             kind: PtxDecompileProbeKind::TensorMemoryLdtm,
             symbol: "tensor_memory_ldtm_probe",
             behavior: "one PTX sm100a tcgen05 tensor-memory load kept alive by global stores",
@@ -148,6 +155,7 @@ pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
         PtxDecompileProbeKind::TensorCoreWgmmaBgmma,
         PtxDecompileProbeKind::TensorCoreWgmmaIgmma,
         PtxDecompileProbeKind::TensorCoreWgmmaQgmma,
+        PtxDecompileProbeKind::TensorCoreTcgen05Utcqmma,
         PtxDecompileProbeKind::TensorMemoryLdtm,
         PtxDecompileProbeKind::TensorMemorySttm,
         PtxDecompileProbeKind::TensorMemoryUtccp,

@@ -2447,6 +2447,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreWgmmaQgmma)
         .expect("WGMMA QGMMA PTX probe should exist");
+    let tcgen05_utcqmma_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreTcgen05Utcqmma)
+        .expect("tcgen05 UTCQMMA PTX probe should exist");
     let warpgroup_register_set_probe = probes
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::WarpGroupRegisterSet)
@@ -2562,6 +2566,18 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             .source
             .contains("wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3")
     );
+    assert_eq!(
+        tcgen05_utcqmma_probe.symbol,
+        "tensor_core_tcgen05_utcqmma_probe"
+    );
+    assert_eq!(tcgen05_utcqmma_probe.default_compile_arch, "sm_100a");
+    assert!(tcgen05_utcqmma_probe.source.contains(".target sm_100a"));
+    assert!(
+        tcgen05_utcqmma_probe
+            .source
+            .contains("tcgen05.mma.cta_group::1.kind::f8f6f4")
+    );
+    assert!(tcgen05_utcqmma_probe.source.contains("st.global.u32"));
     assert_eq!(
         warpgroup_register_set_probe.symbol,
         "warpgroup_register_set_probe"

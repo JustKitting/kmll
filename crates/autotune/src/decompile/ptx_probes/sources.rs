@@ -283,6 +283,43 @@ pub(super) const TENSOR_CORE_WGMMA_QGMMA_PTX: &str = r#".version 8.7
 }
 "#;
 
+pub(super) const TENSOR_CORE_TCGEN05_UTCQMMA_PTX: &str = r#".version 9.2
+.target sm_100a
+.address_size 64
+
+.visible .entry tensor_core_tcgen05_utcqmma_probe(
+    .param .u64 tensor_core_tcgen05_utcqmma_probe_out,
+    .param .u64 tensor_core_tcgen05_utcqmma_probe_desc_a,
+    .param .u64 tensor_core_tcgen05_utcqmma_probe_desc_b,
+    .param .u32 tensor_core_tcgen05_utcqmma_probe_tmem_c,
+    .param .u64 tensor_core_tcgen05_utcqmma_probe_idesc_e
+)
+{
+    .reg .pred %p<2>;
+    .reg .b32 %r<16>;
+    .reg .b64 %rd<8>;
+
+    ld.param.u64 %rd0, [tensor_core_tcgen05_utcqmma_probe_out];
+    ld.param.u64 %rd1, [tensor_core_tcgen05_utcqmma_probe_desc_a];
+    ld.param.u64 %rd2, [tensor_core_tcgen05_utcqmma_probe_desc_b];
+    ld.param.u32 %r0, [tensor_core_tcgen05_utcqmma_probe_tmem_c];
+    ld.param.u64 %rd3, [tensor_core_tcgen05_utcqmma_probe_idesc_e];
+
+    mov.u32 %r1, 0;
+    mov.u32 %r2, 0;
+    mov.u32 %r3, 0;
+    mov.u32 %r4, 0;
+    shr.u64 %rd4, %rd3, 32;
+    cvt.u32.u64 %r5, %rd4;
+    setp.ne.b32 %p0, 1, 0;
+
+    tcgen05.mma.cta_group::1.kind::f8f6f4 [%r0], %rd1, %rd2, %r5, {%r1, %r2, %r3, %r4}, %p0;
+
+    st.global.u32 [%rd0], %r0;
+    ret;
+}
+"#;
+
 pub(super) const TENSOR_MEMORY_LDTM_PTX: &str = r#".version 9.2
 .target sm_100a
 .address_size 64
