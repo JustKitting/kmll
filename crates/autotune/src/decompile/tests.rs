@@ -334,6 +334,27 @@ matvec_bf16_serial:
         /*0050*/                   EXIT ;                                        /* 0x0 */
 "#;
 
+const SCALAR_GEMM_SLICE: &str = r#"
+        .target sm_120
+
+        .section .text.scalar_gemm_fixture,"ax",@progbits
+        .global scalar_gemm_fixture
+scalar_gemm_fixture:
+.text.scalar_gemm_fixture:
+        /*0000*/                   LD.E R2, desc[UR8][R0.64] ;                  /* 0x0 */
+        /*0010*/                   LD.E.U16 R3, desc[UR10][R4.64] ;             /* 0x0 */
+        /*0020*/                   IMAD.U32 R5, R3, 0x10000, RZ ;               /* 0x0 */
+        /*0030*/                   STS [R8], R2 ;                               /* 0x0 */
+        /*0040*/                   STS [R12], R5 ;                              /* 0x0 */
+        /*0050*/                   BAR.SYNC.DEFER_BLOCKING 0x0 ;                /* 0x0 */
+        /*0060*/                   LDS R14, [R8] ;                              /* 0x0 */
+        /*0070*/                   LDS R15, [R12] ;                             /* 0x0 */
+        /*0080*/                   FMUL R16, R14, R15 ;                         /* 0x0 */
+        /*0090*/                   FADD R17, R16, R17 ;                         /* 0x0 */
+        /*00a0*/                   ST.E desc[UR12][R20.64], R17 ;               /* 0x0 */
+        /*00b0*/                   EXIT ;                                       /* 0x0 */
+"#;
+
 #[test]
 fn decompiled_matvec_types_route_to_autotune_generation_and_emit_crate() {
     let module = parse_nvidia_sass(ROWS17_SLICE).expect("rows17 slice should parse");
@@ -381,6 +402,52 @@ fn decompiled_matvec_types_route_to_autotune_generation_and_emit_crate() {
         .expect("emitted standalone source should be readable");
     assert!(source.contains(&format!("pub fn {}(", generated.source.symbol)));
     cleanup_decompile_autotune_test_root(&root);
+}
+
+#[test]
+fn decompiled_scalar_gemm_types_route_to_autotune_generation() {
+    let module = parse_nvidia_sass(SCALAR_GEMM_SLICE).expect("scalar GEMM slice should parse");
+    let ir = lift_sass_module(&module);
+    let routed = decompiled_autotune_operation(
+        &ir.functions[0],
+        DecompiledAutotuneShape::GemmF32Bf16RowColRow {
+            m: 64,
+            n: 64,
+            k: 128,
+        },
+    )
+    .expect("typed scalar GEMM evidence should route into autotune");
+
+    assert!(routed.evidence.supports_f32_bf16_row_col_row_gemm());
+    assert!(routed.evidence.has_f32_descriptor_load);
+    assert!(routed.evidence.has_bf16_descriptor_load);
+    assert!(routed.evidence.has_bf16_widen);
+    assert!(routed.evidence.has_shared_store);
+    assert!(routed.evidence.has_shared_load);
+    assert!(routed.evidence.has_barrier);
+    assert!(routed.evidence.has_descriptor_store);
+    assert_eq!(routed.operation.kind, OperationKind::Gemm);
+    assert_eq!(routed.operation.inputs[0].dtype, NumericKind::F32);
+    assert_eq!(routed.operation.inputs[0].shape, vec![64, 128]);
+    assert_eq!(routed.operation.inputs[1].dtype, NumericKind::Bf16);
+    assert_eq!(routed.operation.inputs[1].shape, vec![128, 64]);
+    assert_eq!(routed.operation.outputs[0].shape, vec![64, 64]);
+
+    let generated = generate_inference_kernel_source(
+        &routed.operation,
+        AutoOptimizeConfig {
+            beam_width: 3,
+            max_steps: 1,
+            require_launchable: false,
+            min_score_improvement: 0.0,
+        },
+    )
+    .expect("decompiled GEMM operation should autotune and render source");
+    assert_eq!(
+        generated.optimization.problem.family(),
+        "gemm-f32-bf16-row-col-row"
+    );
+    assert!(generated.source.source.contains("#[kernel]"));
 }
 
 #[test]
@@ -500,6 +567,64 @@ fn generated_naive_rust_matvec_sass_routes_to_autotune_and_recompiles_best() {
     let optimized_patterns = fs::read_to_string(&report.optimized_pattern_path)
         .expect("best patterns should be readable");
     assert!(optimized_patterns.contains("warp-reduce-sum"));
+    cleanup_decompile_autotune_test_root(&root);
+}
+
+#[test]
+#[ignore = "builds Rust-CUDA GEMM, disassembles SASS, autotunes, and recompiles best candidate"]
+fn generated_gemm_sass_routes_to_autotune_and_recompiles_best() {
+    let root = decompile_autotune_test_root();
+    let report = run_decompile_autotune_gemm(&DecompileAutotuneGemmOptions {
+        artifact_root: root.clone(),
+        compile_arch: "sm_120".to_string(),
+        m: 64,
+        n: 64,
+        k: 128,
+        config: AutoOptimizeConfig {
+            beam_width: 3,
+            max_steps: 1,
+            require_launchable: false,
+            min_score_improvement: 0.0,
+        },
+    })
+    .expect("generated GEMM should decompile, autotune, and recompile");
+
+    assert_eq!(report.source_symbol, "gemm_f32_bf16_tile_16x16x8");
+    assert!(report.source_path.starts_with(&root));
+    assert!(report.ptx_path.exists());
+    assert!(report.cubin_path.exists());
+    assert!(report.sass_path.exists());
+    assert!(report.optimized_source_path.exists());
+    assert!(report.optimized_ptx_path.exists());
+    assert!(report.optimized_cubin_path.exists());
+    assert!(report.optimized_sass_path.exists());
+    assert!(report.optimized_ir_path.exists());
+    assert!(report.optimized_pattern_path.exists());
+    assert!(report.optimized_side_by_side_path.exists());
+    assert!(report.evidence.supports_f32_bf16_row_col_row_gemm());
+    assert!(
+        report
+            .optimized_evidence
+            .supports_f32_bf16_row_col_row_gemm()
+    );
+    assert!(report.parsed_instruction_count > 0);
+    assert!(report.optimized_parsed_instruction_count > 0);
+    assert_eq!(report.unsupported_instruction_count, 0);
+    assert_eq!(report.optimized_unsupported_instruction_count, 0);
+    assert!(report.explored > 0);
+    assert_ne!(report.best_symbol, report.source_symbol);
+    assert!(report.best_action_count > 0);
+    assert!(report.best_action_ops.iter().any(|op| op == "local-tile"));
+    assert!(report.best_score.is_some());
+
+    let source = fs::read_to_string(&report.source_path).expect("GEMM source should be readable");
+    assert!(source.contains("pub fn gemm_f32_bf16_tile_16x16x8("));
+    let optimized_source =
+        fs::read_to_string(&report.optimized_source_path).expect("best source should be readable");
+    assert!(optimized_source.contains(&format!("pub fn {}(", report.best_symbol)));
+    let optimized_patterns = fs::read_to_string(&report.optimized_pattern_path)
+        .expect("best patterns should be readable");
+    assert!(optimized_patterns.contains("f32-mul-add-pair"));
     cleanup_decompile_autotune_test_root(&root);
 }
 

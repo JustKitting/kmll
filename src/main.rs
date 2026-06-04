@@ -115,6 +115,9 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         "kernel-decompile-autotune-matvec" | "decompile-autotune-matvec" => {
             commands::decompile::run_kernel_decompile_autotune_matvec(&args)
         }
+        "kernel-decompile-autotune-gemm" | "decompile-autotune-gemm" => {
+            commands::decompile::run_kernel_decompile_autotune_gemm(&args)
+        }
         "ministral-gemm-stress" | "ministral-matmul-stress" => run_ministral_gemm_stress(&args),
         "decode-matvec-bench" | "matvec-bench" => run_decode_matvec_bench(&args),
         "logit-stress" | "logits-stress" => run_logit_stress(&args),
@@ -261,7 +264,7 @@ fn run_cli_command(command: String, args: Vec<String>) -> AppResult<()> {
         "ministral-chat-compare" => run_ministral_chat_compare(&args),
         other => Err(invalid_input(format!(
             "unknown command {other:?}; expected `smoke`, `smoke-workers`, `gemm-stress`, `kernel-autotune-gemm`, `kernel-autotune-matvec`, `ministral-gemm-stress`, `decode-matvec-bench`, `logit-stress`, `attention-stress`, \
-             `kernel-matvec-instructions`, `kernel-decompile-fixtures`, `kernel-decompile-ptx-probes`, `kernel-decompile-fixture-coverage`, `kernel-decompile-coverage`, `kernel-decompile-coverage-compare`, `kernel-decompile-sass`, `kernel-decompile-autotune-matvec`, \
+             `kernel-matvec-instructions`, `kernel-decompile-fixtures`, `kernel-decompile-ptx-probes`, `kernel-decompile-fixture-coverage`, `kernel-decompile-coverage`, `kernel-decompile-coverage-compare`, `kernel-decompile-sass`, `kernel-decompile-autotune-matvec`, `kernel-decompile-autotune-gemm`, \
              `ministral-bf16-prefill-bench`, `ministral-bf16-decode-bench`, \
              `ministral-exported-decode-bench`, `ministral-exported-prefill-compare`, \
              `ministral-bf16-prefill-compare`, \
