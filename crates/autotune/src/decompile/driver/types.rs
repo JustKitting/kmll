@@ -128,12 +128,30 @@ pub struct DecompilePtxProbeReport {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct DecompileAutotuneMeasureOptions {
+    pub repeat_count: usize,
+    pub warmup_count: usize,
+    pub device_index: usize,
+}
+
+impl DecompileAutotuneMeasureOptions {
+    pub const fn default_sm120() -> Self {
+        Self {
+            repeat_count: 5,
+            warmup_count: 2,
+            device_index: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct DecompileAutotuneMatvecOptions {
     pub artifact_root: PathBuf,
     pub compile_arch: String,
     pub rows: usize,
     pub cols: usize,
     pub config: AutoOptimizeConfig,
+    pub measure: Option<DecompileAutotuneMeasureOptions>,
 }
 
 impl DecompileAutotuneMatvecOptions {
@@ -151,6 +169,7 @@ impl DecompileAutotuneMatvecOptions {
                 require_launchable: false,
                 min_score_improvement: 0.0,
             },
+            measure: None,
         }
     }
 }
@@ -191,7 +210,10 @@ pub struct DecompileAutotuneMatvecReport {
     pub best_symbol: String,
     pub best_action_ops: Vec<String>,
     pub best_action_count: usize,
+    pub source_score: Option<f64>,
+    pub source_score_source: Option<String>,
     pub best_score: Option<f64>,
+    pub best_score_source: Option<String>,
     pub explored: usize,
     pub rejected: usize,
     pub improving_step_count: usize,

@@ -18,6 +18,7 @@ pub(in crate::autotune::measurement) fn emit_and_compile_generated_kernel_scratc
     store: &KernelArtifactStore,
     candidate: &KernelCandidateMetadata,
     generator: &G,
+    arch: Option<&str>,
 ) -> KernelAutotuneMeasureResult<(
     EmittedStandaloneKernelCrate,
     CompiledStandaloneKernelCrate,
@@ -43,7 +44,7 @@ where
         &emitted.paths.crate_dir,
         &output_dir,
         &emitted.package_name,
-        None,
+        arch,
         Some(&store.standalone_target_root()),
     )?;
     let compile_duration = timer.elapsed();

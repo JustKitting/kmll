@@ -679,22 +679,27 @@ fn decompiled_matvec_autotune_candidate_recompiles() {
 }
 
 #[test]
-#[ignore = "builds Rust-CUDA naive matvec, disassembles SASS, autotunes, and recompiles best candidate"]
+#[ignore = "SM120 hardware e2e: builds naive matvec SASS, decompiles, measured-autotunes, and requires a faster recompiled best candidate"]
 fn generated_naive_rust_matvec_sass_routes_to_autotune_and_recompiles_best() {
     let root = decompile_autotune_test_root();
     let report = run_decompile_autotune_matvec(&DecompileAutotuneMatvecOptions {
         artifact_root: root.clone(),
         compile_arch: "sm_120".to_string(),
-        rows: 128,
-        cols: 256,
+        rows: 512,
+        cols: 1024,
         config: AutoOptimizeConfig {
-            beam_width: 4,
+            beam_width: 6,
             max_steps: 2,
             require_launchable: false,
             min_score_improvement: 0.0,
         },
+        measure: Some(DecompileAutotuneMeasureOptions {
+            repeat_count: 5,
+            warmup_count: 2,
+            device_index: 0,
+        }),
     })
-    .expect("generated naive Rust matvec should decompile, autotune, and recompile");
+    .expect("generated naive Rust matvec should decompile, measured-autotune, and recompile");
 
     assert_eq!(report.naive_symbol, "matvec_bf16_naive");
     assert!(report.source_path.starts_with(&root));
@@ -715,12 +720,22 @@ fn generated_naive_rust_matvec_sass_routes_to_autotune_and_recompiles_best() {
     assert_eq!(report.unsupported_instruction_count, 0);
     assert_eq!(report.optimized_unsupported_instruction_count, 0);
     assert!(report.explored > 0);
-    assert!(report.improving_step_count > 0);
     assert_ne!(report.best_symbol, "matvec_bf16_naive");
     assert!(report.best_action_count > 0);
-    assert!(report.best_action_ops.iter().any(|op| op == "group-top"));
-    assert!(report.best_action_ops.iter().any(|op| op == "group"));
+    assert!(report.best_action_ops.iter().any(|op| op == "split"));
     assert!(report.optimized_evidence.has_warp_reduce_sum);
+    assert_eq!(report.source_score_source.as_deref(), Some("measured"));
+    assert_eq!(report.best_score_source.as_deref(), Some("measured"));
+    let source_score = report
+        .source_score
+        .expect("measured e2e should report source naive score");
+    let best_score = report
+        .best_score
+        .expect("measured e2e should report best score");
+    assert!(
+        best_score < source_score,
+        "best measured score {best_score} should beat source naive score {source_score}"
+    );
 
     let source = fs::read_to_string(&report.source_path).expect("naive source should be readable");
     assert!(source.contains("pub fn matvec_bf16_naive("));

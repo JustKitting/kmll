@@ -131,6 +131,7 @@ fn run_gemm_search(
     let measure_options = KernelAutotuneMeasureOptions {
         repeat_count: options.measure_repeat_count,
         warmup_count: options.measure_warmup_count,
+        compile_arch: options.compile_arch.clone(),
     };
     let mut bench = GemmF32Bf16MeasuredAutotuneScorer::new(
         &stream,
@@ -195,6 +196,7 @@ fn run_matvec_search(
     let measure_options = KernelAutotuneMeasureOptions {
         repeat_count: options.measure_repeat_count,
         warmup_count: options.measure_warmup_count,
+        compile_arch: options.compile_arch.clone(),
     };
     let mut bench = MatvecBf16MeasuredAutotuneScorer::new(
         &stream,

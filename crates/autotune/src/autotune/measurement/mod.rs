@@ -17,10 +17,11 @@ pub use self::{
 
 pub type KernelAutotuneMeasureResult<T> = Result<T, Box<dyn Error>>;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KernelAutotuneMeasureOptions {
     pub repeat_count: usize,
     pub warmup_count: usize,
+    pub compile_arch: Option<String>,
 }
 
 fn invalid_input(message: impl Into<String>) -> Box<dyn Error> {

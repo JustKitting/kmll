@@ -183,6 +183,7 @@ impl<'a> MatvecBf16MeasuredAutotuneScorer<'a> {
                 &self.generated_store,
                 candidate,
                 &MatvecRustCudaGenerator,
+                self.options.compile_arch.as_deref(),
             )?;
 
         let ptx_path = compiled

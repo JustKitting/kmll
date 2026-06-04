@@ -200,6 +200,7 @@ impl<'a> GemmF32Bf16MeasuredAutotuneScorer<'a> {
                 &self.generated_store,
                 candidate,
                 &GemmRustCudaGenerator,
+                self.options.compile_arch.as_deref(),
             )?;
 
         let ptx_path = compiled

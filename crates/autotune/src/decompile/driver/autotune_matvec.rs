@@ -4,9 +4,14 @@ use std::{
     io::{self, ErrorKind},
 };
 
+use cuda_core::CudaContext;
+use nn_rust_inference::runtime;
+
 use crate::autotune::{
-    InferenceKernelRustCudaGenerator, KernelArtifactStore, KernelSourceGenerator,
-    MatvecRustCudaGenerator, MatvecSearchProblem, auto_optimize_inference_kernel,
+    InferenceKernelRustCudaGenerator, KernelArtifactStore, KernelAutotuneMeasureOptions,
+    KernelExpansionPolicy, KernelMetadataSearchProblem, KernelSourceGenerator,
+    MatvecBf16MeasuredAutotuneScorer, MatvecRustCudaGenerator, MatvecSearchProblem, SearchScore,
+    auto_optimize_inference_kernel, auto_optimize_inference_kernel_with_policy_scorer,
     compile_standalone_kernel_crate, standalone_cargo_toml, standalone_main_source,
 };
 
@@ -101,14 +106,69 @@ pub fn run_decompile_autotune_matvec(
         )
     })?;
 
-    let optimization = auto_optimize_inference_kernel(&routed.operation, options.config)?;
+    let generated_store = KernelArtifactStore::new(artifact_root.join("generated"));
+    let (optimization, source_score) = if let Some(measure) = &options.measure {
+        generated_store.remove_compile_scratch()?;
+        let ctx = CudaContext::new(measure.device_index)?;
+        let stream = ctx.default_stream();
+        let module = runtime::load_default_module(&ctx)?;
+        let mut bench = MatvecBf16MeasuredAutotuneScorer::new(
+            &stream,
+            &module,
+            options.rows,
+            options.cols,
+            KernelAutotuneMeasureOptions {
+                repeat_count: measure.repeat_count,
+                warmup_count: measure.warmup_count,
+                compile_arch: Some(options.compile_arch.clone()),
+            },
+            generated_store.clone(),
+        )?;
+        let source_score = bench.score_candidate(&naive_candidate)?.ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                "decompiled matvec measurement could not score the source naive candidate",
+            )
+        })?;
+        let mut first_measure_error = None::<String>;
+        let optimization = auto_optimize_inference_kernel_with_policy_scorer(
+            &routed.operation,
+            options.config,
+            KernelExpansionPolicy::for_search_config(options.config.require_launchable),
+            |candidate, _problem| match bench.score_candidate(candidate) {
+                Ok(score) => score,
+                Err(error) => {
+                    if first_measure_error.is_none() {
+                        first_measure_error = Some(error.to_string());
+                    }
+                    None
+                }
+            },
+        )?;
+        if optimization.best_candidate().is_none()
+            && let Some(error) = first_measure_error
+        {
+            return Err(Box::new(io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "decompiled matvec measured autotune did not produce a candidate; first measurement error: {error}"
+                ),
+            )));
+        }
+        (optimization, Some(source_score))
+    } else {
+        (
+            auto_optimize_inference_kernel(&routed.operation, options.config)?,
+            problem.score(&naive_candidate),
+        )
+    };
     let best = optimization.best_candidate().ok_or_else(|| {
         io::Error::new(
             ErrorKind::InvalidData,
             "decompiled matvec autotune did not produce any candidates",
         )
     })?;
-    let generated_store = KernelArtifactStore::new(artifact_root.join("generated"));
+    let best_score = best.score;
     let auto_report = optimization.auto_optimization_report(options.config);
     let emitted_report = generated_store.emit_auto_search_report(&auto_report)?;
     let emitted_optimized =
@@ -218,9 +278,16 @@ pub fn run_decompile_autotune_matvec(
         best_symbol: emitted_optimized.symbol,
         best_action_count: best_action_ops.len(),
         best_action_ops,
-        best_score: best.score.map(|score| score.value),
+        source_score: source_score.map(|score| score.value),
+        source_score_source: score_source_label(source_score),
+        best_score: best_score.map(|score| score.value),
+        best_score_source: score_source_label(best_score),
         explored: optimization.result.explored,
         rejected: optimization.result.rejected,
         improving_step_count,
     })
+}
+
+fn score_source_label(score: Option<SearchScore>) -> Option<String> {
+    score.map(|score| score.source.label().to_string())
 }

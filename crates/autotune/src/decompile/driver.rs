@@ -16,9 +16,10 @@ pub use self::{
     sass_file::run_sass_file_decompile,
     types::{
         DecompileAutotuneGemmOptions, DecompileAutotuneGemmReport, DecompileAutotuneMatvecOptions,
-        DecompileAutotuneMatvecReport, DecompileAutotuneSassOptions, DecompileAutotuneSassReport,
-        DecompileFixtureCoverageOptions, DecompileFixtureCoverageReport, DecompileFixtureOptions,
-        DecompileFixtureReport, DecompilePtxProbeOptions, DecompilePtxProbeReport,
-        SassFileDecompileOptions, SassFileDecompileReport,
+        DecompileAutotuneMatvecReport, DecompileAutotuneMeasureOptions,
+        DecompileAutotuneSassOptions, DecompileAutotuneSassReport, DecompileFixtureCoverageOptions,
+        DecompileFixtureCoverageReport, DecompileFixtureOptions, DecompileFixtureReport,
+        DecompilePtxProbeOptions, DecompilePtxProbeReport, SassFileDecompileOptions,
+        SassFileDecompileReport,
     },
 };

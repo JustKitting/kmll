@@ -2,14 +2,14 @@ use std::{fmt, path::PathBuf};
 
 use nn_rust_autotune::AutoOptimizeConfig;
 use nn_rust_autotune::decompile::{
-    DecompileAutotuneGemmOptions, DecompileAutotuneMatvecOptions, DecompileAutotuneSassOptions,
-    DecompileFixtureCoverageOptions, DecompileFixtureOptions, DecompilePtxProbeOptions,
-    DecompiledAutotuneShape, PtxDecompileProbeKind, SassCoverageComparisonOptions,
-    SassCoverageOptions, SassFileDecompileOptions, SimpleKernelFixtureKind,
-    all_ptx_decompile_probe_kinds, all_simple_kernel_fixture_kinds, run_decompile_autotune_gemm,
-    run_decompile_autotune_matvec, run_decompile_autotune_sass, run_decompile_fixture_coverage,
-    run_decompile_fixtures, run_decompile_ptx_probes, run_sass_coverage_comparison,
-    run_sass_coverage_scan, run_sass_file_decompile,
+    DecompileAutotuneGemmOptions, DecompileAutotuneMatvecOptions, DecompileAutotuneMeasureOptions,
+    DecompileAutotuneSassOptions, DecompileFixtureCoverageOptions, DecompileFixtureOptions,
+    DecompilePtxProbeOptions, DecompiledAutotuneShape, PtxDecompileProbeKind,
+    SassCoverageComparisonOptions, SassCoverageOptions, SassFileDecompileOptions,
+    SimpleKernelFixtureKind, all_ptx_decompile_probe_kinds, all_simple_kernel_fixture_kinds,
+    run_decompile_autotune_gemm, run_decompile_autotune_matvec, run_decompile_autotune_sass,
+    run_decompile_fixture_coverage, run_decompile_fixtures, run_decompile_ptx_probes,
+    run_sass_coverage_comparison, run_sass_coverage_scan, run_sass_file_decompile,
 };
 use nn_rust_inference::runtime;
 
@@ -21,7 +21,7 @@ const DECOMPILE_PTX_PROBES_USAGE: &str = "kernel-decompile-ptx-probes [--probe N
 const DECOMPILE_FIXTURE_COVERAGE_USAGE: &str = "kernel-decompile-fixture-coverage [--fixture NAME|all] [--artifact-root PATH] [--compile-arch sm_120] [--out-dir PATH]";
 const DECOMPILE_SASS_USAGE: &str =
     "kernel-decompile-sass SASS_PATH [--source PATH] [--out-dir PATH]";
-const DECOMPILE_AUTOTUNE_MATVEC_USAGE: &str = "kernel-decompile-autotune-matvec ROWS COLS [--artifact-root PATH] [--compile-arch sm_120] [--beam-width N] [--max-steps N] [--min-score-improvement VALUE] [--require-launchable]";
+const DECOMPILE_AUTOTUNE_MATVEC_USAGE: &str = "kernel-decompile-autotune-matvec ROWS COLS [--artifact-root PATH] [--compile-arch sm_120] [--beam-width N] [--max-steps N] [--min-score-improvement VALUE] [--require-launchable] [--measure] [--measure-repeat N] [--measure-warmup N] [--measure-device N]";
 const DECOMPILE_AUTOTUNE_GEMM_USAGE: &str = "kernel-decompile-autotune-gemm M N K [--artifact-root PATH] [--compile-arch sm_120] [--beam-width N] [--max-steps N] [--min-score-improvement VALUE] [--require-launchable]";
 const DECOMPILE_AUTOTUNE_SASS_USAGE: &str = "kernel-decompile-autotune-sass SASS_PATH (--matvec-bf16-row-major ROWS COLS | --gemm-f32-bf16-row-col-row M N K) [--function SYMBOL] [--source PATH] [--out-dir PATH] [--artifact-root PATH] [--compile-arch sm_120] [--beam-width N] [--max-steps N] [--min-score-improvement VALUE] [--require-launchable]";
 const DECOMPILE_COVERAGE_USAGE: &str =
@@ -310,6 +310,35 @@ pub(crate) fn run_kernel_decompile_autotune_matvec(args: &[String]) -> AppResult
                 config.require_launchable = true;
                 index += 1;
             }
+            "--measure" => {
+                options.measure = Some(DecompileAutotuneMeasureOptions::default_sm120());
+                index += 1;
+            }
+            "--measure-repeat" => {
+                let value = parse_required_flag_value(args, &mut index, "--measure-repeat")?;
+                ensure_matvec_measure_options(&mut options).repeat_count =
+                    parse_positive_usize_flag(
+                        value,
+                        "kernel-decompile-autotune-matvec",
+                        "--measure-repeat",
+                    )?;
+            }
+            "--measure-warmup" => {
+                let value = parse_required_flag_value(args, &mut index, "--measure-warmup")?;
+                ensure_matvec_measure_options(&mut options).warmup_count = parse_usize_flag(
+                    value,
+                    "kernel-decompile-autotune-matvec",
+                    "--measure-warmup",
+                )?;
+            }
+            "--measure-device" => {
+                let value = parse_required_flag_value(args, &mut index, "--measure-device")?;
+                ensure_matvec_measure_options(&mut options).device_index = parse_usize_flag(
+                    value,
+                    "kernel-decompile-autotune-matvec",
+                    "--measure-device",
+                )?;
+            }
             flag if flag.starts_with("--") => {
                 return Err(invalid_input(format!(
                     "kernel-decompile-autotune-matvec unknown argument {flag:?}; usage: {DECOMPILE_AUTOTUNE_MATVEC_USAGE}"
@@ -326,7 +355,7 @@ pub(crate) fn run_kernel_decompile_autotune_matvec(args: &[String]) -> AppResult
 
     let report = run_decompile_autotune_matvec(&options)?;
     println!(
-        "kernel_decompile_autotune_matvec rows={} cols={} naive_symbol={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} has_bf16_descriptor_load={} has_bf16_widen={} has_f32_mul_add={} has_f32_fused_multiply_add={} has_warp_reduce_sum={} best_symbol={} best_action_count={} best_action_ops={} best_score={} explored={} rejected={} improving_steps={} optimized_parsed_instructions={} optimized_semantic_patterns={} optimized_unsupported_instructions={} optimized_has_bf16_descriptor_load={} optimized_has_bf16_widen={} optimized_has_f32_mul_add={} optimized_has_f32_fused_multiply_add={} optimized_has_warp_reduce_sum={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} pattern_path={} side_by_side_path={} auto_report_path={} optimized_source_path={} optimized_ptx_path={} optimized_cubin_path={} optimized_sass_path={} optimized_ir_path={} optimized_pattern_path={} optimized_side_by_side_path={}",
+        "kernel_decompile_autotune_matvec rows={} cols={} naive_symbol={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} has_bf16_descriptor_load={} has_bf16_widen={} has_f32_mul_add={} has_f32_fused_multiply_add={} has_warp_reduce_sum={} best_symbol={} best_action_count={} best_action_ops={} source_score={} source_score_source={} best_score={} best_score_source={} explored={} rejected={} improving_steps={} optimized_parsed_instructions={} optimized_semantic_patterns={} optimized_unsupported_instructions={} optimized_has_bf16_descriptor_load={} optimized_has_bf16_widen={} optimized_has_f32_mul_add={} optimized_has_f32_fused_multiply_add={} optimized_has_warp_reduce_sum={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} pattern_path={} side_by_side_path={} auto_report_path={} optimized_source_path={} optimized_ptx_path={} optimized_cubin_path={} optimized_sass_path={} optimized_ir_path={} optimized_pattern_path={} optimized_side_by_side_path={}",
         report.rows,
         report.cols,
         report.naive_symbol,
@@ -341,10 +370,13 @@ pub(crate) fn run_kernel_decompile_autotune_matvec(args: &[String]) -> AppResult
         report.best_symbol,
         report.best_action_count,
         report.best_action_ops.join(","),
+        optional_f64_string(report.source_score),
+        optional_string(report.source_score_source.as_deref()),
         report
             .best_score
             .map(|score| score.to_string())
             .unwrap_or_else(|| "none".to_string()),
+        optional_string(report.best_score_source.as_deref()),
         report.explored,
         report.rejected,
         report.improving_step_count,
@@ -373,6 +405,38 @@ pub(crate) fn run_kernel_decompile_autotune_matvec(args: &[String]) -> AppResult
         report.optimized_side_by_side_path.display(),
     );
     Ok(())
+}
+
+fn ensure_matvec_measure_options(
+    options: &mut DecompileAutotuneMatvecOptions,
+) -> &mut DecompileAutotuneMeasureOptions {
+    options
+        .measure
+        .get_or_insert_with(DecompileAutotuneMeasureOptions::default_sm120)
+}
+
+fn parse_positive_usize_flag(value: &str, command: &str, flag: &str) -> AppResult<usize> {
+    let parsed = parse_usize_flag(value, command, flag)?;
+    if parsed == 0 {
+        return Err(invalid_input(format!("{command} {flag} must be nonzero")));
+    }
+    Ok(parsed)
+}
+
+fn parse_usize_flag(value: &str, command: &str, flag: &str) -> AppResult<usize> {
+    value
+        .parse()
+        .map_err(|error| invalid_input(format!("invalid {flag} {value:?} for {command}: {error}")))
+}
+
+fn optional_f64_string(value: Option<f64>) -> String {
+    value
+        .map(|score| score.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn optional_string(value: Option<&str>) -> String {
+    value.unwrap_or("none").to_string()
 }
 
 pub(crate) fn run_kernel_decompile_autotune_gemm(args: &[String]) -> AppResult<()> {
