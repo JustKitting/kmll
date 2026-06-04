@@ -53,6 +53,24 @@ fn raw_aggregate_operands_capture_label_candidates_once() {
             && label.as_str() == "matvec_bf16_rows17"
     ));
     assert_eq!(aggregate.single_register(), Some(&reg("R4")));
+    assert!(matches!(
+        aggregate.as_scalar_operand().kind,
+        ScalarOperandKind::Raw
+    ));
+}
+
+#[test]
+fn raw_single_register_aggregate_becomes_typed_scalar() {
+    let operand = SassOperand {
+        raw: "UR4".to_string(),
+        kind: SassOperandKind::Raw,
+    };
+    let aggregate = AggregateOperand::from_sass_operand(&operand);
+
+    assert!(matches!(
+        aggregate.as_scalar_operand().kind,
+        ScalarOperandKind::Register(register) if register == reg("UR4")
+    ));
 }
 
 #[test]

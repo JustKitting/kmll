@@ -2,7 +2,7 @@ use super::super::super::sass::{SassInstruction, SassPredicate};
 use super::super::types::{
     AggregateOperand, AggregateOperandKind, ControlTarget, ImmediateValue, KernelIrOpKind,
     PredicateCondition, RegisterRef, RegisterRefKind, SassMappingConfidence, SassOpcode,
-    SassUnsupportedReason, ScalarOperand, ScalarOperandKind,
+    SassUnsupportedReason, ScalarOperand,
 };
 use super::LiftResult;
 
@@ -26,22 +26,8 @@ pub(super) fn register_operand(operand: Option<&AggregateOperand>) -> RegisterRe
 
 pub(super) fn scalar_operand(operand: Option<&AggregateOperand>) -> ScalarOperand {
     match operand {
-        Some(AggregateOperand {
-            kind: AggregateOperandKind::Register(register),
-            raw,
-        }) => ScalarOperand {
-            kind: ScalarOperandKind::Register(register.clone()),
-            raw: raw.clone(),
-        },
-        Some(AggregateOperand {
-            kind: AggregateOperandKind::Immediate(immediate),
-            raw,
-        }) => ScalarOperand {
-            kind: ScalarOperandKind::Immediate(immediate.clone()),
-            raw: raw.clone(),
-        },
-        Some(operand) => ScalarOperand::parse(operand.raw.clone()),
-        None => ScalarOperand::parse(String::new()),
+        Some(operand) => operand.as_scalar_operand(),
+        None => ScalarOperand::raw(String::new()),
     }
 }
 

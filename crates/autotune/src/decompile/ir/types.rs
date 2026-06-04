@@ -1406,6 +1406,27 @@ impl ScalarOperand {
         Self { kind, raw }
     }
 
+    pub fn register(raw: String, register: RegisterRef) -> Self {
+        Self {
+            kind: ScalarOperandKind::Register(register),
+            raw,
+        }
+    }
+
+    pub fn immediate(raw: String, immediate: ImmediateValue) -> Self {
+        Self {
+            kind: ScalarOperandKind::Immediate(immediate),
+            raw,
+        }
+    }
+
+    pub fn raw(raw: String) -> Self {
+        Self {
+            kind: ScalarOperandKind::Raw,
+            raw,
+        }
+    }
+
     pub fn registers(&self) -> Vec<RegisterRef> {
         match &self.kind {
             ScalarOperandKind::Register(register) => vec![register.clone()],
@@ -1501,6 +1522,27 @@ impl AggregateOperand {
             AggregateOperandKind::Immediate(_)
             | AggregateOperandKind::Memory(_)
             | AggregateOperandKind::Label(_) => None,
+        }
+    }
+
+    pub fn as_scalar_operand(&self) -> ScalarOperand {
+        match &self.kind {
+            AggregateOperandKind::Register(register) => {
+                ScalarOperand::register(self.raw.clone(), register.clone())
+            }
+            AggregateOperandKind::Immediate(immediate) => {
+                ScalarOperand::immediate(self.raw.clone(), immediate.clone())
+            }
+            AggregateOperandKind::Raw {
+                registers,
+                label: None,
+            } => match registers.as_slice() {
+                [register] => ScalarOperand::register(self.raw.clone(), register.clone()),
+                _ => ScalarOperand::raw(self.raw.clone()),
+            },
+            AggregateOperandKind::Raw { label: Some(_), .. }
+            | AggregateOperandKind::Memory(_)
+            | AggregateOperandKind::Label(_) => ScalarOperand::raw(self.raw.clone()),
         }
     }
 }
