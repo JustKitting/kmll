@@ -16,7 +16,7 @@ use super::{
     SassLiftedSemantics, SassLiftedValueRef, SassMemoryAccessKind, SassModifier, SassOpcode,
     SassOpcodeCatalogClass, SassOpcodeCatalogKind, SassOpcodeCatalogSource, SassPatternConfidence,
     SassPatternModule, SassRegionKind, SassRegionPath, SassSemanticPatternCategory,
-    SassSemanticPatternKind, SassUnsupportedReason, SassValueOpKind, analyze_sass_ir,
+    SassSemanticPatternKind, SassSymbol, SassUnsupportedReason, SassValueOpKind, analyze_sass_ir,
     known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
     render_sass_file_side_by_side,
 };
@@ -416,7 +416,7 @@ impl fmt::Display for SassCoverageSourceFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassUnsupportedInstruction {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub address: u64,
     pub opcode: SassOpcode,
     pub reason: SassUnsupportedReason,
@@ -426,7 +426,7 @@ pub struct SassUnsupportedInstruction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageSemanticPattern {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub start_address: u64,
     pub end_address: u64,
     pub kind: SassSemanticPatternKind,
@@ -436,7 +436,7 @@ pub struct SassCoverageSemanticPattern {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageBasicBlock {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub id: usize,
     pub label: Option<String>,
     pub start_address: u64,
@@ -448,7 +448,7 @@ pub struct SassCoverageBasicBlock {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageCfgEdge {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub from_block: usize,
     pub to_block: Option<usize>,
     pub kind: SassCfgEdgeKind,
@@ -459,7 +459,7 @@ pub struct SassCoverageCfgEdge {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageDominatorBlock {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub block_id: usize,
     pub reachable: bool,
     pub immediate_dominator: Option<usize>,
@@ -470,7 +470,7 @@ pub struct SassCoverageDominatorBlock {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageNaturalLoop {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub header_block: usize,
     pub latch_block: usize,
     pub reachable: bool,
@@ -482,7 +482,7 @@ pub struct SassCoverageNaturalLoop {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageRegion {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub id: usize,
     pub parent: Option<usize>,
     pub children: Vec<usize>,
@@ -504,7 +504,7 @@ pub struct SassCoverageRegion {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageDataflowOp {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub address: u64,
     pub defines: Vec<RegisterRef>,
     pub uses: Vec<RegisterRef>,
@@ -514,7 +514,7 @@ pub struct SassCoverageDataflowOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageReachingUse {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub address: u64,
     pub register: RegisterRef,
     pub reaching_def_addresses: Vec<u64>,
@@ -524,7 +524,7 @@ pub struct SassCoverageReachingUse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageSsaValue {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub value_id: usize,
     pub register: RegisterRef,
     pub def_address: Option<u64>,
@@ -535,7 +535,7 @@ pub struct SassCoverageSsaValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageDefUseEdge {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub value_id: usize,
     pub register: RegisterRef,
     pub def_address: Option<u64>,
@@ -546,7 +546,7 @@ pub struct SassCoverageDefUseEdge {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageValueOp {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub address: u64,
     pub block_id: Option<usize>,
     pub predicate: Option<PredicateCondition>,
@@ -562,7 +562,7 @@ pub struct SassCoverageValueOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageLiftedOp {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub address: u64,
     pub block_id: Option<usize>,
     pub predicate: Option<PredicateCondition>,
@@ -580,7 +580,7 @@ pub struct SassCoverageLiftedOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageLiveRange {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub register: RegisterRef,
     pub def_address: Option<u64>,
     pub start_address: u64,
@@ -591,7 +591,7 @@ pub struct SassCoverageLiveRange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageMemoryAccess {
     pub sass_path: PathBuf,
-    pub function: String,
+    pub function: SassSymbol,
     pub address: u64,
     pub predicate: Option<PredicateCondition>,
     pub kind: SassMemoryAccessKind,
@@ -1129,7 +1129,7 @@ fn append_unsupported(
             };
             unsupported_instructions.push(SassUnsupportedInstruction {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 address: op.address,
                 opcode: opcode.clone(),
                 reason: reason.clone(),
@@ -1148,7 +1148,7 @@ fn append_semantic_patterns(
         for pattern in &function.patterns {
             semantic_patterns.push(SassCoverageSemanticPattern {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 start_address: pattern.start_address,
                 end_address: pattern.end_address,
                 kind: pattern.kind.clone(),
@@ -1180,7 +1180,7 @@ fn append_analysis(
         for block in &function.blocks {
             cfg_blocks.push(SassCoverageBasicBlock {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 id: block.id,
                 label: block.label.as_ref().map(ToString::to_string),
                 start_address: block.start_address,
@@ -1192,7 +1192,7 @@ fn append_analysis(
         for edge in &function.edges {
             cfg_edges.push(SassCoverageCfgEdge {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 from_block: edge.from_block,
                 to_block: edge.to_block,
                 kind: edge.kind,
@@ -1203,7 +1203,7 @@ fn append_analysis(
         for dominator in &function.dominators {
             dominators.push(SassCoverageDominatorBlock {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 block_id: dominator.block_id,
                 reachable: dominator.reachable,
                 immediate_dominator: dominator.immediate_dominator,
@@ -1214,7 +1214,7 @@ fn append_analysis(
         for natural_loop in &function.natural_loops {
             natural_loops.push(SassCoverageNaturalLoop {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 header_block: natural_loop.header_block,
                 latch_block: natural_loop.latch_block,
                 reachable: natural_loop.reachable,
@@ -1226,7 +1226,7 @@ fn append_analysis(
         for region in &function.regions {
             regions.push(SassCoverageRegion {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 id: region.id,
                 parent: region.parent,
                 children: region.children.clone(),
@@ -1248,7 +1248,7 @@ fn append_analysis(
         for op in &function.dataflow {
             dataflow.push(SassCoverageDataflowOp {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 address: op.address,
                 defines: op.defines.clone(),
                 uses: op.uses.clone(),
@@ -1258,7 +1258,7 @@ fn append_analysis(
         for use_site in &function.reaching_uses {
             reaching_uses.push(SassCoverageReachingUse {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 address: use_site.address,
                 register: use_site.register.clone(),
                 reaching_def_addresses: use_site.reaching_def_addresses.clone(),
@@ -1268,7 +1268,7 @@ fn append_analysis(
         for value in &function.ssa_values {
             ssa_values.push(SassCoverageSsaValue {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 value_id: value.value_id,
                 register: value.register.clone(),
                 def_address: value.def_address,
@@ -1279,7 +1279,7 @@ fn append_analysis(
         for edge in &function.def_use_edges {
             def_use_edges.push(SassCoverageDefUseEdge {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 value_id: edge.value_id,
                 register: edge.register.clone(),
                 def_address: edge.def_address,
@@ -1290,7 +1290,7 @@ fn append_analysis(
         for op in &function.value_ops {
             value_ops.push(SassCoverageValueOp {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 address: op.address,
                 block_id: op.block_id,
                 predicate: op.predicate.clone(),
@@ -1311,7 +1311,7 @@ fn append_analysis(
             for op in &lifted_function.ops {
                 lifted_ops.push(SassCoverageLiftedOp {
                     sass_path: sass_path.to_path_buf(),
-                    function: function.name.to_string(),
+                    function: function.name.clone(),
                     address: op.address,
                     block_id: op.block_id,
                     predicate: op.predicate.clone(),
@@ -1330,7 +1330,7 @@ fn append_analysis(
         for range in &function.live_ranges {
             live_ranges.push(SassCoverageLiveRange {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 register: range.register.clone(),
                 def_address: range.def_address,
                 start_address: range.start_address,
@@ -1341,7 +1341,7 @@ fn append_analysis(
         for access in &function.memory_accesses {
             memory_accesses.push(SassCoverageMemoryAccess {
                 sass_path: sass_path.to_path_buf(),
-                function: function.name.to_string(),
+                function: function.name.clone(),
                 address: access.address,
                 predicate: access.predicate.clone(),
                 kind: access.kind,
@@ -1725,7 +1725,7 @@ fn render_semantic_patterns_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{:#06x}\t{:#06x}\t{}\t{}\t{}",
             tsv(&pattern.sass_path.display().to_string()),
-            tsv(&pattern.function),
+            tsv_display(&pattern.function),
             pattern.start_address,
             pattern.end_address,
             tsv(pattern.kind.name()),
@@ -1749,7 +1749,7 @@ fn render_cfg_blocks_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{}\t{}\t{:#06x}\t{:#06x}\t{}\t{}",
             tsv(&block.sass_path.display().to_string()),
-            tsv(&block.function),
+            tsv_display(&block.function),
             block.id,
             tsv(block.label.as_deref().unwrap_or("")),
             block.start_address,
@@ -1774,7 +1774,7 @@ fn render_cfg_edges_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&edge.sass_path.display().to_string()),
-            tsv(&edge.function),
+            tsv_display(&edge.function),
             edge.from_block,
             edge.to_block
                 .map(|block| block.to_string())
@@ -1800,7 +1800,7 @@ fn render_dominators_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&dominator.sass_path.display().to_string()),
-            tsv(&dominator.function),
+            tsv_display(&dominator.function),
             dominator.block_id,
             dominator.reachable,
             dominator
@@ -1827,7 +1827,7 @@ fn render_natural_loops_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&natural_loop.sass_path.display().to_string()),
-            tsv(&natural_loop.function),
+            tsv_display(&natural_loop.function),
             natural_loop.header_block,
             natural_loop.latch_block,
             natural_loop.reachable,
@@ -1852,7 +1852,7 @@ fn render_regions_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&region.sass_path.display().to_string()),
-            tsv(&region.function),
+            tsv_display(&region.function),
             region.id,
             region.parent.map(|id| id.to_string()).unwrap_or_default(),
             tsv(&format_blocks(&region.children)),
@@ -1896,7 +1896,7 @@ fn render_dataflow_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{:#06x}\t{}\t{}\t{}",
             tsv(&op.sass_path.display().to_string()),
-            tsv(&op.function),
+            tsv_display(&op.function),
             op.address,
             tsv(&display_list(&op.defines)),
             tsv(&display_list(&op.uses)),
@@ -1919,7 +1919,7 @@ fn render_reaching_uses_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{:#06x}\t{}\t{}\t{}",
             tsv(&use_site.sass_path.display().to_string()),
-            tsv(&use_site.function),
+            tsv_display(&use_site.function),
             use_site.address,
             tsv(&use_site.register.to_string()),
             tsv(&format_reaching_defs(
@@ -1945,7 +1945,7 @@ fn render_ssa_values_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&value.sass_path.display().to_string()),
-            tsv(&value.function),
+            tsv_display(&value.function),
             value.value_id,
             tsv(&value.register.to_string()),
             tsv(&format_optional_address(value.def_address)),
@@ -1969,7 +1969,7 @@ fn render_def_use_edges_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{:#06x}\t{}\t{}\t{}\t{}",
             tsv(&edge.sass_path.display().to_string()),
-            tsv(&edge.function),
+            tsv_display(&edge.function),
             edge.use_address,
             tsv(&edge.register.to_string()),
             edge.value_id,
@@ -1993,7 +1993,7 @@ fn render_value_ops_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{:#06x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&op.sass_path.display().to_string()),
-            tsv(&op.function),
+            tsv_display(&op.function),
             op.address,
             op.block_id
                 .map(|block| block.to_string())
@@ -2024,7 +2024,7 @@ fn render_lifted_ops_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{:#06x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&op.sass_path.display().to_string()),
-            tsv(&op.function),
+            tsv_display(&op.function),
             op.address,
             op.block_id
                 .map(|block| block.to_string())
@@ -2057,7 +2057,7 @@ fn render_live_ranges_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{}\t{}\t{:#06x}\t{:#06x}\t{}",
             tsv(&range.sass_path.display().to_string()),
-            tsv(&range.function),
+            tsv_display(&range.function),
             tsv(&range.register.to_string()),
             tsv(&format_optional_address(range.def_address)),
             range.start_address,
@@ -2081,7 +2081,7 @@ fn render_memory_accesses_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{:#06x}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&access.sass_path.display().to_string()),
-            tsv(&access.function),
+            tsv_display(&access.function),
             access.address,
             tsv(&display_optional(access.predicate.as_ref())),
             tsv(&access.kind.to_string()),
@@ -2165,7 +2165,7 @@ fn render_unsupported_tsv(report: &SassCoverageReport) -> String {
             out,
             "{}\t{}\t{:#06x}\t{}\t{}\t{}",
             tsv(&instruction.sass_path.display().to_string()),
-            tsv(&instruction.function),
+            tsv_display(&instruction.function),
             instruction.address,
             tsv(&instruction.opcode.to_string()),
             tsv(&instruction.reason.to_string()),
@@ -2221,6 +2221,10 @@ fn format_values(values: &[usize]) -> String {
         .map(|value| format!("v{value}"))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn tsv_display(value: &impl fmt::Display) -> String {
+    tsv(&value.to_string())
 }
 
 fn tsv(value: &str) -> String {

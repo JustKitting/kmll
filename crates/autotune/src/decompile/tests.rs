@@ -1590,6 +1590,12 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert_eq!(report.unsupported_instruction_count, 1);
     assert!(
         report
+            .dataflow
+            .iter()
+            .any(|op| op.function == SassSymbol::new("sass_fixture_i32_add"))
+    );
+    assert!(
+        report
             .opcode_counts
             .iter()
             .any(|count| count.opcode == SassOpcode::new("MYSTERY") && count.count == 1)
