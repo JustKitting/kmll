@@ -1725,6 +1725,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
             .any(
                 |instruction| instruction.opcode == SassOpcode::new("MYSTERY")
                     && instruction.reason == SassUnsupportedReason::NoLocalMapping
+                    && instruction.source_text.contains("MYSTERY")
             )
     );
     assert!(report.files.iter().any(
@@ -1917,6 +1918,11 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
             .next()
             .is_some_and(|header| header.ends_with("\tsource_text"))
     );
+    let unsupported_tsv = fs::read_to_string(&report.unsupported_instructions_path)
+        .expect("unsupported instructions TSV should be readable");
+    assert!(
+        unsupported_tsv.starts_with("sass_path\tfunction\taddress\topcode\treason\tsource_text")
+    );
     let opcode_catalog_tsv =
         fs::read_to_string(&report.opcode_catalog_path).expect("opcode catalog TSV should read");
     assert!(opcode_catalog_tsv.starts_with(
@@ -2017,6 +2023,44 @@ fn coverage_scan_preserves_typed_semantic_pattern_rows() {
         .expect("pattern frequency TSV should read");
     assert!(pattern_frequency_tsv.starts_with("semantic_pattern\tcount"));
     assert!(pattern_frequency_tsv.contains("warp-reduce-sum\t1"));
+}
+
+#[test]
+fn coverage_scan_preserves_typed_parse_error() {
+    const ORPHAN_INSTRUCTION_SASS: &str = r#"
+        .target sm_120
+        /*0000*/                   MOV R0, R1 ;                                  /* 0x0 */
+    "#;
+
+    let root = unique_test_dir("coverage-parse-error");
+    let input = root.join("input");
+    let output = root.join("output");
+    fs::create_dir_all(&input).expect("test input dir should be created");
+    fs::write(input.join("orphan.sass"), ORPHAN_INSTRUCTION_SASS)
+        .expect("orphan test SASS should be written");
+
+    let report = run_sass_coverage_scan(&SassCoverageOptions {
+        root: input,
+        output_dir: output,
+    })
+    .expect("coverage scan should complete with parse errors reported");
+
+    assert_eq!(report.files.len(), 1);
+    assert_eq!(report.parsed_file_count, 0);
+    assert_eq!(report.parse_error_count, 1);
+    let parse_error: &SassParseError = report.files[0]
+        .parse_error
+        .as_ref()
+        .expect("file report should keep the typed parse error");
+    assert!(
+        parse_error
+            .to_string()
+            .contains("instruction appears before a function/global header")
+    );
+
+    let files_tsv = fs::read_to_string(&report.files_path).expect("files TSV should be readable");
+    assert!(files_tsv.contains("parse-error"));
+    assert!(files_tsv.contains("instruction appears before a function/global header"));
 }
 
 #[test]

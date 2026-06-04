@@ -14,11 +14,11 @@ use super::{
     RegisterRef, SassAnalysisModule, SassArchitecture, SassBlockTerminator, SassCfgEdgeKind,
     SassDataflowSite, SassLiftedModule, SassLiftedOpClass, SassLiftedOpDetail, SassLiftedOpKind,
     SassLiftedSemantics, SassLiftedValueRef, SassMemoryAccessKind, SassModifier, SassOpcode,
-    SassOpcodeCatalogClass, SassOpcodeCatalogKind, SassOpcodeCatalogSource, SassPatternConfidence,
-    SassPatternModule, SassRegionKind, SassRegionPath, SassSemanticPatternCategory,
-    SassSemanticPatternKind, SassSymbol, SassUnsupportedReason, SassValueOpKind, analyze_sass_ir,
-    known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns,
-    render_sass_file_side_by_side,
+    SassOpcodeCatalogClass, SassOpcodeCatalogKind, SassOpcodeCatalogSource, SassParseError,
+    SassPatternConfidence, SassPatternModule, SassRegionKind, SassRegionPath,
+    SassSemanticPatternCategory, SassSemanticPatternKind, SassSymbol, SassUnsupportedReason,
+    SassValueOpKind, analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass,
+    recover_sass_patterns, render_sass_file_side_by_side,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,7 +134,7 @@ pub struct SassCoverageFileReport {
     pub memory_access_count: usize,
     pub semantic_pattern_count: usize,
     pub unsupported_instruction_count: usize,
-    pub parse_error: Option<String>,
+    pub parse_error: Option<SassParseError>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -420,7 +420,7 @@ pub struct SassUnsupportedInstruction {
     pub address: u64,
     pub opcode: SassOpcode,
     pub reason: SassUnsupportedReason,
-    pub raw: String,
+    pub source_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -769,7 +769,7 @@ pub fn run_sass_coverage_scan(
                     memory_access_count: 0,
                     semantic_pattern_count: 0,
                     unsupported_instruction_count: 0,
-                    parse_error: Some(error.to_string()),
+                    parse_error: Some(error),
                 });
             }
         }
@@ -1133,7 +1133,7 @@ fn append_unsupported(
                 address: op.address,
                 opcode: opcode.clone(),
                 reason: reason.clone(),
-                raw: op.source_text.clone(),
+                source_text: op.source_text.clone(),
             });
         }
     }
@@ -1706,7 +1706,7 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
             tsv(&optional_path(&file.analysis_path)),
             tsv(&optional_path(&file.pattern_path)),
             tsv(&optional_path(&file.side_by_side_path)),
-            tsv(file.parse_error.as_deref().unwrap_or(""))
+            tsv(&file.parse_error.as_ref().map(ToString::to_string).unwrap_or_default())
         )
         .expect("write to string");
     }
@@ -2159,7 +2159,11 @@ fn display_lifted_value_refs(values: &[SassLiftedValueRef]) -> String {
 
 fn render_unsupported_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
-    writeln!(out, "sass_path\tfunction\taddress\topcode\treason\traw").expect("write to string");
+    writeln!(
+        out,
+        "sass_path\tfunction\taddress\topcode\treason\tsource_text"
+    )
+    .expect("write to string");
     for instruction in &report.unsupported_instructions {
         writeln!(
             out,
@@ -2169,7 +2173,7 @@ fn render_unsupported_tsv(report: &SassCoverageReport) -> String {
             instruction.address,
             tsv(&instruction.opcode.to_string()),
             tsv(&instruction.reason.to_string()),
-            tsv(&instruction.raw)
+            tsv(&instruction.source_text)
         )
         .expect("write to string");
     }
