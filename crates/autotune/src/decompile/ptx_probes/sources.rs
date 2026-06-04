@@ -467,6 +467,78 @@ pub(super) const TENSOR_MEMORY_UTCCP_PTX: &str = r#".version 9.2
 }
 "#;
 
+pub(super) const TENSOR_MEMORY_BULK_ASYNC_PTX: &str = r#".version 9.2
+.target sm_120
+.address_size 64
+
+.visible .entry tensor_memory_bulk_async_probe(
+    .param .u64 tensor_memory_bulk_async_probe_out,
+    .param .u64 tensor_memory_bulk_async_probe_in
+)
+{
+    .reg .b32 %r<12>;
+    .reg .b64 %rd<12>;
+    .shared .align 16 .b8 tensor_memory_bulk_async_probe_smem[1024];
+    .shared .align 8 .b8 tensor_memory_bulk_async_probe_mbar[8];
+
+    ld.param.u64 %rd0, [tensor_memory_bulk_async_probe_out];
+    ld.param.u64 %rd1, [tensor_memory_bulk_async_probe_in];
+
+    mov.u64 %rd2, tensor_memory_bulk_async_probe_smem;
+    cvta.to.shared.u64 %rd3, %rd2;
+    cvt.u32.u64 %r0, %rd3;
+
+    mov.u64 %rd4, tensor_memory_bulk_async_probe_mbar;
+    cvta.to.shared.u64 %rd5, %rd4;
+    cvt.u32.u64 %r1, %rd5;
+
+    mov.u32 %r2, 128;
+
+    cp.async.bulk.shared::cluster.global.mbarrier::complete_tx::bytes [%r0], [%rd1], %r2, [%r1];
+    cp.async.bulk.prefetch.L2.global [%rd1], %r2;
+    cp.async.bulk.global.shared::cta.bulk_group [%rd0], [%r0], %r2;
+    cp.async.bulk.commit_group;
+
+    ret;
+}
+"#;
+
+pub(super) const TENSOR_MEMORY_TMA_ASYNC_PTX: &str = r#".version 9.2
+.target sm_120
+.address_size 64
+
+.visible .entry tensor_memory_tma_async_probe(
+    .param .u64 tensor_memory_tma_async_probe_desc
+)
+{
+    .reg .b32 %r<12>;
+    .reg .b64 %rd<12>;
+    .shared .align 16 .b8 tensor_memory_tma_async_probe_smem[1024];
+    .shared .align 8 .b8 tensor_memory_tma_async_probe_mbar[8];
+
+    ld.param.u64 %rd0, [tensor_memory_tma_async_probe_desc];
+
+    mov.u64 %rd1, tensor_memory_tma_async_probe_smem;
+    cvta.to.shared.u64 %rd2, %rd1;
+    cvt.u32.u64 %r0, %rd2;
+
+    mov.u64 %rd3, tensor_memory_tma_async_probe_mbar;
+    cvta.to.shared.u64 %rd4, %rd3;
+    cvt.u32.u64 %r1, %rd4;
+
+    mov.u32 %r2, 0;
+    mov.u64 %rd5, 0;
+
+    cp.async.bulk.tensor.1d.shared::cluster.global.mbarrier::complete_tx::bytes.L2::cache_hint [%r0], [%rd0, {%r2}], [%r1], %rd5;
+    cp.async.bulk.prefetch.tensor.1d.L2.global [%rd0, {%r2}];
+    cp.async.bulk.tensor.1d.global.shared::cta.bulk_group [%rd0, {%r2}], [%r0];
+    cp.reduce.async.bulk.tensor.1d.global.shared::cta.add.bulk_group [%rd0, {%r2}], [%r0];
+    cp.async.bulk.commit_group;
+
+    ret;
+}
+"#;
+
 pub(super) const WARP_GROUP_REGISTER_SET_PTX: &str = r#".version 8.7
 .target sm_90a
 .address_size 64

@@ -8,7 +8,7 @@ use super::{
 
 pub(super) fn lift(opcode: &SassOpcode, operands: &[AggregateOperand]) -> Option<LiftResult> {
     Some(match opcode.kind() {
-        SassOpcodeKind::Lea | SassOpcodeKind::Ulea => (
+        SassOpcodeKind::Lea | SassOpcodeKind::Lepc | SassOpcodeKind::Ulea => (
             KernelIrOpKind::AddressCalc {
                 dst: register_operand(operands.first()),
                 inputs: scalar_inputs(operand_tail(operands)),

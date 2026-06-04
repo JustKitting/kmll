@@ -1811,6 +1811,46 @@ fn lift_tensor_core_sass_keeps_known_op_families_typed() {
 }
 
 #[test]
+fn lift_bulk_async_support_ops_are_typed() {
+    const BULK_ASYNC_SUPPORT_SASS: &str = r#"
+        .target sm_120
+
+        .section .text.bulk_async_support,"ax",@progbits
+        .global bulk_async_support
+bulk_async_support:
+.text.bulk_async_support:
+        /*0000*/                   LEPC R20, `(.L_x_1) ;                         /* 0x0 */
+        /*0010*/                   CALL.ABS.NOINC R2 ;                           /* 0x0 */
+.L_x_1:
+        /*0020*/                   UTMACMDFLUSH ;                                /* 0x0 */
+        /*0030*/                   EXIT ;                                        /* 0x0 */
+"#;
+
+    let module = parse_nvidia_sass(BULK_ASYNC_SUPPORT_SASS).expect("SASS should parse");
+    let ir = lift_sass_module(&module);
+    let function = &ir.functions[0];
+
+    assert_eq!(ir.unsupported_instruction_count(), 0);
+    assert!(matches!(
+        &function.ops[0].kind,
+        KernelIrOpKind::AddressCalc { dst, inputs }
+            if dst == &reg("R20") && inputs.len() == 1
+    ));
+    assert!(matches!(
+        &function.ops[1].kind,
+        KernelIrOpKind::Call {
+            target: None,
+            operands,
+        } if aggregate_texts(operands).as_slice() == ["R2"]
+    ));
+    assert!(matches!(
+        &function.ops[2].kind,
+        KernelIrOpKind::Sync { kind, operands }
+            if kind == &SassSyncKind::TensorMemoryCommandFlush && operands.is_empty()
+    ));
+}
+
+#[test]
 fn lift_tensor_core_sass_refines_mma_element_type_from_modifiers() {
     let module = parse_nvidia_sass(TENSOR_CORE_DTYPE_SASS).expect("tensor dtype SASS should parse");
     let ir = lift_sass_module(&module);
@@ -2459,6 +2499,14 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::TensorCoreTcgen05Utcqmma)
         .expect("tcgen05 UTCQMMA PTX probe should exist");
+    let bulk_async_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorMemoryBulkAsync)
+        .expect("bulk async tensor-memory PTX probe should exist");
+    let tma_async_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::TensorMemoryTmaAsync)
+        .expect("TMA async tensor-memory PTX probe should exist");
     let warpgroup_register_set_probe = probes
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::WarpGroupRegisterSet)
@@ -2607,6 +2655,47 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             .contains("tcgen05.mma.cta_group::1.kind::f8f6f4")
     );
     assert!(tcgen05_utcqmma_probe.source.contains("st.global.u32"));
+    assert_eq!(bulk_async_probe.symbol, "tensor_memory_bulk_async_probe");
+    assert_eq!(bulk_async_probe.default_compile_arch, "sm_120");
+    assert!(bulk_async_probe.source.contains(".target sm_120"));
+    assert!(
+        bulk_async_probe
+            .source
+            .contains("cp.async.bulk.shared::cluster.global.mbarrier::complete_tx::bytes")
+    );
+    assert!(
+        bulk_async_probe
+            .source
+            .contains("cp.async.bulk.prefetch.L2.global")
+    );
+    assert!(
+        bulk_async_probe
+            .source
+            .contains("cp.async.bulk.global.shared::cta.bulk_group")
+    );
+    assert_eq!(tma_async_probe.symbol, "tensor_memory_tma_async_probe");
+    assert_eq!(tma_async_probe.default_compile_arch, "sm_120");
+    assert!(tma_async_probe.source.contains(".target sm_120"));
+    assert!(
+        tma_async_probe
+            .source
+            .contains("cp.async.bulk.tensor.1d.shared::cluster.global")
+    );
+    assert!(
+        tma_async_probe
+            .source
+            .contains("cp.async.bulk.prefetch.tensor.1d.L2.global")
+    );
+    assert!(
+        tma_async_probe
+            .source
+            .contains("cp.async.bulk.tensor.1d.global.shared::cta.bulk_group")
+    );
+    assert!(
+        tma_async_probe
+            .source
+            .contains("cp.reduce.async.bulk.tensor.1d.global.shared::cta.add.bulk_group")
+    );
     assert_eq!(
         warpgroup_register_set_probe.symbol,
         "warpgroup_register_set_probe"

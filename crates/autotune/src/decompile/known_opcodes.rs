@@ -329,6 +329,7 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     local!(Ldl, Memory, Load),
     local!(Lds, Memory, Load),
     local!(Lea, Address, AddressCalc),
+    local!(Lepc, Address, AddressCalc),
     local!(Lop3, IntegerMath, LogicLut),
     local!(Mov, DataMovement, Move),
     local!(Movm, DataMovement, Move),
@@ -405,6 +406,7 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     nvidia_mapped!(Utmapf, [100, 120], TensorMemory, TensorMemoryPrefetch),
     nvidia_mapped!(Utmaredg, [100, 120], TensorMemory, TensorMemoryReduceGlobal),
     nvidia_mapped!(Utmastg, [100, 120], TensorMemory, TensorMemoryStoreGlobal),
+    local!(Utmacmdflush, Synchronization, Sync),
     nvidia_mapped_on!(
         Warpgroup,
         [SassArchitecture::sm(90), SassArchitecture::sm_a(90)],

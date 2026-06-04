@@ -4,8 +4,8 @@ use super::sources::{
     TENSOR_CORE_HMMA_PTX, TENSOR_CORE_IMMA_PTX, TENSOR_CORE_SM120A_QMMA_PTX,
     TENSOR_CORE_TCGEN05_UTCOMMA_PTX, TENSOR_CORE_TCGEN05_UTCQMMA_PTX, TENSOR_CORE_WGMMA_BGMMA_PTX,
     TENSOR_CORE_WGMMA_HGMMA_PTX, TENSOR_CORE_WGMMA_IGMMA_PTX, TENSOR_CORE_WGMMA_QGMMA_PTX,
-    TENSOR_MEMORY_LDTM_PTX, TENSOR_MEMORY_STTM_PTX, TENSOR_MEMORY_UTCCP_PTX,
-    WARP_GROUP_REGISTER_SET_PTX,
+    TENSOR_MEMORY_BULK_ASYNC_PTX, TENSOR_MEMORY_LDTM_PTX, TENSOR_MEMORY_STTM_PTX,
+    TENSOR_MEMORY_TMA_ASYNC_PTX, TENSOR_MEMORY_UTCCP_PTX, WARP_GROUP_REGISTER_SET_PTX,
 };
 
 pub const AUTO_COMPILE_ARCH: &str = "auto";
@@ -130,6 +130,20 @@ pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
             source: TENSOR_MEMORY_UTCCP_PTX,
         },
         PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::TensorMemoryBulkAsync,
+            symbol: "tensor_memory_bulk_async_probe",
+            behavior: "PTX sm120 cp.async.bulk copy and prefetch forms that disassemble to UBLKCP/UBLKPF",
+            default_compile_arch: "sm_120",
+            source: TENSOR_MEMORY_BULK_ASYNC_PTX,
+        },
+        PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::TensorMemoryTmaAsync,
+            symbol: "tensor_memory_tma_async_probe",
+            behavior: "PTX sm120 tensor TMA load, prefetch, store, and reduce forms that disassemble to UTMA*",
+            default_compile_arch: "sm_120",
+            source: TENSOR_MEMORY_TMA_ASYNC_PTX,
+        },
+        PtxDecompileProbe {
             kind: PtxDecompileProbeKind::WarpGroupRegisterSet,
             symbol: "warpgroup_register_set_probe",
             behavior: "one PTX sm90a warpgroup register reconfiguration using setmaxnreg",
@@ -176,6 +190,8 @@ pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
         PtxDecompileProbeKind::TensorMemoryLdtm,
         PtxDecompileProbeKind::TensorMemorySttm,
         PtxDecompileProbeKind::TensorMemoryUtccp,
+        PtxDecompileProbeKind::TensorMemoryBulkAsync,
+        PtxDecompileProbeKind::TensorMemoryTmaAsync,
         PtxDecompileProbeKind::WarpGroupRegisterSet,
         PtxDecompileProbeKind::ScalarMemoryLogic,
         PtxDecompileProbeKind::ArchitectureSm90Scalar,

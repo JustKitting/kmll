@@ -14,6 +14,8 @@ pub enum PtxDecompileProbeKind {
     TensorMemoryLdtm,
     TensorMemorySttm,
     TensorMemoryUtccp,
+    TensorMemoryBulkAsync,
+    TensorMemoryTmaAsync,
     WarpGroupRegisterSet,
     ScalarMemoryLogic,
     ArchitectureSm90Scalar,
@@ -37,6 +39,8 @@ impl PtxDecompileProbeKind {
             Self::TensorMemoryLdtm => "tensor-memory-ldtm",
             Self::TensorMemorySttm => "tensor-memory-sttm",
             Self::TensorMemoryUtccp => "tensor-memory-utccp",
+            Self::TensorMemoryBulkAsync => "tensor-memory-bulk-async",
+            Self::TensorMemoryTmaAsync => "tensor-memory-tma-async",
             Self::WarpGroupRegisterSet => "warpgroup-register-set",
             Self::ScalarMemoryLogic => "scalar-memory-logic",
             Self::ArchitectureSm90Scalar => "architecture-sm90-scalar",
@@ -96,6 +100,22 @@ impl PtxDecompileProbeKind {
             | "tmem-utccp"
             | "tmem_utccp"
             | "utccp" => Some(Self::TensorMemoryUtccp),
+            "tensor-memory-bulk-async"
+            | "tensor_memory_bulk_async"
+            | "bulk-async"
+            | "bulk_async"
+            | "ublk"
+            | "ublkcp"
+            | "ublkpf" => Some(Self::TensorMemoryBulkAsync),
+            "tensor-memory-tma-async"
+            | "tensor_memory_tma_async"
+            | "tma-async"
+            | "tma_async"
+            | "utma"
+            | "utmaldg"
+            | "utmapf"
+            | "utmastg"
+            | "utmaredg" => Some(Self::TensorMemoryTmaAsync),
             "warpgroup-register-set"
             | "warpgroup_register_set"
             | "warpgroup-set"

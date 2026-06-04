@@ -322,6 +322,7 @@ pub enum SassSyncKind {
     BarrierSet,
     BarrierSync,
     Barrier,
+    TensorMemoryCommandFlush,
     Raw(String),
 }
 
@@ -332,6 +333,7 @@ impl SassSyncKind {
             "BSSY" => Self::BarrierSet,
             "BSYNC" => Self::BarrierSync,
             "BAR" => Self::Barrier,
+            "UTMACMDFLUSH" => Self::TensorMemoryCommandFlush,
             _ => Self::Raw(raw),
         }
     }
@@ -341,6 +343,7 @@ impl SassSyncKind {
             Self::BarrierSet => "BSSY",
             Self::BarrierSync => "BSYNC",
             Self::Barrier => "BAR",
+            Self::TensorMemoryCommandFlush => "UTMACMDFLUSH",
             Self::Raw(raw) => raw,
         }
     }
