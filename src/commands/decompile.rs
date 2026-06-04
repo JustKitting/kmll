@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{fmt, path::PathBuf};
 
 use nn_rust_autotune::AutoOptimizeConfig;
 use nn_rust_autotune::decompile::{
@@ -65,10 +65,11 @@ pub(crate) fn run_kernel_decompile_coverage(args: &[String]) -> AppResult<()> {
 
     let report = run_sass_coverage_scan(&options)?;
     println!(
-        "kernel_decompile_coverage root={} files_seen={} files_parsed={} parse_errors={} parsed_instructions={} cfg_blocks={} cfg_edges={} dominator_blocks={} natural_loops={} regions={} dataflow_ops={} reaching_uses={} ssa_values={} def_use_edges={} value_ops={} lifted_ops={} live_ranges={} memory_accesses={} semantic_patterns={} known_opcodes={} locally_mapped_opcodes={} known_unobserved_opcodes={} opcode_probe_targets={} known_unmapped_opcodes={} observed_unregistered_opcodes={} observed_unmapped_opcodes={} unsupported_instructions={} summary_path={} files_path={} opcode_catalog_path={} opcode_probe_targets_path={} opcode_frequency_path={} opcode_signature_frequency_path={} cfg_blocks_path={} cfg_edges_path={} dominators_path={} natural_loops_path={} regions_path={} dataflow_path={} reaching_uses_path={} ssa_values_path={} def_use_edges_path={} value_ops_path={} lifted_ops_path={} live_ranges_path={} memory_accesses_path={} semantic_patterns_path={} semantic_pattern_frequency_path={} unsupported_instructions_path={}",
+        "kernel_decompile_coverage root={} files_seen={} files_parsed={} scanned_architectures={} parse_errors={} parsed_instructions={} cfg_blocks={} cfg_edges={} dominator_blocks={} natural_loops={} regions={} dataflow_ops={} reaching_uses={} ssa_values={} def_use_edges={} value_ops={} lifted_ops={} live_ranges={} memory_accesses={} semantic_patterns={} known_opcodes={} locally_mapped_opcodes={} known_unobserved_opcodes={} opcode_probe_targets={} known_unmapped_opcodes={} observed_unregistered_opcodes={} observed_unmapped_opcodes={} unsupported_instructions={} summary_path={} files_path={} opcode_catalog_path={} opcode_probe_targets_path={} opcode_frequency_path={} opcode_signature_frequency_path={} cfg_blocks_path={} cfg_edges_path={} dominators_path={} natural_loops_path={} regions_path={} dataflow_path={} reaching_uses_path={} ssa_values_path={} def_use_edges_path={} value_ops_path={} lifted_ops_path={} live_ranges_path={} memory_accesses_path={} semantic_patterns_path={} semantic_pattern_frequency_path={} unsupported_instructions_path={}",
         report.root.display(),
         report.files.len(),
         report.parsed_file_count,
+        display_list(&report.scanned_architectures),
         report.parse_error_count,
         report.parsed_instruction_count,
         report.cfg_block_count,
@@ -909,11 +910,12 @@ pub(crate) fn run_kernel_decompile_fixture_coverage(args: &[String]) -> AppResul
 
     let report = run_decompile_fixture_coverage(&options)?;
     println!(
-        "kernel_decompile_fixture_coverage fixtures={} root={} files_seen={} files_parsed={} parse_errors={} parsed_instructions={} known_opcodes={} locally_mapped_opcodes={} known_unobserved_opcodes={} opcode_probe_targets={} observed_unregistered_opcodes={} observed_unmapped_opcodes={} unsupported_instructions={} summary_path={} files_path={} opcode_catalog_path={} opcode_probe_targets_path={}",
+        "kernel_decompile_fixture_coverage fixtures={} root={} files_seen={} files_parsed={} scanned_architectures={} parse_errors={} parsed_instructions={} known_opcodes={} locally_mapped_opcodes={} known_unobserved_opcodes={} opcode_probe_targets={} observed_unregistered_opcodes={} observed_unmapped_opcodes={} unsupported_instructions={} summary_path={} files_path={} opcode_catalog_path={} opcode_probe_targets_path={}",
         report.fixture_reports.len(),
         report.coverage_report.root.display(),
         report.coverage_report.files.len(),
         report.coverage_report.parsed_file_count,
+        display_list(&report.coverage_report.scanned_architectures),
         report.coverage_report.parse_error_count,
         report.coverage_report.parsed_instruction_count,
         report.coverage_report.known_opcode_count,
@@ -986,4 +988,12 @@ fn push_unique_ptx_probe(probes: &mut Vec<PtxDecompileProbeKind>, probe: PtxDeco
     if !probes.contains(&probe) {
         probes.push(probe);
     }
+}
+
+fn display_list<T: fmt::Display>(values: &[T]) -> String {
+    values
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }

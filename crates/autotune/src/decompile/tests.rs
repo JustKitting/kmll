@@ -2394,6 +2394,12 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
 
     assert_eq!(report.files.len(), 3);
     assert_eq!(report.parsed_file_count, 3);
+    assert!(
+        report
+            .scanned_architectures
+            .iter()
+            .any(|architecture| architecture == &SassArchitecture::sm(120))
+    );
     assert_eq!(report.parse_error_count, 0);
     assert!(report.known_opcode_count > 0);
     assert!(report.locally_mapped_opcode_count > 0);
@@ -2530,6 +2536,12 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
             .iter()
             .any(|architecture| architecture == &SassArchitecture::sm(120))
     );
+    assert!(
+        hmma_probe
+            .matching_scanned_architectures
+            .iter()
+            .any(|architecture| architecture == &SassArchitecture::sm(120))
+    );
     let atom_probe = report
         .opcode_probe_targets
         .iter()
@@ -2555,6 +2567,27 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         source == &SassOpcodeCatalogSource::NvidiaCudaBinaryUtilitiesInstructionReference
     }));
     assert!(
+        atom_probe
+            .matching_scanned_architectures
+            .iter()
+            .any(|architecture| architecture == &SassArchitecture::sm(120))
+    );
+    let bgmma_probe = report
+        .opcode_probe_targets
+        .iter()
+        .find(|target| target.opcode == SassOpcode::new("BGMMA"))
+        .expect("known unobserved sm90 BGMMA should be a probe target");
+    assert_eq!(bgmma_probe.priority, 80);
+    assert!(bgmma_probe.matching_scanned_architectures.is_empty());
+    assert_eq!(
+        bgmma_probe.recommended_action,
+        SassOpcodeProbeAction::ScanArchitectureArtifact
+    );
+    assert_eq!(
+        bgmma_probe.reason,
+        SassOpcodeProbeReason::ArchitectureArtifactNotScanned
+    );
+    assert!(
         !report
             .opcode_probe_targets
             .iter()
@@ -2573,6 +2606,10 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.files.iter().any(
         |file| file.sass_path.file_name().and_then(|name| name.to_str())
             == Some("simple.cuobjdump.sass")
+            && matches!(
+                file.target.as_ref().and_then(SassTarget::architecture),
+                Some(architecture) if architecture == SassArchitecture::sm(120)
+            )
     ));
     assert!(report.summary_path.exists());
     assert!(report.files_path.exists());
@@ -2597,6 +2634,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     assert!(report.memory_accesses_path.exists());
     assert!(report.unsupported_instructions_path.exists());
     let summary = fs::read_to_string(&report.summary_path).expect("coverage summary should read");
+    assert!(summary.contains("scanned_architectures=sm120"));
     assert!(summary.contains("top_opcode_probe_targets"));
     assert!(summary.contains("HMMA\t90\tgenerate-sass-artifact"));
     assert!(report.cfg_block_count > 0);
@@ -2768,14 +2806,14 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
     let opcode_catalog_tsv =
         fs::read_to_string(&report.opcode_catalog_path).expect("opcode catalog TSV should read");
     assert!(opcode_catalog_tsv.starts_with(
-        "opcode\tknown\tobserved\tlocally_mapped\tinstruction_count\tsignature_count\tsignatures\tsource_formats\tarchitectures\tknown_sources\tclasses\tkinds\tsupport\tcoverage\tunsupported_count"
+        "opcode\tknown\tobserved\tlocally_mapped\tinstruction_count\tsignature_count\tsignatures\tsource_formats\tarchitectures\tobserved_architectures\tknown_sources\tclasses\tkinds\tsupport\tcoverage\tunsupported_count"
     ));
     assert!(opcode_catalog_tsv.contains("MYSTERY"));
     assert!(opcode_catalog_tsv.contains("HMMA"));
     let opcode_probe_targets_tsv = fs::read_to_string(&report.opcode_probe_targets_path)
         .expect("opcode probe target TSV should read");
     assert!(opcode_probe_targets_tsv.starts_with(
-        "opcode\tpriority\tlocally_mapped\tarchitectures\tclasses\tkinds\tknown_sources\trecommended_action\treason"
+        "opcode\tpriority\tlocally_mapped\tarchitectures\tmatching_scanned_architectures\tclasses\tkinds\tknown_sources\trecommended_action\treason"
     ));
     assert!(opcode_probe_targets_tsv.contains("HMMA"));
     assert!(opcode_probe_targets_tsv.contains("tensor-core opcode is mapped"));

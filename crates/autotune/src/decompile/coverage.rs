@@ -16,9 +16,9 @@ use super::{
     SassLiftedSemantics, SassLiftedValueRef, SassMemoryAccessKind, SassModifier, SassOpcode,
     SassOpcodeCatalogClass, SassOpcodeCatalogKind, SassOpcodeCatalogSource, SassParseError,
     SassPatternConfidence, SassPatternModule, SassRegionKind, SassRegionPath,
-    SassSemanticPatternCategory, SassSemanticPatternKind, SassSymbol, SassUnsupportedReason,
-    SassValueOpKind, analyze_sass_ir, known_sass_opcodes, lift_sass_value_ir, parse_nvidia_sass,
-    recover_sass_patterns, render_sass_file_side_by_side,
+    SassSemanticPatternCategory, SassSemanticPatternKind, SassSymbol, SassTarget,
+    SassUnsupportedReason, SassValueOpKind, analyze_sass_ir, known_sass_opcodes,
+    lift_sass_value_ir, parse_nvidia_sass, recover_sass_patterns, render_sass_file_side_by_side,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +64,7 @@ pub struct SassCoverageReport {
     pub memory_accesses_path: PathBuf,
     pub unsupported_instructions_path: PathBuf,
     pub files: Vec<SassCoverageFileReport>,
+    pub scanned_architectures: Vec<SassArchitecture>,
     pub opcode_catalog: Vec<SassOpcodeCatalogEntry>,
     pub opcode_probe_targets: Vec<SassOpcodeProbeTarget>,
     pub opcode_counts: Vec<SassOpcodeCount>,
@@ -114,6 +115,7 @@ pub struct SassCoverageReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassCoverageFileReport {
     pub sass_path: PathBuf,
+    pub target: Option<SassTarget>,
     pub ir_path: Option<PathBuf>,
     pub lifted_ir_path: Option<PathBuf>,
     pub analysis_path: Option<PathBuf>,
@@ -160,6 +162,7 @@ pub struct SassOpcodeProbeTarget {
     pub opcode: SassOpcode,
     pub priority: u8,
     pub architectures: Vec<SassArchitecture>,
+    pub matching_scanned_architectures: Vec<SassArchitecture>,
     pub classes: Vec<SassOpcodeCatalogClass>,
     pub kinds: Vec<SassOpcodeCatalogKind>,
     pub known_sources: Vec<SassOpcodeCatalogSource>,
@@ -171,6 +174,7 @@ pub struct SassOpcodeProbeTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SassOpcodeProbeAction {
     GenerateSassArtifact,
+    ScanArchitectureArtifact,
     AddLifterMapping,
 }
 
@@ -178,6 +182,7 @@ impl fmt::Display for SassOpcodeProbeAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::GenerateSassArtifact => f.write_str("generate-sass-artifact"),
+            Self::ScanArchitectureArtifact => f.write_str("scan-architecture-artifact"),
             Self::AddLifterMapping => f.write_str("add-lifter-mapping"),
         }
     }
@@ -186,6 +191,7 @@ impl fmt::Display for SassOpcodeProbeAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SassOpcodeProbeReason {
     MissingLocalLifterMapping,
+    ArchitectureArtifactNotScanned,
     TensorCoreMappedUnobserved,
     TensorMemoryMappedUnobserved,
     WarpGroupMappedUnobserved,
@@ -199,6 +205,9 @@ impl fmt::Display for SassOpcodeProbeReason {
             Self::MissingLocalLifterMapping => {
                 f.write_str("known opcode has no local lifter mapping")
             }
+            Self::ArchitectureArtifactNotScanned => f.write_str(
+                "mapped opcode requires a SASS artifact for an architecture not present in this scan",
+            ),
             Self::TensorCoreMappedUnobserved => f.write_str(
                 "tensor-core opcode is mapped but unobserved in generated SASS artifacts",
             ),
@@ -229,6 +238,7 @@ pub struct SassOpcodeCatalogEntry {
     pub signatures: Vec<SassOpcodeSignature>,
     pub source_formats: Vec<SassCoverageSourceFormat>,
     pub architectures: Vec<SassArchitecture>,
+    pub observed_architectures: Vec<SassArchitecture>,
     pub known_sources: Vec<SassOpcodeCatalogSource>,
     pub classes: Vec<SassOpcodeCatalogClass>,
     pub kinds: Vec<SassOpcodeCatalogKind>,
@@ -330,6 +340,7 @@ struct OpcodeCatalogBuilder {
     signatures: BTreeSet<SassOpcodeSignature>,
     source_formats: BTreeSet<SassCoverageSourceFormat>,
     architectures: BTreeSet<SassArchitecture>,
+    observed_architectures: BTreeSet<SassArchitecture>,
     known_sources: BTreeSet<SassOpcodeCatalogSource>,
     classes: BTreeSet<SassOpcodeCatalogClass>,
     kinds: BTreeSet<SassOpcodeCatalogKind>,
@@ -357,6 +368,7 @@ impl OpcodeCatalogBuilder {
             signatures,
             source_formats: self.source_formats.into_iter().collect(),
             architectures: self.architectures.into_iter().collect(),
+            observed_architectures: self.observed_architectures.into_iter().collect(),
             known_sources: self.known_sources.into_iter().collect(),
             classes: self.classes.into_iter().collect(),
             kinds: self.kinds.into_iter().collect(),
@@ -616,6 +628,7 @@ pub fn run_sass_coverage_scan(
     let mut files = Vec::new();
     let mut opcode_catalog = BTreeMap::<SassOpcode, OpcodeCatalogBuilder>::new();
     seed_known_opcode_catalog(&mut opcode_catalog);
+    let mut scanned_architectures = BTreeSet::<SassArchitecture>::new();
     let mut opcode_counts = BTreeMap::<SassOpcode, usize>::new();
     let mut opcode_signature_counts = BTreeMap::<SassOpcodeSignature, usize>::new();
     let mut semantic_pattern_counts = BTreeMap::<SassSemanticPatternCategory, usize>::new();
@@ -642,6 +655,11 @@ pub fn run_sass_coverage_scan(
         let source_format = sass_source_format(&sass_path);
         match parse_nvidia_sass(&sass) {
             Ok(parsed) => {
+                let target = parsed.target.clone().map(SassTarget::parse);
+                let target_architecture = target.as_ref().and_then(SassTarget::architecture);
+                if let Some(architecture) = target_architecture {
+                    scanned_architectures.insert(architecture);
+                }
                 for function in &parsed.functions {
                     for instruction in &function.instructions {
                         let opcode = SassOpcode::new(instruction.opcode.clone());
@@ -654,6 +672,9 @@ pub fn run_sass_coverage_scan(
                         catalog_entry.instruction_count += 1;
                         catalog_entry.signatures.insert(signature);
                         catalog_entry.source_formats.insert(source_format);
+                        if let Some(architecture) = target_architecture {
+                            catalog_entry.observed_architectures.insert(architecture);
+                        }
                     }
                 }
 
@@ -723,6 +744,7 @@ pub fn run_sass_coverage_scan(
 
                 files.push(SassCoverageFileReport {
                     sass_path,
+                    target,
                     ir_path: Some(ir_path),
                     lifted_ir_path: Some(lifted_ir_path),
                     analysis_path: Some(analysis_path),
@@ -749,6 +771,7 @@ pub fn run_sass_coverage_scan(
             Err(error) => {
                 files.push(SassCoverageFileReport {
                     sass_path,
+                    target: None,
                     ir_path: None,
                     lifted_ir_path: None,
                     analysis_path: None,
@@ -775,7 +798,8 @@ pub fn run_sass_coverage_scan(
         }
     }
 
-    let opcode_probe_targets = opcode_probe_targets(&opcode_catalog);
+    let scanned_architectures = scanned_architectures.into_iter().collect::<Vec<_>>();
+    let opcode_probe_targets = opcode_probe_targets(&opcode_catalog, &scanned_architectures);
     let opcode_catalog = opcode_catalog_entries(opcode_catalog);
     let opcode_counts = sorted_opcode_counts(opcode_counts);
     let opcode_signature_counts = sorted_opcode_signature_counts(opcode_signature_counts);
@@ -873,6 +897,7 @@ pub fn run_sass_coverage_scan(
         memory_accesses_path,
         unsupported_instructions_path,
         files,
+        scanned_architectures,
         opcode_catalog,
         opcode_probe_targets,
         opcode_counts,
@@ -1050,24 +1075,29 @@ fn opcode_catalog_entries(
 
 fn opcode_probe_targets(
     opcode_catalog: &BTreeMap<SassOpcode, OpcodeCatalogBuilder>,
+    scanned_architectures: &[SassArchitecture],
 ) -> Vec<SassOpcodeProbeTarget> {
     let mut targets = opcode_catalog
         .iter()
         .filter(|(_, entry)| entry.known && entry.instruction_count == 0)
-        .map(|(opcode, entry)| SassOpcodeProbeTarget {
-            opcode: opcode.clone(),
-            priority: opcode_probe_priority(entry),
-            architectures: entry.architectures.iter().cloned().collect(),
-            classes: entry.classes.iter().copied().collect(),
-            kinds: entry.kinds.iter().copied().collect(),
-            known_sources: entry.known_sources.iter().copied().collect(),
-            locally_mapped: entry.locally_mapped,
-            recommended_action: if entry.locally_mapped {
-                SassOpcodeProbeAction::GenerateSassArtifact
-            } else {
-                SassOpcodeProbeAction::AddLifterMapping
-            },
-            reason: opcode_probe_reason(entry),
+        .map(|(opcode, entry)| {
+            let matching_scanned_architectures =
+                matching_scanned_architectures(entry, scanned_architectures);
+            let priority = opcode_probe_priority(entry, &matching_scanned_architectures);
+            let recommended_action = opcode_probe_action(entry, &matching_scanned_architectures);
+            let reason = opcode_probe_reason(entry, &matching_scanned_architectures);
+            SassOpcodeProbeTarget {
+                opcode: opcode.clone(),
+                priority,
+                architectures: entry.architectures.iter().cloned().collect(),
+                matching_scanned_architectures,
+                classes: entry.classes.iter().copied().collect(),
+                kinds: entry.kinds.iter().copied().collect(),
+                known_sources: entry.known_sources.iter().copied().collect(),
+                locally_mapped: entry.locally_mapped,
+                recommended_action,
+                reason,
+            }
         })
         .collect::<Vec<_>>();
     targets.sort_by(|left, right| {
@@ -1079,24 +1109,62 @@ fn opcode_probe_targets(
     targets
 }
 
-fn opcode_probe_priority(entry: &OpcodeCatalogBuilder) -> u8 {
+fn matching_scanned_architectures(
+    entry: &OpcodeCatalogBuilder,
+    scanned_architectures: &[SassArchitecture],
+) -> Vec<SassArchitecture> {
+    if entry.architectures.is_empty() {
+        return Vec::new();
+    }
+    scanned_architectures
+        .iter()
+        .filter(|architecture| entry.architectures.contains(architecture))
+        .copied()
+        .collect()
+}
+
+fn opcode_probe_action(
+    entry: &OpcodeCatalogBuilder,
+    matching_scanned_architectures: &[SassArchitecture],
+) -> SassOpcodeProbeAction {
+    if !entry.locally_mapped {
+        SassOpcodeProbeAction::AddLifterMapping
+    } else if !entry.architectures.is_empty() && matching_scanned_architectures.is_empty() {
+        SassOpcodeProbeAction::ScanArchitectureArtifact
+    } else {
+        SassOpcodeProbeAction::GenerateSassArtifact
+    }
+}
+
+fn opcode_probe_priority(
+    entry: &OpcodeCatalogBuilder,
+    matching_scanned_architectures: &[SassArchitecture],
+) -> u8 {
+    let architecture_not_scanned =
+        !entry.architectures.is_empty() && matching_scanned_architectures.is_empty();
     if !entry.locally_mapped {
         100
     } else if opcode_has_class(entry, SassOpcodeCatalogClass::TensorCore)
         || opcode_has_class(entry, SassOpcodeCatalogClass::TensorMemory)
         || opcode_has_class(entry, SassOpcodeCatalogClass::WarpGroup)
     {
-        90
+        if architecture_not_scanned { 80 } else { 90 }
     } else if !entry.architectures.is_empty() {
-        70
+        if architecture_not_scanned { 60 } else { 70 }
     } else {
         50
     }
 }
 
-fn opcode_probe_reason(entry: &OpcodeCatalogBuilder) -> SassOpcodeProbeReason {
+fn opcode_probe_reason(
+    entry: &OpcodeCatalogBuilder,
+    matching_scanned_architectures: &[SassArchitecture],
+) -> SassOpcodeProbeReason {
     if !entry.locally_mapped {
         return SassOpcodeProbeReason::MissingLocalLifterMapping;
+    }
+    if !entry.architectures.is_empty() && matching_scanned_architectures.is_empty() {
+        return SassOpcodeProbeReason::ArchitectureArtifactNotScanned;
     }
     if opcode_has_class(entry, SassOpcodeCatalogClass::TensorCore) {
         return SassOpcodeProbeReason::TensorCoreMappedUnobserved;
@@ -1493,6 +1561,12 @@ fn render_coverage_summary(report: &SassCoverageReport) -> String {
     writeln!(out, "output_dir={}", report.output_dir.display()).expect("write to string");
     writeln!(out, "files_seen={}", report.files.len()).expect("write to string");
     writeln!(out, "files_parsed={}", report.parsed_file_count).expect("write to string");
+    writeln!(
+        out,
+        "scanned_architectures={}",
+        display_list(&report.scanned_architectures)
+    )
+    .expect("write to string");
     writeln!(out, "parse_errors={}", report.parse_error_count).expect("write to string");
     writeln!(
         out,
@@ -1614,13 +1688,13 @@ fn render_opcode_catalog_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "opcode\tknown\tobserved\tlocally_mapped\tinstruction_count\tsignature_count\tsignatures\tsource_formats\tarchitectures\tknown_sources\tclasses\tkinds\tsupport\tcoverage\tunsupported_count"
+        "opcode\tknown\tobserved\tlocally_mapped\tinstruction_count\tsignature_count\tsignatures\tsource_formats\tarchitectures\tobserved_architectures\tknown_sources\tclasses\tkinds\tsupport\tcoverage\tunsupported_count"
     )
     .expect("write to string");
     for entry in &report.opcode_catalog {
         writeln!(
             out,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&entry.opcode.to_string()),
             entry.known,
             entry.observed,
@@ -1630,6 +1704,7 @@ fn render_opcode_catalog_tsv(report: &SassCoverageReport) -> String {
             tsv(&display_list(&entry.signatures)),
             tsv(&display_list(&entry.source_formats)),
             tsv(&display_list(&entry.architectures)),
+            tsv(&display_list(&entry.observed_architectures)),
             tsv(&display_list(&entry.known_sources)),
             tsv(&display_list(&entry.classes)),
             tsv(&display_list(&entry.kinds)),
@@ -1646,17 +1721,18 @@ fn render_opcode_probe_targets_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "opcode\tpriority\tlocally_mapped\tarchitectures\tclasses\tkinds\tknown_sources\trecommended_action\treason"
+        "opcode\tpriority\tlocally_mapped\tarchitectures\tmatching_scanned_architectures\tclasses\tkinds\tknown_sources\trecommended_action\treason"
     )
     .expect("write to string");
     for target in &report.opcode_probe_targets {
         writeln!(
             out,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             tsv(&target.opcode.to_string()),
             target.priority,
             target.locally_mapped,
             tsv(&display_list(&target.architectures)),
+            tsv(&display_list(&target.matching_scanned_architectures)),
             tsv(&display_list(&target.classes)),
             tsv(&display_list(&target.kinds)),
             tsv(&display_list(&target.known_sources)),
@@ -1672,7 +1748,7 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
     let mut out = String::new();
     writeln!(
         out,
-        "status\tsass_path\tparsed_instructions\tcfg_blocks\tcfg_edges\tdominator_blocks\tnatural_loops\tregions\treaching_uses\tssa_values\tdef_use_edges\tvalue_ops\tlifted_ops\tlive_ranges\tmemory_accesses\tsemantic_patterns\tunsupported_instructions\tir_path\tlifted_ir_path\tanalysis_path\tpatterns_path\tside_by_side_path\terror"
+        "status\tsass_path\ttarget\tparsed_instructions\tcfg_blocks\tcfg_edges\tdominator_blocks\tnatural_loops\tregions\treaching_uses\tssa_values\tdef_use_edges\tvalue_ops\tlifted_ops\tlive_ranges\tmemory_accesses\tsemantic_patterns\tunsupported_instructions\tir_path\tlifted_ir_path\tanalysis_path\tpatterns_path\tside_by_side_path\terror"
     )
     .expect("write to string");
     for file in &report.files {
@@ -1683,9 +1759,10 @@ fn render_files_tsv(report: &SassCoverageReport) -> String {
         };
         writeln!(
             out,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             status,
             tsv(&file.sass_path.display().to_string()),
+            tsv(&file.target.as_ref().map(ToString::to_string).unwrap_or_default()),
             file.parsed_instruction_count,
             file.cfg_block_count,
             file.cfg_edge_count,
