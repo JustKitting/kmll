@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use super::{
-    super::{ControlTarget, KernelIrFunction, KernelIrOp, KernelIrOpKind},
+    super::{ControlTarget, KernelIrFunction, KernelIrOp, KernelIrOpKind, SassSymbol},
     types::{
         SassBasicBlock, SassBlockTerminator, SassCfgEdge, SassCfgEdgeKind, SassDominatorBlock,
         SassNaturalLoop,
@@ -386,7 +386,7 @@ fn branch_target(op: &KernelIrOp) -> Option<&ControlTarget> {
 }
 
 fn target_index(function: &KernelIrFunction, target: &ControlTarget) -> Option<usize> {
-    if let Some(label) = target.label_name() {
+    if let Some(label) = target.label_symbol() {
         return label_index(function, label);
     }
     if let Some(address) = target.address_value() {
@@ -395,11 +395,11 @@ fn target_index(function: &KernelIrFunction, target: &ControlTarget) -> Option<u
     None
 }
 
-fn label_index(function: &KernelIrFunction, label: &str) -> Option<usize> {
+fn label_index(function: &KernelIrFunction, label: &SassSymbol) -> Option<usize> {
     let label_match = function
         .ops
         .iter()
-        .position(|op| op.label.as_deref() == Some(label));
+        .position(|op| op.label.as_ref() == Some(label));
     if label_match.is_some() {
         return label_match;
     }

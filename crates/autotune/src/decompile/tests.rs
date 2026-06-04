@@ -32,7 +32,7 @@ fn is_label_target(target: &Option<ControlTarget>, expected: &str) -> bool {
         Some(ControlTarget {
             kind: ControlTargetKind::Label(label),
             ..
-        }) if label == expected
+        }) if label.as_str() == expected
     )
 }
 
@@ -783,7 +783,7 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
         KernelIrOpKind::Branch {
             target: Some(ref target),
             condition: Some(ref condition)
-        } if matches!(&target.kind, ControlTargetKind::Label(label) if label == ".L_x_1")
+        } if matches!(&target.kind, ControlTargetKind::Label(label) if label.as_str() == ".L_x_1")
             && matches!(
                 &condition.kind,
                 PredicateConditionKind::Register {
@@ -797,8 +797,8 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
         KernelIrOpKind::Call {
             target: Some(ref target),
             ref operands,
-        } if matches!(&target.kind, ControlTargetKind::Label(label) if label == "$helper")
-            && matches!(&operands[0].kind, AggregateOperandKind::Label(label) if label == "$helper")
+        } if matches!(&target.kind, ControlTargetKind::Label(label) if label.as_str() == "$helper")
+            && matches!(&operands[0].kind, AggregateOperandKind::Label(label) if label.as_str() == "$helper")
     )));
     assert!(ops.iter().any(|op| matches!(
         op.kind,
@@ -821,7 +821,7 @@ fn lift_rows17_slice_keeps_predicates_and_half_fma_visible() {
         KernelIrOpKind::Return {
             target: Some(ref target),
             ..
-        } if matches!(&target.kind, ControlTargetKind::Label(label) if label == "matvec_bf16_rows17")
+        } if matches!(&target.kind, ControlTargetKind::Label(label) if label.as_str() == "matvec_bf16_rows17")
     )));
     assert_eq!(ir.unsupported_instruction_count(), 0);
 }
@@ -1250,7 +1250,12 @@ fn analysis_recovers_dominators_and_natural_loops() {
     let header = function
         .blocks
         .iter()
-        .find(|block| block.label.as_deref() == Some(".L_loop"))
+        .find(|block| {
+            block
+                .label
+                .as_ref()
+                .is_some_and(|label| label.as_str() == ".L_loop")
+        })
         .expect("loop header block should exist");
     let body = function
         .blocks
@@ -1260,7 +1265,12 @@ fn analysis_recovers_dominators_and_natural_loops() {
     let done = function
         .blocks
         .iter()
-        .find(|block| block.label.as_deref() == Some(".L_done"))
+        .find(|block| {
+            block
+                .label
+                .as_ref()
+                .is_some_and(|label| label.as_str() == ".L_done")
+        })
         .expect("loop exit block should exist");
 
     let header_dom = function

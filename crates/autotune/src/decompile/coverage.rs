@@ -1181,7 +1181,7 @@ fn append_analysis(
                 sass_path: sass_path.to_path_buf(),
                 function: function.name.clone(),
                 id: block.id,
-                label: block.label.clone(),
+                label: block.label.as_ref().map(ToString::to_string),
                 start_address: block.start_address,
                 end_address: block.end_address,
                 instruction_count: block.instruction_count,

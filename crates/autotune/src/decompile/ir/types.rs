@@ -54,7 +54,7 @@ pub struct KernelIrFunction {
 pub struct KernelIrOp {
     pub address: u64,
     pub source_position: SassSourcePosition,
-    pub label: Option<String>,
+    pub label: Option<SassSymbol>,
     pub predicate: Option<PredicateCondition>,
     pub kind: KernelIrOpKind,
     pub confidence: SassMappingConfidence,
@@ -62,6 +62,27 @@ pub struct KernelIrOp {
     pub source_modifiers: Vec<SassModifier>,
     pub source_operands: Vec<AggregateOperand>,
     pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SassSymbol {
+    raw: String,
+}
+
+impl SassSymbol {
+    pub fn new(raw: impl Into<String>) -> Self {
+        Self { raw: raw.into() }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.raw
+    }
+}
+
+impl fmt::Display for SassSymbol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.raw)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1399,7 +1420,9 @@ impl AggregateOperand {
             SassOperandKind::IndexedMemory { base, offset } => AggregateOperandKind::Memory(
                 MemoryAddress::indexed(raw.clone(), base.clone(), offset.clone()),
             ),
-            SassOperandKind::Label(label) => AggregateOperandKind::Label(label.clone()),
+            SassOperandKind::Label(label) => {
+                AggregateOperandKind::Label(SassSymbol::new(label.clone()))
+            }
             SassOperandKind::Raw => AggregateOperandKind::Raw {
                 registers: RegisterRef::extract_all(&raw),
             },
@@ -1428,7 +1451,7 @@ pub enum AggregateOperandKind {
     Register(RegisterRef),
     Immediate(ImmediateValue),
     Memory(MemoryAddress),
-    Label(String),
+    Label(SassSymbol),
     Raw { registers: Vec<RegisterRef> },
 }
 
@@ -1515,7 +1538,7 @@ pub struct ControlTarget {
 impl ControlTarget {
     pub fn label(raw: String, label: String) -> Self {
         Self {
-            kind: ControlTargetKind::Label(label),
+            kind: ControlTargetKind::Label(SassSymbol::new(label)),
             raw,
         }
     }
@@ -1534,11 +1557,15 @@ impl ControlTarget {
         }
     }
 
-    pub fn label_name(&self) -> Option<&str> {
+    pub fn label_symbol(&self) -> Option<&SassSymbol> {
         match &self.kind {
             ControlTargetKind::Label(label) => Some(label),
             ControlTargetKind::Address(_) | ControlTargetKind::Raw => None,
         }
+    }
+
+    pub fn label_name(&self) -> Option<&str> {
+        self.label_symbol().map(SassSymbol::as_str)
     }
 
     pub fn address_value(&self) -> Option<u64> {
@@ -1552,7 +1579,7 @@ impl ControlTarget {
 impl fmt::Display for ControlTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            ControlTargetKind::Label(label) => f.write_str(label),
+            ControlTargetKind::Label(label) => f.write_str(label.as_str()),
             ControlTargetKind::Address(_) | ControlTargetKind::Raw => f.write_str(&self.raw),
         }
     }
@@ -1560,7 +1587,7 @@ impl fmt::Display for ControlTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ControlTargetKind {
-    Label(String),
+    Label(SassSymbol),
     Address(u64),
     Raw,
 }

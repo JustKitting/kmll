@@ -1,7 +1,7 @@
 use super::super::sass::{SassInstruction, SassModule};
 use super::{
     opcodes::{aggregate_operands, lift_kind, predicate_condition},
-    types::{KernelIrFunction, KernelIrModule, KernelIrOp, SassModifier, SassOpcode},
+    types::{KernelIrFunction, KernelIrModule, KernelIrOp, SassModifier, SassOpcode, SassSymbol},
 };
 
 pub fn lift_sass_module(module: &SassModule) -> KernelIrModule {
@@ -24,7 +24,7 @@ fn lift_instruction(instruction: &SassInstruction) -> KernelIrOp {
     KernelIrOp {
         address: instruction.address,
         source_position: instruction.source_position,
-        label: instruction.label.clone(),
+        label: instruction.label.clone().map(SassSymbol::new),
         predicate: instruction.predicate.as_ref().map(predicate_condition),
         kind,
         confidence,

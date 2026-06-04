@@ -21,7 +21,7 @@ impl SassAnalysisModule {
                     block.id,
                     block.start_address,
                     block.end_address,
-                    block.label.as_deref().unwrap_or("-"),
+                    block.label.as_ref().map_or("-", |label| label.as_str()),
                     block.instruction_count,
                     block.terminator
                 )

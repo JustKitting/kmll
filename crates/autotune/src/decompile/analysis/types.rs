@@ -2,7 +2,7 @@ use std::fmt;
 
 use super::super::{
     ControlTarget, KernelIrOpKind, MemoryAddress, MemoryAddressBase, MemoryAddressImmediate,
-    MemorySpace, PredicateCondition, RegisterRef, SassOpcode,
+    MemorySpace, PredicateCondition, RegisterRef, SassOpcode, SassSymbol,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,7 +117,7 @@ pub struct SassAnalysisFunction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SassBasicBlock {
     pub id: usize,
-    pub label: Option<String>,
+    pub label: Option<SassSymbol>,
     pub start_address: u64,
     pub end_address: u64,
     pub start_op_index: usize,
