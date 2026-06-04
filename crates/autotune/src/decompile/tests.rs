@@ -2391,7 +2391,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .find(|probe| probe.kind == PtxDecompileProbeKind::ScalarMemoryAtomic)
         .expect("scalar memory/atomic PTX probe should exist");
 
-    assert_eq!(options.compile_arch, "sm_120");
+    assert_eq!(options.compile_arch, AUTO_COMPILE_ARCH);
     assert_eq!(
         options.probes,
         vec![
@@ -2409,9 +2409,11 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             .ends_with("target/cuda-oxide/inference/decompile-probes")
     );
     assert_eq!(hmma_probe.symbol, "tensor_core_hmma_probe");
+    assert_eq!(hmma_probe.default_compile_arch, "sm_120");
     assert!(hmma_probe.source.contains("mma.sync.aligned"));
     assert!(hmma_probe.source.contains("st.global.f32"));
     assert_eq!(imma_probe.symbol, "tensor_core_imma_probe");
+    assert_eq!(imma_probe.default_compile_arch, "sm_120");
     assert!(
         imma_probe
             .source
@@ -2419,6 +2421,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
     );
     assert!(imma_probe.source.contains("st.global.s32"));
     assert_eq!(dmma_probe.symbol, "tensor_core_dmma_probe");
+    assert_eq!(dmma_probe.default_compile_arch, "sm_120");
     assert!(
         dmma_probe
             .source
@@ -2426,6 +2429,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
     );
     assert!(dmma_probe.source.contains("st.global.f64"));
     assert_eq!(bmma_probe.symbol, "tensor_core_bmma_probe");
+    assert_eq!(bmma_probe.default_compile_arch, "sm_80");
     assert!(
         bmma_probe
             .source
@@ -2433,6 +2437,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
     );
     assert!(bmma_probe.source.contains("st.global.s32"));
     assert_eq!(scalar_probe.symbol, "scalar_memory_logic_probe");
+    assert_eq!(scalar_probe.default_compile_arch, "sm_75");
     assert!(scalar_probe.source.contains(".target sm_75"));
     assert!(scalar_probe.source.contains("ld.global.nc.u32"));
     assert!(scalar_probe.source.contains("st.local.u32"));
@@ -2442,6 +2447,7 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
     assert!(scalar_probe.source.contains("fma.rn.f32"));
     assert!(scalar_probe.source.contains("setp.gt.f32"));
     assert_eq!(atomic_probe.symbol, "scalar_memory_atomic_probe");
+    assert_eq!(atomic_probe.default_compile_arch, "sm_75");
     assert!(atomic_probe.source.contains(".target sm_75"));
     assert!(atomic_probe.source.contains("atom.global.add.u32"));
     assert!(atomic_probe.source.contains("red.global.add.u32"));
@@ -2449,6 +2455,8 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
     assert!(atomic_probe.source.contains("ld.volatile.local.u32"));
     assert!(atomic_probe.source.contains("or.pred"));
     assert!(atomic_probe.source.contains("xor.pred"));
+    assert_eq!(bmma_probe.compile_arch_for(AUTO_COMPILE_ARCH), "sm_80");
+    assert_eq!(bmma_probe.compile_arch_for("sm_120"), "sm_120");
 }
 
 #[test]

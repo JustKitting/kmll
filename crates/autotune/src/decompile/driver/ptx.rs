@@ -40,12 +40,13 @@ fn run_decompile_ptx_probe(
     fs::create_dir_all(&probe_dir)?;
     let ptx_path = probe_dir.join(format!("{}.ptx", probe.symbol));
     fs::write(&ptx_path, probe.source.as_bytes())?;
+    let compile_arch = probe.compile_arch_for(&options.compile_arch);
 
-    let cubin_path = probe_dir.join(format!("{}.{}.cubin", probe.symbol, options.compile_arch));
+    let cubin_path = probe_dir.join(format!("{}.{}.cubin", probe.symbol, compile_arch));
     run_checked(
         "ptxas",
         &[
-            format!("-arch={}", options.compile_arch),
+            format!("-arch={compile_arch}"),
             "-o".to_string(),
             cubin_path.display().to_string(),
             ptx_path.display().to_string(),
@@ -53,17 +54,13 @@ fn run_decompile_ptx_probe(
         &probe_dir,
     )?;
 
-    let nvdisasm_sass_path = probe_dir.join(format!(
-        "{}.{}.nvdisasm.sass",
-        probe.symbol, options.compile_arch
-    ));
+    let nvdisasm_sass_path =
+        probe_dir.join(format!("{}.{}.nvdisasm.sass", probe.symbol, compile_arch));
     let nvdisasm_sass = run_capture("nvdisasm", &[cubin_path.display().to_string()], &probe_dir)?;
     fs::write(&nvdisasm_sass_path, nvdisasm_sass.as_bytes())?;
 
-    let cuobjdump_sass_path = probe_dir.join(format!(
-        "{}.{}.cuobjdump.sass",
-        probe.symbol, options.compile_arch
-    ));
+    let cuobjdump_sass_path =
+        probe_dir.join(format!("{}.{}.cuobjdump.sass", probe.symbol, compile_arch));
     let cuobjdump_sass = run_capture(
         "cuobjdump",
         &["--dump-sass".to_string(), cubin_path.display().to_string()],
@@ -79,6 +76,7 @@ fn run_decompile_ptx_probe(
     Ok(DecompilePtxProbeReport {
         probe: probe.kind,
         symbol: probe.symbol.to_string(),
+        compile_arch: compile_arch.to_string(),
         probe_dir,
         ptx_path,
         cubin_path,

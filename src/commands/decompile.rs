@@ -17,8 +17,7 @@ use crate::{AppResult, invalid_input, parse_required_flag_value, parse_required_
 
 const DECOMPILE_FIXTURES_USAGE: &str =
     "kernel-decompile-fixtures [--fixture NAME|all] [--artifact-root PATH] [--compile-arch sm_120]";
-const DECOMPILE_PTX_PROBES_USAGE: &str =
-    "kernel-decompile-ptx-probes [--probe NAME|all] [--artifact-root PATH] [--compile-arch sm_120]";
+const DECOMPILE_PTX_PROBES_USAGE: &str = "kernel-decompile-ptx-probes [--probe NAME|all] [--artifact-root PATH] [--compile-arch auto|sm_120]";
 const DECOMPILE_FIXTURE_COVERAGE_USAGE: &str = "kernel-decompile-fixture-coverage [--fixture NAME|all] [--artifact-root PATH] [--compile-arch sm_120] [--out-dir PATH]";
 const DECOMPILE_SASS_USAGE: &str =
     "kernel-decompile-sass SASS_PATH [--source PATH] [--out-dir PATH]";
@@ -838,9 +837,10 @@ pub(crate) fn run_kernel_decompile_ptx_probes(args: &[String]) -> AppResult<()> 
     let reports = run_decompile_ptx_probes(&options)?;
     for report in reports {
         println!(
-            "kernel_decompile_ptx_probe probe={} symbol={} parsed_instructions={} unsupported_instructions={} ptx_path={} cubin_path={} nvdisasm_sass_path={} cuobjdump_sass_path={}",
+            "kernel_decompile_ptx_probe probe={} symbol={} compile_arch={} parsed_instructions={} unsupported_instructions={} ptx_path={} cubin_path={} nvdisasm_sass_path={} cuobjdump_sass_path={}",
             report.probe.name(),
             report.symbol,
+            report.compile_arch,
             report.parsed_instruction_count,
             report.unsupported_instruction_count,
             report.ptx_path.display(),

@@ -5,8 +5,8 @@ use nn_rust_inference::runtime;
 use crate::autotune::AutoOptimizeConfig;
 
 use super::super::{
-    DecompiledAutotuneEvidence, DecompiledAutotuneShape, PtxDecompileProbeKind, SassCoverageReport,
-    SimpleKernelFixtureKind, all_simple_kernel_fixture_kinds,
+    AUTO_COMPILE_ARCH, DecompiledAutotuneEvidence, DecompiledAutotuneShape, PtxDecompileProbeKind,
+    SassCoverageReport, SimpleKernelFixtureKind, all_simple_kernel_fixture_kinds,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,7 +94,7 @@ impl DecompilePtxProbeOptions {
     pub fn sm120_default() -> Self {
         Self {
             artifact_root: runtime::default_artifact_dir().join("decompile-probes"),
-            compile_arch: "sm_120".to_string(),
+            compile_arch: AUTO_COMPILE_ARCH.to_string(),
             probes: vec![
                 PtxDecompileProbeKind::TensorCoreHmma,
                 PtxDecompileProbeKind::TensorCoreImma,
@@ -111,6 +111,7 @@ impl DecompilePtxProbeOptions {
 pub struct DecompilePtxProbeReport {
     pub probe: PtxDecompileProbeKind,
     pub symbol: String,
+    pub compile_arch: String,
     pub probe_dir: PathBuf,
     pub ptx_path: PathBuf,
     pub cubin_path: PathBuf,
