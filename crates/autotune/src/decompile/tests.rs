@@ -785,6 +785,8 @@ fn generated_naive_rust_matvec_sass_routes_to_autotune_and_recompiles_best() {
     assert!(report.optimized_ir_path.exists());
     assert!(report.optimized_pattern_path.exists());
     assert!(report.optimized_side_by_side_path.exists());
+    assert!(report.overview_path.exists());
+    assert!(report.overview_graph_path.exists());
     assert!(report.evidence.supports_bf16_row_major_matvec());
     assert!(report.optimized_evidence.supports_bf16_row_major_matvec());
     assert!(report.parsed_instruction_count > 0);
@@ -851,6 +853,8 @@ fn generated_gemm_sass_routes_to_autotune_and_recompiles_best() {
     assert!(report.optimized_ir_path.exists());
     assert!(report.optimized_pattern_path.exists());
     assert!(report.optimized_side_by_side_path.exists());
+    assert!(report.overview_path.exists());
+    assert!(report.overview_graph_path.exists());
     assert!(report.evidence.supports_f32_bf16_row_col_row_gemm());
     assert!(
         report
@@ -925,6 +929,8 @@ fn external_sass_file_routes_to_autotune_and_recompiles_best() {
     assert!(report.optimized_sass_path.exists());
     assert!(report.optimized_ir_path.exists());
     assert!(report.optimized_pattern_path.exists());
+    assert!(report.overview_path.exists());
+    assert!(report.overview_graph_path.exists());
     assert!(
         report
             .optimized_evidence

@@ -14,6 +14,9 @@ use super::super::{
     driver_support::absolute_path,
 };
 use super::artifacts::{DecompiledSassArtifacts, disassemble_ptx_to_sass};
+use super::overview::{
+    DecompileAutotuneOverview, DecompileAutotuneOverviewSide, write_decompile_autotune_overview,
+};
 use super::types::{DecompileAutotuneSassOptions, DecompileAutotuneSassReport};
 
 pub fn run_decompile_autotune_sass(
@@ -156,6 +159,63 @@ pub fn run_decompile_autotune_sass(
                 .is_some_and(|improvement| improvement > 0.0)
         })
         .count();
+    let shape_label = match options.shape {
+        DecompiledAutotuneShape::MatvecBf16RowMajor { rows, cols } => {
+            format!("matvec-bf16-row-major rows={rows} cols={cols}")
+        }
+        DecompiledAutotuneShape::GemmF32Bf16RowColRow { m, n, k } => {
+            format!("gemm-f32-bf16-row-col-row m={m} n={n} k={k}")
+        }
+    };
+    let overview_paths = write_decompile_autotune_overview(
+        &emitted_report.report_path,
+        &DecompileAutotuneOverview {
+            title: "Decompile Autotune External SASS Overview",
+            shape: shape_label,
+            operation_name: &routed.operation.name,
+            config: options.config,
+            source: DecompileAutotuneOverviewSide {
+                label: "source",
+                symbol: function.name.as_str(),
+                source_path: source_path.as_deref(),
+                ptx_path: None,
+                cubin_path: None,
+                sass_path: &sass_path,
+                ir_path: &input_artifacts.ir_path,
+                lifted_ir_path: &input_artifacts.lifted_ir_path,
+                analysis_path: &input_artifacts.analysis_path,
+                pattern_path: &input_artifacts.pattern_path,
+                side_by_side_path: &input_artifacts.side_by_side_path,
+                parsed_instruction_count: parsed.instruction_count(),
+                unsupported_instruction_count: input_artifacts.ir.unsupported_instruction_count(),
+                semantic_pattern_count: input_artifacts.patterns.pattern_count(),
+                evidence: &routed.evidence,
+            },
+            optimized: DecompileAutotuneOverviewSide {
+                label: "optimized",
+                symbol: &emitted_optimized.symbol,
+                source_path: Some(&emitted_optimized.paths.source_path),
+                ptx_path: Some(&compiled_optimized.ptx_path),
+                cubin_path: Some(&optimized_disassembly.cubin_path),
+                sass_path: &optimized_disassembly.sass_path,
+                ir_path: &optimized_artifacts.ir_path,
+                lifted_ir_path: &optimized_artifacts.lifted_ir_path,
+                analysis_path: &optimized_artifacts.analysis_path,
+                pattern_path: &optimized_artifacts.pattern_path,
+                side_by_side_path: &optimized_artifacts.side_by_side_path,
+                parsed_instruction_count: optimized_parsed.instruction_count(),
+                unsupported_instruction_count: optimized_artifacts
+                    .ir
+                    .unsupported_instruction_count(),
+                semantic_pattern_count: optimized_artifacts.patterns.pattern_count(),
+                evidence: &optimized_routed.evidence,
+            },
+            optimization: &optimization.result,
+            best,
+            source_score: None,
+            auto_report_path: &emitted_report.report_path,
+        },
+    )?;
 
     Ok(DecompileAutotuneSassReport {
         sass_path,
@@ -173,6 +233,8 @@ pub fn run_decompile_autotune_sass(
         evidence: routed.evidence,
         operation_name: routed.operation.name,
         auto_report_path: emitted_report.report_path,
+        overview_path: overview_paths.markdown_path,
+        overview_graph_path: overview_paths.graph_path,
         optimized_source_path: emitted_optimized.paths.source_path,
         optimized_ptx_path: compiled_optimized.ptx_path,
         optimized_cubin_path: optimized_disassembly.cubin_path,

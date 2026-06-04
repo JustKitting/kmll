@@ -359,7 +359,7 @@ pub(crate) fn run_kernel_decompile_autotune_matvec(args: &[String]) -> AppResult
 
     let report = run_decompile_autotune_matvec(&options)?;
     println!(
-        "kernel_decompile_autotune_matvec rows={} cols={} naive_symbol={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} has_bf16_descriptor_load={} has_bf16_widen={} has_f32_mul_add={} has_f32_fused_multiply_add={} has_warp_reduce_sum={} best_symbol={} best_action_count={} best_action_ops={} source_score={} source_score_source={} best_score={} best_score_source={} explored={} rejected={} improving_steps={} optimized_parsed_instructions={} optimized_semantic_patterns={} optimized_unsupported_instructions={} optimized_has_bf16_descriptor_load={} optimized_has_bf16_widen={} optimized_has_f32_mul_add={} optimized_has_f32_fused_multiply_add={} optimized_has_warp_reduce_sum={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} pattern_path={} side_by_side_path={} auto_report_path={} optimized_source_path={} optimized_ptx_path={} optimized_cubin_path={} optimized_sass_path={} optimized_ir_path={} optimized_pattern_path={} optimized_side_by_side_path={}",
+        "kernel_decompile_autotune_matvec rows={} cols={} naive_symbol={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} has_bf16_descriptor_load={} has_bf16_widen={} has_f32_mul_add={} has_f32_fused_multiply_add={} has_warp_reduce_sum={} best_symbol={} best_action_count={} best_action_ops={} source_score={} source_score_source={} best_score={} best_score_source={} explored={} rejected={} improving_steps={} optimized_parsed_instructions={} optimized_semantic_patterns={} optimized_unsupported_instructions={} optimized_has_bf16_descriptor_load={} optimized_has_bf16_widen={} optimized_has_f32_mul_add={} optimized_has_f32_fused_multiply_add={} optimized_has_warp_reduce_sum={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} pattern_path={} side_by_side_path={} auto_report_path={} overview_path={} overview_graph_path={} optimized_source_path={} optimized_ptx_path={} optimized_cubin_path={} optimized_sass_path={} optimized_ir_path={} optimized_pattern_path={} optimized_side_by_side_path={}",
         report.rows,
         report.cols,
         report.naive_symbol,
@@ -400,6 +400,8 @@ pub(crate) fn run_kernel_decompile_autotune_matvec(args: &[String]) -> AppResult
         report.pattern_path.display(),
         report.side_by_side_path.display(),
         report.auto_report_path.display(),
+        report.overview_path.display(),
+        report.overview_graph_path.display(),
         report.optimized_source_path.display(),
         report.optimized_ptx_path.display(),
         report.optimized_cubin_path.display(),
@@ -509,7 +511,7 @@ pub(crate) fn run_kernel_decompile_autotune_gemm(args: &[String]) -> AppResult<(
 
     let report = run_decompile_autotune_gemm(&options)?;
     println!(
-        "kernel_decompile_autotune_gemm m={} n={} k={} source_symbol={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} has_f32_descriptor_load={} has_bf16_descriptor_load={} has_bf16_widen={} has_shared_store={} has_shared_load={} has_barrier={} has_f32_mul_add={} has_f32_fused_multiply_add={} has_descriptor_store={} best_symbol={} best_action_count={} best_action_ops={} best_score={} explored={} rejected={} improving_steps={} optimized_parsed_instructions={} optimized_semantic_patterns={} optimized_unsupported_instructions={} optimized_has_f32_descriptor_load={} optimized_has_bf16_descriptor_load={} optimized_has_bf16_widen={} optimized_has_shared_store={} optimized_has_shared_load={} optimized_has_barrier={} optimized_has_f32_mul_add={} optimized_has_f32_fused_multiply_add={} optimized_has_descriptor_store={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} pattern_path={} side_by_side_path={} auto_report_path={} optimized_source_path={} optimized_ptx_path={} optimized_cubin_path={} optimized_sass_path={} optimized_ir_path={} optimized_pattern_path={} optimized_side_by_side_path={}",
+        "kernel_decompile_autotune_gemm m={} n={} k={} source_symbol={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} has_f32_descriptor_load={} has_bf16_descriptor_load={} has_bf16_widen={} has_shared_store={} has_shared_load={} has_barrier={} has_f32_mul_add={} has_f32_fused_multiply_add={} has_descriptor_store={} best_symbol={} best_action_count={} best_action_ops={} best_score={} explored={} rejected={} improving_steps={} optimized_parsed_instructions={} optimized_semantic_patterns={} optimized_unsupported_instructions={} optimized_has_f32_descriptor_load={} optimized_has_bf16_descriptor_load={} optimized_has_bf16_widen={} optimized_has_shared_store={} optimized_has_shared_load={} optimized_has_barrier={} optimized_has_f32_mul_add={} optimized_has_f32_fused_multiply_add={} optimized_has_descriptor_store={} source_path={} ptx_path={} cubin_path={} sass_path={} ir_path={} pattern_path={} side_by_side_path={} auto_report_path={} overview_path={} overview_graph_path={} optimized_source_path={} optimized_ptx_path={} optimized_cubin_path={} optimized_sass_path={} optimized_ir_path={} optimized_pattern_path={} optimized_side_by_side_path={}",
         report.m,
         report.n,
         report.k,
@@ -556,6 +558,8 @@ pub(crate) fn run_kernel_decompile_autotune_gemm(args: &[String]) -> AppResult<(
         report.pattern_path.display(),
         report.side_by_side_path.display(),
         report.auto_report_path.display(),
+        report.overview_path.display(),
+        report.overview_graph_path.display(),
         report.optimized_source_path.display(),
         report.optimized_ptx_path.display(),
         report.optimized_cubin_path.display(),
@@ -709,7 +713,7 @@ pub(crate) fn run_kernel_decompile_autotune_sass(args: &[String]) -> AppResult<(
         config,
     })?;
     println!(
-        "kernel_decompile_autotune_sass shape={} function_symbol={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} has_f32_descriptor_load={} has_bf16_descriptor_load={} has_bf16_widen={} has_shared_store={} has_shared_load={} has_barrier={} has_f32_mul_add={} has_f32_fused_multiply_add={} has_descriptor_store={} has_warp_reduce_sum={} best_symbol={} best_action_count={} best_action_ops={} best_score={} explored={} rejected={} improving_steps={} optimized_parsed_instructions={} optimized_semantic_patterns={} optimized_unsupported_instructions={} optimized_has_f32_descriptor_load={} optimized_has_bf16_descriptor_load={} optimized_has_bf16_widen={} optimized_has_shared_store={} optimized_has_shared_load={} optimized_has_barrier={} optimized_has_f32_mul_add={} optimized_has_f32_fused_multiply_add={} optimized_has_descriptor_store={} optimized_has_warp_reduce_sum={} sass_path={} source_path={} output_dir={} ir_path={} pattern_path={} side_by_side_path={} auto_report_path={} optimized_source_path={} optimized_ptx_path={} optimized_cubin_path={} optimized_sass_path={} optimized_ir_path={} optimized_pattern_path={} optimized_side_by_side_path={}",
+        "kernel_decompile_autotune_sass shape={} function_symbol={} parsed_instructions={} semantic_patterns={} unsupported_instructions={} has_f32_descriptor_load={} has_bf16_descriptor_load={} has_bf16_widen={} has_shared_store={} has_shared_load={} has_barrier={} has_f32_mul_add={} has_f32_fused_multiply_add={} has_descriptor_store={} has_warp_reduce_sum={} best_symbol={} best_action_count={} best_action_ops={} best_score={} explored={} rejected={} improving_steps={} optimized_parsed_instructions={} optimized_semantic_patterns={} optimized_unsupported_instructions={} optimized_has_f32_descriptor_load={} optimized_has_bf16_descriptor_load={} optimized_has_bf16_widen={} optimized_has_shared_store={} optimized_has_shared_load={} optimized_has_barrier={} optimized_has_f32_mul_add={} optimized_has_f32_fused_multiply_add={} optimized_has_descriptor_store={} optimized_has_warp_reduce_sum={} sass_path={} source_path={} output_dir={} ir_path={} pattern_path={} side_by_side_path={} auto_report_path={} overview_path={} overview_graph_path={} optimized_source_path={} optimized_ptx_path={} optimized_cubin_path={} optimized_sass_path={} optimized_ir_path={} optimized_pattern_path={} optimized_side_by_side_path={}",
         decompiled_shape_label(shape),
         report.function_symbol,
         report.parsed_instruction_count,
@@ -759,6 +763,8 @@ pub(crate) fn run_kernel_decompile_autotune_sass(args: &[String]) -> AppResult<(
         report.pattern_path.display(),
         report.side_by_side_path.display(),
         report.auto_report_path.display(),
+        report.overview_path.display(),
+        report.overview_graph_path.display(),
         report.optimized_source_path.display(),
         report.optimized_ptx_path.display(),
         report.optimized_cubin_path.display(),

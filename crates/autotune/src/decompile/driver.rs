@@ -3,6 +3,7 @@ mod autotune_gemm;
 mod autotune_matvec;
 mod autotune_sass;
 mod fixtures;
+mod overview;
 mod ptx;
 mod sass_file;
 mod types;

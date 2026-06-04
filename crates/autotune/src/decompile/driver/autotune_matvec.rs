@@ -20,6 +20,9 @@ use super::super::{
     driver_support::absolute_path,
 };
 use super::artifacts::{DecompiledSassArtifacts, disassemble_ptx_to_sass};
+use super::overview::{
+    DecompileAutotuneOverview, DecompileAutotuneOverviewSide, write_decompile_autotune_overview,
+};
 use super::types::{DecompileAutotuneMatvecOptions, DecompileAutotuneMatvecReport};
 
 pub fn run_decompile_autotune_matvec(
@@ -240,6 +243,58 @@ pub fn run_decompile_autotune_matvec(
                 .is_some_and(|improvement| improvement > 0.0)
         })
         .count();
+    let overview_paths = write_decompile_autotune_overview(
+        &emitted_report.report_path,
+        &DecompileAutotuneOverview {
+            title: "Decompile Autotune Matvec Overview",
+            shape: format!(
+                "matvec-bf16-row-major rows={} cols={}",
+                options.rows, options.cols
+            ),
+            operation_name: &routed.operation.name,
+            config: options.config,
+            source: DecompileAutotuneOverviewSide {
+                label: "source",
+                symbol: &naive_source.symbol,
+                source_path: Some(&source_path),
+                ptx_path: Some(&compiled.ptx_path),
+                cubin_path: Some(&source_disassembly.cubin_path),
+                sass_path: &source_disassembly.sass_path,
+                ir_path: &source_artifacts.ir_path,
+                lifted_ir_path: &source_artifacts.lifted_ir_path,
+                analysis_path: &source_artifacts.analysis_path,
+                pattern_path: &source_artifacts.pattern_path,
+                side_by_side_path: &source_artifacts.side_by_side_path,
+                parsed_instruction_count: parsed.instruction_count(),
+                unsupported_instruction_count: source_artifacts.ir.unsupported_instruction_count(),
+                semantic_pattern_count: source_artifacts.patterns.pattern_count(),
+                evidence: &routed.evidence,
+            },
+            optimized: DecompileAutotuneOverviewSide {
+                label: "optimized",
+                symbol: &emitted_optimized.symbol,
+                source_path: Some(&emitted_optimized.paths.source_path),
+                ptx_path: Some(&compiled_optimized.ptx_path),
+                cubin_path: Some(&optimized_disassembly.cubin_path),
+                sass_path: &optimized_disassembly.sass_path,
+                ir_path: &optimized_artifacts.ir_path,
+                lifted_ir_path: &optimized_artifacts.lifted_ir_path,
+                analysis_path: &optimized_artifacts.analysis_path,
+                pattern_path: &optimized_artifacts.pattern_path,
+                side_by_side_path: &optimized_artifacts.side_by_side_path,
+                parsed_instruction_count: optimized_parsed.instruction_count(),
+                unsupported_instruction_count: optimized_artifacts
+                    .ir
+                    .unsupported_instruction_count(),
+                semantic_pattern_count: optimized_artifacts.patterns.pattern_count(),
+                evidence: &optimized_routed.evidence,
+            },
+            optimization: &optimization.result,
+            best,
+            source_score,
+            auto_report_path: &emitted_report.report_path,
+        },
+    )?;
 
     Ok(DecompileAutotuneMatvecReport {
         rows: options.rows,
@@ -260,6 +315,8 @@ pub fn run_decompile_autotune_matvec(
         evidence: routed.evidence,
         operation_name: routed.operation.name,
         auto_report_path: emitted_report.report_path,
+        overview_path: overview_paths.markdown_path,
+        overview_graph_path: overview_paths.graph_path,
         optimized_source_path: emitted_optimized.paths.source_path,
         optimized_ptx_path: compiled_optimized.ptx_path,
         optimized_cubin_path: optimized_disassembly.cubin_path,
