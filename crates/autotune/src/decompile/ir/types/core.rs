@@ -198,6 +198,10 @@ pub enum KernelIrOpKind {
         opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
     },
+    WarpElect {
+        dst: RegisterRef,
+        operands: Vec<AggregateOperand>,
+    },
     CompareSet {
         dst: RegisterRef,
         comparison: Option<SassComparisonKind>,

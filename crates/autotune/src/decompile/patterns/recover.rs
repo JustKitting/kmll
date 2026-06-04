@@ -404,7 +404,8 @@ impl KernelIrOpDef for KernelIrOp {
             | KernelIrOpKind::Shift { dst, .. }
             | KernelIrOpKind::LogicLut { dst, .. }
             | KernelIrOpKind::Permute { dst, .. }
-            | KernelIrOpKind::AddressCalc { dst, .. } => Some(dst),
+            | KernelIrOpKind::AddressCalc { dst, .. }
+            | KernelIrOpKind::WarpElect { dst, .. } => Some(dst),
             KernelIrOpKind::Store { .. }
             | KernelIrOpKind::MemoryReduction { .. }
             | KernelIrOpKind::TensorCoreMma { .. }

@@ -47,6 +47,7 @@ pub(super) fn lift(
         SassOpcodeKind::Ublkcp
         | SassOpcodeKind::Ublkpf
         | SassOpcodeKind::Ublkred
+        | SassOpcodeKind::Utccp
         | SassOpcodeKind::Utmaldg
         | SassOpcodeKind::Utmapf
         | SassOpcodeKind::Utmaredg

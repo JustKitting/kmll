@@ -1,8 +1,11 @@
 use super::super::types::{
-    AggregateOperand, KernelIrOpKind, SassModifier, SassModifierKind, SassOpcode, SassOpcodeKind,
-    SassWarpShuffleMode,
+    AggregateOperand, KernelIrOpKind, SassMappingConfidence, SassModifier, SassModifierKind,
+    SassOpcode, SassOpcodeKind, SassWarpShuffleMode,
 };
-use super::{LiftResult, operands::map_warp_shuffle_operands};
+use super::{
+    LiftResult,
+    operands::{map_warp_shuffle_operands, register_operand},
+};
 
 pub(super) fn lift(
     opcode: &SassOpcode,
@@ -10,6 +13,13 @@ pub(super) fn lift(
     operands: &[AggregateOperand],
 ) -> Option<LiftResult> {
     match opcode.kind() {
+        SassOpcodeKind::Elect => Some((
+            KernelIrOpKind::WarpElect {
+                dst: register_operand(operands.first()),
+                operands: operands.to_vec(),
+            },
+            SassMappingConfidence::OpcodeHeuristic,
+        )),
         SassOpcodeKind::Shfl => Some(map_warp_shuffle_operands(
             opcode,
             operands,

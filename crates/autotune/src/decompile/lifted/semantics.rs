@@ -124,6 +124,10 @@ pub enum SassLiftedSemantics {
         opcode: SassOpcode,
         operands: Vec<AggregateOperand>,
     },
+    WarpElect {
+        dst: RegisterRef,
+        operands: Vec<AggregateOperand>,
+    },
     CompareSet {
         dst: RegisterRef,
         comparison: Option<SassComparisonKind>,
@@ -339,6 +343,11 @@ impl fmt::Display for SassLiftedSemantics {
                     format_display_list(operands)
                 )
             }
+            Self::WarpElect { dst, operands } => write!(
+                f,
+                "warp-elect(dst={dst},operands=[{}])",
+                format_display_list(operands)
+            ),
             Self::CompareSet {
                 dst,
                 comparison,
@@ -599,6 +608,10 @@ pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
         }
         KernelIrOpKind::WarpGroup { opcode, operands } => SassLiftedSemantics::WarpGroup {
             opcode: opcode.clone(),
+            operands: operands.clone(),
+        },
+        KernelIrOpKind::WarpElect { dst, operands } => SassLiftedSemantics::WarpElect {
+            dst: dst.clone(),
             operands: operands.clone(),
         },
         KernelIrOpKind::CompareSet {

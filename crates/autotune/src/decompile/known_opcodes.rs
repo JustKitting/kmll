@@ -145,6 +145,7 @@ pub enum SassOpcodeCatalogKind {
     Unsupported,
     WarpGroup,
     WarpGroupControl,
+    WarpElect,
     WarpGroupMma,
     WarpShuffle,
 }
@@ -183,6 +184,7 @@ impl From<SassLiftedOpKind> for SassOpcodeCatalogKind {
             SassLiftedOpKind::TensorCoreMma => Self::TensorCoreMma,
             SassLiftedOpKind::TensorMemoryAccess => Self::TensorMemoryAccess,
             SassLiftedOpKind::Unsupported => Self::Unsupported,
+            SassLiftedOpKind::WarpElect => Self::WarpElect,
             SassLiftedOpKind::WarpGroup => Self::WarpGroup,
             SassLiftedOpKind::WarpShuffle => Self::WarpShuffle,
         }
@@ -246,6 +248,7 @@ impl fmt::Display for SassOpcodeCatalogKind {
             Self::Unsupported => f.write_str("unsupported"),
             Self::WarpGroup => f.write_str("warpgroup"),
             Self::WarpGroupControl => f.write_str("warpgroup-control"),
+            Self::WarpElect => f.write_str("warp-elect"),
             Self::WarpGroupMma => f.write_str("warpgroup-mma"),
             Self::WarpShuffle => f.write_str("warp-shuffle"),
         }
@@ -304,6 +307,7 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     local!(Bsync, Synchronization, Sync),
     local!(Call, ControlFlow, Call),
     local!(Cs2r, DataMovement, SpecialRead),
+    local!(Elect, Warp, WarpElect),
     local!(Exit, ControlFlow, Exit),
     local!(Fadd, FloatMath, FloatAdd),
     local!(Ffma, FloatMath, FusedMultiplyAdd),
@@ -351,6 +355,7 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     local!(Ulop3, IntegerMath, LogicLut),
     local!(Umov, DataMovement, Move),
     local!(Ushf, IntegerMath, Shift),
+    local!(Utccp, TensorMemory, BulkCopy),
     local!(Viadd, IntegerMath, IntegerAdd),
     nvidia_mapped!(Atom, [75, 80, 86, 89, 90, 100, 120], Memory, MemoryAtomic),
     nvidia_mapped!(Plop3, [75, 80, 86, 89, 90, 100, 120], IntegerMath, LogicLut),

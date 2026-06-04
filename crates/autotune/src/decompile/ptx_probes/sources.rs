@@ -334,6 +334,27 @@ pub(super) const TENSOR_MEMORY_STTM_PTX: &str = r#".version 9.2
 }
 "#;
 
+pub(super) const TENSOR_MEMORY_UTCCP_PTX: &str = r#".version 9.2
+.target sm_100a
+.address_size 64
+
+.visible .entry tensor_memory_utccp_probe(
+    .param .u64 tensor_memory_utccp_probe_src,
+    .param .u32 tensor_memory_utccp_probe_tmem
+)
+{
+    .reg .b32 %r<4>;
+    .reg .b64 %rd<2>;
+
+    ld.param.u64 %rd0, [tensor_memory_utccp_probe_src];
+    ld.param.u32 %r0, [tensor_memory_utccp_probe_tmem];
+
+    tcgen05.cp.cta_group::1.128x256b [%r0], %rd0;
+
+    ret;
+}
+"#;
+
 pub(super) const WARP_GROUP_REGISTER_SET_PTX: &str = r#".version 8.7
 .target sm_90a
 .address_size 64

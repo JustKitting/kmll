@@ -451,6 +451,12 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
                 push_register_refs(operand.registers(), &mut uses);
             }
         }
+        KernelIrOpKind::WarpElect { dst, operands } => {
+            push_register_refs([dst.clone()], &mut defines);
+            for operand in operands.iter().skip(1) {
+                push_register_refs(operand.registers(), &mut uses);
+            }
+        }
         KernelIrOpKind::WarpShuffle {
             predicate,
             dst,

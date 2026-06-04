@@ -67,6 +67,7 @@ pub(super) fn classify_op(kind: &KernelIrOpKind) -> (SassLiftedOpClass, SassLift
         KernelIrOpKind::WarpGroup { .. } => {
             (SassLiftedOpClass::WarpGroup, SassLiftedOpKind::WarpGroup)
         }
+        KernelIrOpKind::WarpElect { .. } => (SassLiftedOpClass::Warp, SassLiftedOpKind::WarpElect),
         KernelIrOpKind::CompareSet { .. } => {
             (SassLiftedOpClass::Predicate, SassLiftedOpKind::CompareSet)
         }
