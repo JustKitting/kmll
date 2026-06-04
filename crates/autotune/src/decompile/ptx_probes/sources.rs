@@ -283,6 +283,42 @@ pub(super) const TENSOR_CORE_WGMMA_QGMMA_PTX: &str = r#".version 8.7
 }
 "#;
 
+pub(super) const TENSOR_CORE_SM120A_QMMA_PTX: &str = r#".version 9.2
+.target sm_120a
+.address_size 64
+
+.visible .entry tensor_core_sm120a_qmma_probe(
+    .param .u64 tensor_core_sm120a_qmma_probe_out
+)
+{
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<2>;
+    .reg .f32 %f<8>;
+
+    ld.param.u64 %rd0, [tensor_core_sm120a_qmma_probe_out];
+
+    mov.b32 %r0, 0x3f3f3f3f;
+    mov.b32 %r1, 0x3f3f3f3f;
+    mov.b32 %r2, 0x3f3f3f3f;
+    mov.b32 %r3, 0x3f3f3f3f;
+    mov.b32 %r4, 0x3f3f3f3f;
+    mov.b32 %r5, 0x3f3f3f3f;
+    mov.f32 %f0, 0f00000000;
+    mov.f32 %f1, 0f00000000;
+    mov.f32 %f2, 0f00000000;
+    mov.f32 %f3, 0f00000000;
+
+    mma.sync.aligned.kind::f8f6f4.m16n8k32.row.col.f32.e4m3.e4m3.f32
+        {%f0, %f1, %f2, %f3},
+        {%r0, %r1, %r2, %r3},
+        {%r4, %r5},
+        {%f0, %f1, %f2, %f3};
+
+    st.global.f32 [%rd0], %f0;
+    ret;
+}
+"#;
+
 pub(super) const TENSOR_CORE_TCGEN05_UTCQMMA_PTX: &str = r#".version 9.2
 .target sm_100a
 .address_size 64
