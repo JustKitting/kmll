@@ -283,6 +283,31 @@ pub(super) const TENSOR_CORE_WGMMA_QGMMA_PTX: &str = r#".version 8.7
 }
 "#;
 
+pub(super) const TENSOR_MEMORY_LDTM_PTX: &str = r#".version 9.2
+.target sm_100a
+.address_size 64
+
+.visible .entry tensor_memory_ldtm_probe(
+    .param .u64 tensor_memory_ldtm_probe_out,
+    .param .u32 tensor_memory_ldtm_probe_tmem
+)
+{
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<2>;
+
+    ld.param.u64 %rd0, [tensor_memory_ldtm_probe_out];
+    ld.param.u32 %r0, [tensor_memory_ldtm_probe_tmem];
+
+    tcgen05.ld.sync.aligned.16x256b.x1.b32 {%r1, %r2, %r3, %r4}, [%r0];
+
+    st.global.u32 [%rd0], %r1;
+    st.global.u32 [%rd0+4], %r2;
+    st.global.u32 [%rd0+8], %r3;
+    st.global.u32 [%rd0+12], %r4;
+    ret;
+}
+"#;
+
 pub(super) const WARP_GROUP_REGISTER_SET_PTX: &str = r#".version 8.7
 .target sm_90a
 .address_size 64
