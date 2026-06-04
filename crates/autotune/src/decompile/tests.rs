@@ -44,6 +44,20 @@ fn register_refs_canonicalize_modifier_spelling_for_identity() {
     assert_eq!(reg("R13.reuse").to_string(), "R13");
 }
 
+#[test]
+fn sass_architecture_parses_sm_spellings_and_displays_canonical_form() {
+    assert_eq!(
+        SassArchitecture::parse("sm120"),
+        Some(SassArchitecture::sm(120))
+    );
+    assert_eq!(
+        SassArchitecture::parse("sm_120"),
+        Some(SassArchitecture::sm(120))
+    );
+    assert_eq!(SassArchitecture::sm(120).sm_number(), 120);
+    assert_eq!(SassArchitecture::sm(120).to_string(), "sm120");
+}
+
 const SIMPLE_SASS: &str = r#"
         .target sm_120
 
@@ -1560,7 +1574,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         hmma_catalog
             .architectures
             .iter()
-            .any(|architecture| architecture == "sm120")
+            .any(|architecture| architecture == &SassArchitecture::sm(120))
     );
     assert!(
         hmma_catalog
@@ -1590,7 +1604,7 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
         hmma_probe
             .architectures
             .iter()
-            .any(|architecture| architecture == "sm120")
+            .any(|architecture| architecture == &SassArchitecture::sm(120))
     );
     assert!(
         !report

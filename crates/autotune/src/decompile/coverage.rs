@@ -11,8 +11,8 @@ use nn_rust_inference::runtime;
 use super::{
     AggregateOperand, ControlTarget, KernelIrModule, KernelIrOpKind, KnownSassOpcode,
     MemoryAddress, MemoryAddressBase, MemoryAddressImmediate, MemorySpace, PredicateCondition,
-    RegisterRef, SassAnalysisModule, SassBlockTerminator, SassCfgEdgeKind, SassLiftedModule,
-    SassLiftedOpClass, SassLiftedOpDetail, SassLiftedOpKind, SassLiftedSemantics,
+    RegisterRef, SassAnalysisModule, SassArchitecture, SassBlockTerminator, SassCfgEdgeKind,
+    SassLiftedModule, SassLiftedOpClass, SassLiftedOpDetail, SassLiftedOpKind, SassLiftedSemantics,
     SassLiftedValueRef, SassMemoryAccessKind, SassModifier, SassOpcode, SassOpcodeCatalogClass,
     SassOpcodeCatalogKind, SassOpcodeCatalogSource, SassPatternConfidence, SassPatternModule,
     SassRegionKind, SassRegionPath, SassSemanticPatternCategory, SassSemanticPatternKind,
@@ -158,7 +158,7 @@ pub struct SassSemanticPatternCount {
 pub struct SassOpcodeProbeTarget {
     pub opcode: SassOpcode,
     pub priority: u8,
-    pub architectures: Vec<String>,
+    pub architectures: Vec<SassArchitecture>,
     pub classes: Vec<SassOpcodeCatalogClass>,
     pub kinds: Vec<SassOpcodeCatalogKind>,
     pub known_sources: Vec<SassOpcodeCatalogSource>,
@@ -227,7 +227,7 @@ pub struct SassOpcodeCatalogEntry {
     pub signature_count: usize,
     pub signatures: Vec<SassOpcodeSignature>,
     pub source_formats: Vec<SassCoverageSourceFormat>,
-    pub architectures: Vec<String>,
+    pub architectures: Vec<SassArchitecture>,
     pub known_sources: Vec<SassOpcodeCatalogSource>,
     pub classes: Vec<SassOpcodeCatalogClass>,
     pub kinds: Vec<SassOpcodeCatalogKind>,
@@ -328,7 +328,7 @@ struct OpcodeCatalogBuilder {
     instruction_count: usize,
     signatures: BTreeSet<SassOpcodeSignature>,
     source_formats: BTreeSet<SassCoverageSourceFormat>,
-    architectures: BTreeSet<String>,
+    architectures: BTreeSet<SassArchitecture>,
     known_sources: BTreeSet<SassOpcodeCatalogSource>,
     classes: BTreeSet<SassOpcodeCatalogClass>,
     kinds: BTreeSet<SassOpcodeCatalogKind>,
@@ -1001,7 +1001,7 @@ fn append_known_opcode(
     entry.kinds.insert(known.kind);
     entry.known_sources.insert(known.source);
     for architecture in known.architectures {
-        entry.architectures.insert((*architecture).to_string());
+        entry.architectures.insert(*architecture);
     }
 }
 
@@ -1628,7 +1628,7 @@ fn render_opcode_catalog_tsv(report: &SassCoverageReport) -> String {
             entry.signature_count,
             tsv(&display_list(&entry.signatures)),
             tsv(&display_list(&entry.source_formats)),
-            tsv(&entry.architectures.join(",")),
+            tsv(&display_list(&entry.architectures)),
             tsv(&display_list(&entry.known_sources)),
             tsv(&display_list(&entry.classes)),
             tsv(&display_list(&entry.kinds)),
@@ -1655,7 +1655,7 @@ fn render_opcode_probe_targets_tsv(report: &SassCoverageReport) -> String {
             tsv(&target.opcode.to_string()),
             target.priority,
             target.locally_mapped,
-            tsv(&target.architectures.join(",")),
+            tsv(&display_list(&target.architectures)),
             tsv(&display_list(&target.classes)),
             tsv(&display_list(&target.kinds)),
             tsv(&display_list(&target.known_sources)),

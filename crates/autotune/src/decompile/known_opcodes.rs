@@ -2,10 +2,40 @@ use std::fmt;
 
 use super::{SassLiftedOpClass, SassLiftedOpKind, SassOpcodeKind};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SassArchitecture {
+    sm: u16,
+}
+
+impl SassArchitecture {
+    pub const fn sm(sm: u16) -> Self {
+        Self { sm }
+    }
+
+    pub const fn sm_number(self) -> u16 {
+        self.sm
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        let sm = raw
+            .strip_prefix("sm_")
+            .or_else(|| raw.strip_prefix("sm"))?
+            .parse()
+            .ok()?;
+        Some(Self::sm(sm))
+    }
+}
+
+impl fmt::Display for SassArchitecture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "sm{}", self.sm)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KnownSassOpcode {
     pub opcode: SassOpcodeKind,
-    pub architectures: &'static [&'static str],
+    pub architectures: &'static [SassArchitecture],
     pub class: SassOpcodeCatalogClass,
     pub kind: SassOpcodeCatalogKind,
     pub source: SassOpcodeCatalogSource,
@@ -261,7 +291,7 @@ macro_rules! nvidia_mapped {
     ($opcode:ident, [$($arch:literal),* $(,)?], $class:ident, $kind:ident) => {
         KnownSassOpcode {
             opcode: SassOpcodeKind::$opcode,
-            architectures: &[$($arch),*],
+            architectures: &[$(SassArchitecture::sm($arch)),*],
             class: SassOpcodeCatalogClass::$class,
             kind: SassOpcodeCatalogKind::$kind,
             source: SassOpcodeCatalogSource::NvidiaCudaBinaryUtilitiesInstructionReference,
@@ -318,61 +348,31 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     local!(Ulop3, IntegerMath, LogicLut),
     local!(Umov, DataMovement, Move),
     local!(Ushf, IntegerMath, Shift),
-    nvidia_mapped!(Bgmma, ["sm90"], TensorCore, WarpGroupMma),
-    nvidia_mapped!(Bmma, ["sm80", "sm86", "sm89", "sm90"], TensorCore, BitMma),
-    nvidia_mapped!(Dmma, ["sm100", "sm120"], TensorCore, Fp64Mma),
-    nvidia_mapped!(Hgmma, ["sm90"], TensorCore, WarpGroupMma),
-    nvidia_mapped!(
-        Hmma,
-        ["sm80", "sm86", "sm89", "sm90", "sm100", "sm120"],
-        TensorCore,
-        HalfMma
-    ),
-    nvidia_mapped!(Igmma, ["sm90"], TensorCore, WarpGroupMma),
-    nvidia_mapped!(
-        Imma,
-        ["sm80", "sm86", "sm89", "sm90", "sm100", "sm120"],
-        TensorCore,
-        IntegerMma
-    ),
-    nvidia_mapped!(Omma, ["sm100", "sm120"], TensorCore, Fp4Mma),
-    nvidia_mapped!(Qgmma, ["sm90"], TensorCore, WarpGroupMma),
-    nvidia_mapped!(Qmma, ["sm100", "sm120"], TensorCore, Fp8Mma),
-    nvidia_mapped!(Ldt, ["sm100", "sm120"], TensorMemory, TensorLoad),
-    nvidia_mapped!(Ldtm, ["sm100", "sm120"], TensorMemory, TensorLoadMatrix),
-    nvidia_mapped!(Stt, ["sm100", "sm120"], TensorMemory, TensorStore),
-    nvidia_mapped!(Sttm, ["sm100", "sm120"], TensorMemory, TensorStoreMatrix),
-    nvidia_mapped!(Ublkcp, ["sm100", "sm120"], TensorMemory, BulkCopy),
-    nvidia_mapped!(Ublkpf, ["sm100", "sm120"], TensorMemory, BulkPrefetch),
-    nvidia_mapped!(Ublkred, ["sm100", "sm120"], TensorMemory, BulkReduce),
-    nvidia_mapped!(Utchmma, ["sm100", "sm120"], TensorCore, UniformHalfMma),
-    nvidia_mapped!(Utcimma, ["sm100", "sm120"], TensorCore, UniformIntegerMma),
-    nvidia_mapped!(Utcomma, ["sm100", "sm120"], TensorCore, UniformFp4Mma),
-    nvidia_mapped!(Utcqmma, ["sm100", "sm120"], TensorCore, UniformFp8Mma),
-    nvidia_mapped!(
-        Utmaldg,
-        ["sm100", "sm120"],
-        TensorMemory,
-        TensorMemoryLoadGlobal
-    ),
-    nvidia_mapped!(
-        Utmapf,
-        ["sm100", "sm120"],
-        TensorMemory,
-        TensorMemoryPrefetch
-    ),
-    nvidia_mapped!(
-        Utmaredg,
-        ["sm100", "sm120"],
-        TensorMemory,
-        TensorMemoryReduceGlobal
-    ),
-    nvidia_mapped!(
-        Utmastg,
-        ["sm100", "sm120"],
-        TensorMemory,
-        TensorMemoryStoreGlobal
-    ),
-    nvidia_mapped!(Warpgroup, ["sm90"], WarpGroup, WarpGroupControl),
-    nvidia_mapped!(Warpgroupset, ["sm90"], WarpGroup, WarpGroupControl),
+    nvidia_mapped!(Bgmma, [90], TensorCore, WarpGroupMma),
+    nvidia_mapped!(Bmma, [80, 86, 89, 90], TensorCore, BitMma),
+    nvidia_mapped!(Dmma, [100, 120], TensorCore, Fp64Mma),
+    nvidia_mapped!(Hgmma, [90], TensorCore, WarpGroupMma),
+    nvidia_mapped!(Hmma, [80, 86, 89, 90, 100, 120], TensorCore, HalfMma),
+    nvidia_mapped!(Igmma, [90], TensorCore, WarpGroupMma),
+    nvidia_mapped!(Imma, [80, 86, 89, 90, 100, 120], TensorCore, IntegerMma),
+    nvidia_mapped!(Omma, [100, 120], TensorCore, Fp4Mma),
+    nvidia_mapped!(Qgmma, [90], TensorCore, WarpGroupMma),
+    nvidia_mapped!(Qmma, [100, 120], TensorCore, Fp8Mma),
+    nvidia_mapped!(Ldt, [100, 120], TensorMemory, TensorLoad),
+    nvidia_mapped!(Ldtm, [100, 120], TensorMemory, TensorLoadMatrix),
+    nvidia_mapped!(Stt, [100, 120], TensorMemory, TensorStore),
+    nvidia_mapped!(Sttm, [100, 120], TensorMemory, TensorStoreMatrix),
+    nvidia_mapped!(Ublkcp, [100, 120], TensorMemory, BulkCopy),
+    nvidia_mapped!(Ublkpf, [100, 120], TensorMemory, BulkPrefetch),
+    nvidia_mapped!(Ublkred, [100, 120], TensorMemory, BulkReduce),
+    nvidia_mapped!(Utchmma, [100, 120], TensorCore, UniformHalfMma),
+    nvidia_mapped!(Utcimma, [100, 120], TensorCore, UniformIntegerMma),
+    nvidia_mapped!(Utcomma, [100, 120], TensorCore, UniformFp4Mma),
+    nvidia_mapped!(Utcqmma, [100, 120], TensorCore, UniformFp8Mma),
+    nvidia_mapped!(Utmaldg, [100, 120], TensorMemory, TensorMemoryLoadGlobal),
+    nvidia_mapped!(Utmapf, [100, 120], TensorMemory, TensorMemoryPrefetch),
+    nvidia_mapped!(Utmaredg, [100, 120], TensorMemory, TensorMemoryReduceGlobal),
+    nvidia_mapped!(Utmastg, [100, 120], TensorMemory, TensorMemoryStoreGlobal),
+    nvidia_mapped!(Warpgroup, [90], WarpGroup, WarpGroupControl),
+    nvidia_mapped!(Warpgroupset, [90], WarpGroup, WarpGroupControl),
 ];

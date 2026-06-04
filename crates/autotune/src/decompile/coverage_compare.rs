@@ -7,7 +7,7 @@ use std::{
 };
 
 use super::{
-    SassCoverageOptions, SassCoverageReport, SassOpcode, SassOpcodeCatalogClass,
+    SassArchitecture, SassCoverageOptions, SassCoverageReport, SassOpcode, SassOpcodeCatalogClass,
     SassOpcodeCatalogEntry, SassOpcodeCatalogKind, SassOpcodeCoverageState, run_sass_coverage_scan,
 };
 
@@ -60,7 +60,7 @@ pub struct SassCoverageProbeTargetDelta {
     pub candidate_instruction_count: usize,
     pub classes: Vec<SassOpcodeCatalogClass>,
     pub kinds: Vec<SassOpcodeCatalogKind>,
-    pub architectures: Vec<String>,
+    pub architectures: Vec<SassArchitecture>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -423,7 +423,7 @@ fn render_probe_target_delta_tsv(targets: &[SassCoverageProbeTargetDelta]) -> St
             target.candidate_instruction_count,
             tsv(&display_list(&target.classes)),
             tsv(&display_list(&target.kinds)),
-            tsv(&target.architectures.join(",")),
+            tsv(&display_list(&target.architectures)),
         )
         .expect("write to string");
     }
