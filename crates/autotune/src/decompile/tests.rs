@@ -2530,6 +2530,30 @@ fn coverage_scan_reports_opcode_counts_and_unsupported_instructions() {
             .iter()
             .any(|architecture| architecture == &SassArchitecture::sm(120))
     );
+    let atom_probe = report
+        .opcode_probe_targets
+        .iter()
+        .find(|target| target.opcode == SassOpcode::new("ATOM"))
+        .expect("known unobserved ATOM should be a probe target");
+    assert_eq!(atom_probe.priority, 70);
+    assert!(atom_probe.locally_mapped);
+    assert_eq!(
+        atom_probe.recommended_action,
+        SassOpcodeProbeAction::GenerateSassArtifact
+    );
+    assert_eq!(
+        atom_probe.reason,
+        SassOpcodeProbeReason::ArchitectureSpecificMappedUnobserved
+    );
+    assert!(
+        atom_probe
+            .architectures
+            .iter()
+            .any(|architecture| architecture == &SassArchitecture::sm(120))
+    );
+    assert!(atom_probe.known_sources.iter().any(|source| {
+        source == &SassOpcodeCatalogSource::NvidiaCudaBinaryUtilitiesInstructionReference
+    }));
     assert!(
         !report
             .opcode_probe_targets
