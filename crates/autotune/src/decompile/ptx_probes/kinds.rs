@@ -9,6 +9,7 @@ pub enum PtxDecompileProbeKind {
     TensorCoreWgmmaIgmma,
     TensorCoreWgmmaQgmma,
     TensorMemoryLdtm,
+    TensorMemorySttm,
     WarpGroupRegisterSet,
     ScalarMemoryLogic,
     ArchitectureSm90Scalar,
@@ -27,6 +28,7 @@ impl PtxDecompileProbeKind {
             Self::TensorCoreWgmmaIgmma => "tensor-core-wgmma-igmma",
             Self::TensorCoreWgmmaQgmma => "tensor-core-wgmma-qgmma",
             Self::TensorMemoryLdtm => "tensor-memory-ldtm",
+            Self::TensorMemorySttm => "tensor-memory-sttm",
             Self::WarpGroupRegisterSet => "warpgroup-register-set",
             Self::ScalarMemoryLogic => "scalar-memory-logic",
             Self::ArchitectureSm90Scalar => "architecture-sm90-scalar",
@@ -62,6 +64,9 @@ impl PtxDecompileProbeKind {
             | "qgmma" => Some(Self::TensorCoreWgmmaQgmma),
             "tensor-memory-ldtm" | "tensor_memory_ldtm" | "tmem-ldtm" | "tmem_ldtm" | "ldtm" => {
                 Some(Self::TensorMemoryLdtm)
+            }
+            "tensor-memory-sttm" | "tensor_memory_sttm" | "tmem-sttm" | "tmem_sttm" | "sttm" => {
+                Some(Self::TensorMemorySttm)
             }
             "warpgroup-register-set"
             | "warpgroup_register_set"

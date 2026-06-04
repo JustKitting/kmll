@@ -308,6 +308,32 @@ pub(super) const TENSOR_MEMORY_LDTM_PTX: &str = r#".version 9.2
 }
 "#;
 
+pub(super) const TENSOR_MEMORY_STTM_PTX: &str = r#".version 9.2
+.target sm_100a
+.address_size 64
+
+.visible .entry tensor_memory_sttm_probe(
+    .param .u64 tensor_memory_sttm_probe_in,
+    .param .u32 tensor_memory_sttm_probe_tmem
+)
+{
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<2>;
+
+    ld.param.u64 %rd0, [tensor_memory_sttm_probe_in];
+    ld.param.u32 %r0, [tensor_memory_sttm_probe_tmem];
+
+    ld.global.u32 %r1, [%rd0];
+    ld.global.u32 %r2, [%rd0+4];
+    ld.global.u32 %r3, [%rd0+8];
+    ld.global.u32 %r4, [%rd0+12];
+
+    tcgen05.st.sync.aligned.16x256b.x1.b32 [%r0], {%r1, %r2, %r3, %r4};
+
+    ret;
+}
+"#;
+
 pub(super) const WARP_GROUP_REGISTER_SET_PTX: &str = r#".version 8.7
 .target sm_90a
 .address_size 64
