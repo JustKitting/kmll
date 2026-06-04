@@ -50,6 +50,7 @@ pub enum SassLiftedSemantics {
     },
     MemoryAtomic {
         space: MemorySpace,
+        predicate_dst: Option<RegisterRef>,
         dst: RegisterRef,
         address: MemoryAddress,
         values: Vec<ScalarOperand>,
@@ -236,6 +237,7 @@ impl fmt::Display for SassLiftedSemantics {
             ),
             Self::MemoryAtomic {
                 space,
+                predicate_dst,
                 dst,
                 address,
                 values,
@@ -244,7 +246,8 @@ impl fmt::Display for SassLiftedSemantics {
                 modifiers,
             } => write!(
                 f,
-                "memory-atomic(space={space},dst={dst},address={address},values=[{}],operation={},width={},modifiers=[{}])",
+                "memory-atomic(space={space},predicate-dst={},dst={dst},address={address},values=[{}],operation={},width={},modifiers=[{}])",
+                option_display(predicate_dst.as_ref()),
                 format_display_list(values),
                 option_display(operation.as_ref()),
                 option_u32(*width_bits),
@@ -485,6 +488,7 @@ pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
             modifiers: access.modifiers.clone(),
         },
         KernelIrOpKind::MemoryAtomic {
+            predicate_dst,
             dst,
             address,
             values,
@@ -493,6 +497,7 @@ pub(super) fn lift_semantics(kind: &KernelIrOpKind) -> SassLiftedSemantics {
             access,
         } => SassLiftedSemantics::MemoryAtomic {
             space: *space,
+            predicate_dst: predicate_dst.clone(),
             dst: dst.clone(),
             address: address.clone(),
             values: values.clone(),

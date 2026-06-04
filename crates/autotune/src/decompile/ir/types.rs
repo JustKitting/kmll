@@ -351,6 +351,7 @@ impl SassModifierKind {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SassOpcodeKind {
     Atom,
+    Atomg,
     Bar,
     Bra,
     Bssy,
@@ -384,6 +385,7 @@ pub enum SassOpcodeKind {
     Prmt,
     Ret,
     Red,
+    Redg,
     S2r,
     S2ur,
     Sel,
@@ -436,6 +438,7 @@ impl SassOpcodeKind {
         let raw = raw.into();
         match raw.as_str() {
             "ATOM" => Self::Atom,
+            "ATOMG" => Self::Atomg,
             "BAR" => Self::Bar,
             "BRA" => Self::Bra,
             "BSSY" => Self::Bssy,
@@ -469,6 +472,7 @@ impl SassOpcodeKind {
             "PRMT" => Self::Prmt,
             "RET" => Self::Ret,
             "RED" => Self::Red,
+            "REDG" => Self::Redg,
             "S2R" => Self::S2r,
             "S2UR" => Self::S2ur,
             "SEL" => Self::Sel,
@@ -520,6 +524,7 @@ impl SassOpcodeKind {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Atom => "ATOM",
+            Self::Atomg => "ATOMG",
             Self::Bar => "BAR",
             Self::Bra => "BRA",
             Self::Bssy => "BSSY",
@@ -553,6 +558,7 @@ impl SassOpcodeKind {
             Self::Prmt => "PRMT",
             Self::Ret => "RET",
             Self::Red => "RED",
+            Self::Redg => "REDG",
             Self::S2r => "S2R",
             Self::S2ur => "S2UR",
             Self::Sel => "SEL",
@@ -641,6 +647,7 @@ pub enum KernelIrOpKind {
         access: MemoryAccessInfo,
     },
     MemoryAtomic {
+        predicate_dst: Option<RegisterRef>,
         dst: RegisterRef,
         address: MemoryAddress,
         values: Vec<ScalarOperand>,

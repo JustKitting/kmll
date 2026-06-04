@@ -284,6 +284,7 @@ macro_rules! nvidia_mapped {
 
 const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     local!(Atom, Memory, MemoryAtomic),
+    local!(Atomg, Memory, MemoryAtomic),
     local!(Bar, Synchronization, Sync),
     local!(Bra, ControlFlow, Branch),
     local!(Bssy, Synchronization, Sync),
@@ -316,6 +317,7 @@ const KNOWN_SASS_OPCODES: &[KnownSassOpcode] = &[
     local!(Plop3, IntegerMath, LogicLut),
     local!(Prmt, DataMovement, Permute),
     local!(Red, Memory, MemoryReduction),
+    local!(Redg, Memory, MemoryReduction),
     local!(Ret, ControlFlow, Return),
     local!(S2r, DataMovement, SpecialRead),
     local!(S2ur, DataMovement, SpecialRead),

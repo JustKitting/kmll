@@ -4,6 +4,7 @@ pub enum PtxDecompileProbeKind {
     TensorCoreImma,
     TensorCoreDmma,
     ScalarMemoryLogic,
+    ScalarMemoryAtomic,
 }
 
 impl PtxDecompileProbeKind {
@@ -13,6 +14,7 @@ impl PtxDecompileProbeKind {
             Self::TensorCoreImma => "tensor-core-imma",
             Self::TensorCoreDmma => "tensor-core-dmma",
             Self::ScalarMemoryLogic => "scalar-memory-logic",
+            Self::ScalarMemoryAtomic => "scalar-memory-atomic",
         }
     }
 
@@ -23,6 +25,9 @@ impl PtxDecompileProbeKind {
             "tensor-core-dmma" | "tensor_core_dmma" | "dmma" => Some(Self::TensorCoreDmma),
             "scalar-memory-logic" | "scalar_memory_logic" | "scalar" => {
                 Some(Self::ScalarMemoryLogic)
+            }
+            "scalar-memory-atomic" | "scalar_memory_atomic" | "atomic" => {
+                Some(Self::ScalarMemoryAtomic)
             }
             _ => None,
         }
@@ -63,6 +68,12 @@ pub fn ptx_decompile_probes() -> Vec<PtxDecompileProbe> {
             behavior: "scalar PTX memory, predicate, logic, integer, and f32 fused math instructions",
             source: SCALAR_MEMORY_LOGIC_PTX,
         },
+        PtxDecompileProbe {
+            kind: PtxDecompileProbeKind::ScalarMemoryAtomic,
+            symbol: "scalar_memory_atomic_probe",
+            behavior: "scalar PTX atomics, reductions, volatile local memory, and predicate composition",
+            source: SCALAR_MEMORY_ATOMIC_PTX,
+        },
     ]
 }
 
@@ -72,6 +83,7 @@ pub fn all_ptx_decompile_probe_kinds() -> Vec<PtxDecompileProbeKind> {
         PtxDecompileProbeKind::TensorCoreImma,
         PtxDecompileProbeKind::TensorCoreDmma,
         PtxDecompileProbeKind::ScalarMemoryLogic,
+        PtxDecompileProbeKind::ScalarMemoryAtomic,
     ]
 }
 
@@ -221,6 +233,54 @@ const SCALAR_MEMORY_LOGIC_PTX: &str = r#".version 8.0
     selp.u32 %r9, %r8, %r3, %p3;
 
     st.global.u32 [%rd0], %r9;
+    ret;
+}
+"#;
+
+const SCALAR_MEMORY_ATOMIC_PTX: &str = r#".version 9.1
+.target sm_80
+.address_size 64
+
+.visible .entry scalar_memory_atomic_probe(
+    .param .u64 scalar_memory_atomic_probe_out,
+    .param .u64 scalar_memory_atomic_probe_data
+)
+{
+    .reg .pred %p<8>;
+    .reg .b32 %r<32>;
+    .reg .b64 %rd<10>;
+    .local .align 4 .b8 scalar_memory_atomic_probe_local[128];
+
+    ld.param.u64 %rd0, [scalar_memory_atomic_probe_out];
+    ld.param.u64 %rd1, [scalar_memory_atomic_probe_data];
+
+    mov.u32 %r0, %tid.x;
+    and.b32 %r1, %r0, 31;
+    shl.b32 %r2, %r1, 2;
+    cvt.u64.u32 %rd2, %r2;
+    add.u64 %rd3, %rd0, %rd2;
+    add.u64 %rd4, %rd1, %rd2;
+
+    mov.u32 %r3, 1;
+    atom.global.add.u32 %r4, [%rd4], %r3;
+    red.global.add.u32 [%rd4], %r3;
+
+    mov.u64 %rd5, scalar_memory_atomic_probe_local;
+    add.u64 %rd6, %rd5, %rd2;
+    st.volatile.local.u32 [%rd6], %r4;
+    ld.volatile.local.u32 %r5, [%rd6];
+
+    setp.eq.u32 %p0, %r5, %r4;
+    setp.ne.u32 %p1, %r5, %r3;
+    setp.gt.u32 %p2, %r5, 0;
+    and.pred %p3, %p0, %p1;
+    or.pred %p4, %p2, %p3;
+    xor.pred %p5, %p4, %p1;
+    selp.u32 %r6, %r5, %r3, %p5;
+
+    add.u32 %r7, %r4, %r5;
+    add.u32 %r8, %r7, %r6;
+    st.global.u32 [%rd3], %r8;
     ret;
 }
 "#;

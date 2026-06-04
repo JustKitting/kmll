@@ -387,7 +387,9 @@ memory_atomic_fixture:
 .text.memory_atomic_fixture:
         /*0000*/                   ATOM.E.ADD.U32 R8, [R2], R4 ;                /* 0x0 */
         /*0010*/                   RED.E.MAX.S32 [R6], R8 ;                     /* 0x0 */
-        /*0020*/                   EXIT ;                                       /* 0x0 */
+        /*0020*/                   ATOMG.E.ADD.STRONG.GPU PT, R0, desc[UR4][R4.64], R11 ; /* 0x0 */
+        /*0030*/                   REDG.E.ADD.STRONG.GPU desc[UR4][R4.64], R11 ; /* 0x0 */
+        /*0040*/                   EXIT ;                                       /* 0x0 */
 "#;
 
 const UNSUPPORTED_SASS: &str = r#"
@@ -1218,6 +1220,7 @@ fn lift_memory_atom_and_reduction_ops_are_typed() {
     assert!(matches!(
         &function.ops[0].kind,
         KernelIrOpKind::MemoryAtomic {
+            predicate_dst: None,
             dst,
             address,
             values,
@@ -1262,6 +1265,50 @@ fn lift_memory_atom_and_reduction_ops_are_typed() {
         function.ops[1].source_modifiers[1].kind(),
         &SassModifierKind::Max
     );
+    assert!(matches!(
+        &function.ops[2].kind,
+        KernelIrOpKind::MemoryAtomic {
+            predicate_dst: Some(predicate_dst),
+            dst,
+            address,
+            values,
+            operation: Some(SassMemoryAtomicOp::Add),
+            space: MemorySpace::Descriptor,
+            ..
+        } if predicate_dst == &reg("PT")
+            && dst == &reg("R0")
+            && values.as_slice() == [scalar("R11")]
+            && matches!(
+                &address.kind,
+                MemoryAddressKind::Descriptor {
+                    descriptor,
+                    address,
+                    address_width: Some(64),
+                    offset: None,
+                } if descriptor == &reg("UR4") && address == &reg("R4")
+            )
+    ));
+    assert_eq!(function.ops[2].source_opcode.kind(), &SassOpcodeKind::Atomg);
+    assert!(matches!(
+        &function.ops[3].kind,
+        KernelIrOpKind::MemoryReduction {
+            address,
+            values,
+            operation: Some(SassMemoryAtomicOp::Add),
+            space: MemorySpace::Descriptor,
+            ..
+        } if values.as_slice() == [scalar("R11")]
+            && matches!(
+                &address.kind,
+                MemoryAddressKind::Descriptor {
+                    descriptor,
+                    address,
+                    address_width: Some(64),
+                    offset: None,
+                } if descriptor == &reg("UR4") && address == &reg("R4")
+            )
+    ));
+    assert_eq!(function.ops[3].source_opcode.kind(), &SassOpcodeKind::Redg);
 
     let analysis = analyze_sass_ir(&ir);
     let analyzed = &analysis.functions[0];
@@ -1279,6 +1326,20 @@ fn lift_memory_atom_and_reduction_ops_are_typed() {
         .expect("reduction op dataflow should exist");
     assert_eq!(reduction_flow.defines, []);
     assert_eq!(reduction_flow.uses, [reg("R6"), reg("R8")]);
+    let atomg_flow = analyzed
+        .dataflow
+        .iter()
+        .find(|op| op.address == 0x20)
+        .expect("global atomic op dataflow should exist");
+    assert_eq!(atomg_flow.defines, [reg("R0")]);
+    assert_eq!(atomg_flow.uses, [reg("UR4"), reg("R4"), reg("R11")]);
+    let redg_flow = analyzed
+        .dataflow
+        .iter()
+        .find(|op| op.address == 0x30)
+        .expect("global reduction op dataflow should exist");
+    assert_eq!(redg_flow.defines, []);
+    assert_eq!(redg_flow.uses, [reg("UR4"), reg("R4"), reg("R11")]);
 
     let atomic_access = analyzed
         .memory_accesses
@@ -1294,6 +1355,22 @@ fn lift_memory_atom_and_reduction_ops_are_typed() {
         .expect("reduction memory access should exist");
     assert_eq!(reduction_access.kind, SassMemoryAccessKind::Reduction);
     assert_eq!(reduction_access.value_register, reg("R8"));
+    let atomg_access = analyzed
+        .memory_accesses
+        .iter()
+        .find(|access| access.address == 0x20)
+        .expect("global atomic memory access should exist");
+    assert_eq!(atomg_access.kind, SassMemoryAccessKind::Atomic);
+    assert_eq!(atomg_access.space, MemorySpace::Descriptor);
+    assert_eq!(atomg_access.value_register, reg("R0"));
+    let redg_access = analyzed
+        .memory_accesses
+        .iter()
+        .find(|access| access.address == 0x30)
+        .expect("global reduction memory access should exist");
+    assert_eq!(redg_access.kind, SassMemoryAccessKind::Reduction);
+    assert_eq!(redg_access.space, MemorySpace::Descriptor);
+    assert_eq!(redg_access.value_register, reg("R11"));
 
     let lifted = lift_sass_value_ir(&ir, &analysis);
     let atomic = &lifted.functions[0].ops[0];
@@ -2241,6 +2318,10 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
         .iter()
         .find(|probe| probe.kind == PtxDecompileProbeKind::ScalarMemoryLogic)
         .expect("scalar memory/logic PTX probe should exist");
+    let atomic_probe = probes
+        .iter()
+        .find(|probe| probe.kind == PtxDecompileProbeKind::ScalarMemoryAtomic)
+        .expect("scalar memory/atomic PTX probe should exist");
 
     assert_eq!(options.compile_arch, "sm_120");
     assert_eq!(
@@ -2249,7 +2330,8 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
             PtxDecompileProbeKind::TensorCoreHmma,
             PtxDecompileProbeKind::TensorCoreImma,
             PtxDecompileProbeKind::TensorCoreDmma,
-            PtxDecompileProbeKind::ScalarMemoryLogic
+            PtxDecompileProbeKind::ScalarMemoryLogic,
+            PtxDecompileProbeKind::ScalarMemoryAtomic
         ]
     );
     assert!(
@@ -2282,6 +2364,13 @@ fn ptx_probe_default_uses_managed_artifact_root_and_hmma_probe() {
     assert!(scalar_probe.source.contains("and.pred"));
     assert!(scalar_probe.source.contains("fma.rn.f32"));
     assert!(scalar_probe.source.contains("setp.gt.f32"));
+    assert_eq!(atomic_probe.symbol, "scalar_memory_atomic_probe");
+    assert!(atomic_probe.source.contains("atom.global.add.u32"));
+    assert!(atomic_probe.source.contains("red.global.add.u32"));
+    assert!(atomic_probe.source.contains("st.volatile.local.u32"));
+    assert!(atomic_probe.source.contains("ld.volatile.local.u32"));
+    assert!(atomic_probe.source.contains("or.pred"));
+    assert!(atomic_probe.source.contains("xor.pred"));
 }
 
 #[test]

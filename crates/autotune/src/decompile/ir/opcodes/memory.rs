@@ -51,8 +51,8 @@ pub(super) fn lift(
                 )
             }
         }
-        SassOpcodeKind::Atom => lift_atomic(opcode, operands, modifiers),
-        SassOpcodeKind::Red => lift_reduction(opcode, operands, modifiers),
+        SassOpcodeKind::Atom | SassOpcodeKind::Atomg => lift_atomic(opcode, operands, modifiers),
+        SassOpcodeKind::Red | SassOpcodeKind::Redg => lift_reduction(opcode, operands, modifiers),
         _ => return None,
     })
 }
@@ -75,16 +75,28 @@ fn lift_atomic(
     operands: &[AggregateOperand],
     modifiers: &[SassModifier],
 ) -> LiftResult {
-    if operands.len() < 3 {
-        return unsupported_at_least_arity(opcode, operands.len(), 3);
-    }
-    let address = memory_address(operands.get(1));
+    let (predicate_dst, dst_index, address_index, value_start) = match opcode.kind() {
+        SassOpcodeKind::Atomg => {
+            if operands.len() < 4 {
+                return unsupported_at_least_arity(opcode, operands.len(), 4);
+            }
+            (Some(register_operand(operands.first())), 1, 2, 3)
+        }
+        _ => {
+            if operands.len() < 3 {
+                return unsupported_at_least_arity(opcode, operands.len(), 3);
+            }
+            (None, 0, 1, 2)
+        }
+    };
+    let address = memory_address(operands.get(address_index));
     (
         KernelIrOpKind::MemoryAtomic {
-            dst: register_operand(operands.first()),
+            predicate_dst,
+            dst: register_operand(operands.get(dst_index)),
             space: memory_space(opcode.kind(), &address),
             address,
-            values: operands[2..]
+            values: operands[value_start..]
                 .iter()
                 .map(|operand| scalar_operand(Some(operand)))
                 .collect(),
@@ -155,7 +167,10 @@ fn memory_space(opcode: &SassOpcodeKind, address: &MemoryAddress) -> MemorySpace
         return MemorySpace::Descriptor;
     }
     match opcode {
-        SassOpcodeKind::Atom | SassOpcodeKind::Red => MemorySpace::Global,
+        SassOpcodeKind::Atom
+        | SassOpcodeKind::Atomg
+        | SassOpcodeKind::Red
+        | SassOpcodeKind::Redg => MemorySpace::Global,
         SassOpcodeKind::Ldg | SassOpcodeKind::Stg | SassOpcodeKind::Ld | SassOpcodeKind::St => {
             MemorySpace::Global
         }

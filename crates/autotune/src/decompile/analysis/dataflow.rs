@@ -383,11 +383,15 @@ pub(super) fn analyze_dataflow(op: &KernelIrOp) -> SassDataflowOp {
             push_register_refs([value.clone()], &mut uses);
         }
         KernelIrOpKind::MemoryAtomic {
+            predicate_dst,
             dst,
             address,
             values,
             ..
         } => {
+            if let Some(predicate_dst) = predicate_dst {
+                push_register_refs([predicate_dst.clone()], &mut defines);
+            }
             push_register_refs([dst.clone()], &mut defines);
             push_register_refs(address.registers(), &mut uses);
             for value in values {
